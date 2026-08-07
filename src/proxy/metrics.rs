@@ -239,6 +239,108 @@ impl MetricsStore {
     }
 }
 
+/// Aggregate, source-independent ceiling on the bytes the proxy emits in reply
+/// to *unauthenticated* traffic (probe responders + DNS forwarding).
+///
+/// The per-client [`ClientMetrics`] token bucket is keyed by source address,
+/// so a spoofed source never hits it twice — with the default `max_clients *
+/// rate_limit_per_sec` that is tens of thousands of replies/second aimed at
+/// whatever address an attacker forged. This budget is keyed by *nothing*,
+/// which is the point: there is no input an attacker controls that grants a
+/// fresh allowance. It bounds bytes rather than packets because amplification
+/// is a byte ratio (a small DNS query can forward into a much larger answer).
+///
+/// The trade is deliberate: an attacker who sustains enough probe traffic to
+/// drain the budget silences probe replies for everyone, degrading camouflage
+/// to the silence a bare WireGuard port gives — but that costs only
+/// obfuscation. The relay datapath never consumes this budget, so real client
+/// traffic is unaffected.
+///
+/// Ported from upstream `amneziawg-proxy` v0.1.8; reuses this module's
+/// `pack`/`unpack`/`coarse_now_secs` (bytes-remaining in the high 32 bits, the
+/// coarse second in the low 32).
+pub(crate) struct GlobalProbeBudget {
+    /// Packed: high 32 bits = bytes remaining this second, low 32 = timestamp.
+    state: AtomicU64,
+    max_bytes_per_sec: u32,
+    /// Bytes this budget *admitted* and *refused*.
+    ///
+    /// Deliberately not "bytes sent": admission is recorded when the allowance
+    /// is reserved, before the socket write, so a failed send still counts
+    /// here. Anything asserting on real egress must observe the wire, not these
+    /// counters — a test checking the admitted count would pass even with the
+    /// gate deleted, since `try_consume` records the reservation whether or not
+    /// the caller honours the answer.
+    pub(crate) bytes_admitted: AtomicU64,
+    pub(crate) bytes_refused: AtomicU64,
+}
+
+impl GlobalProbeBudget {
+    pub(crate) fn new(max_bytes_per_sec: u32) -> Self {
+        Self {
+            state: AtomicU64::new(pack(max_bytes_per_sec, coarse_now_secs())),
+            max_bytes_per_sec,
+            bytes_admitted: AtomicU64::new(0),
+            bytes_refused: AtomicU64::new(0),
+        }
+    }
+
+    /// Reserve `bytes` of the current second's allowance. `true` means the
+    /// caller may send. Charge *before* sending, not after: charging after the
+    /// fact would let an unbounded burst through in the window between the
+    /// check and the accounting.
+    pub(crate) fn try_consume(&self, bytes: usize) -> bool {
+        self.try_consume_at(bytes, coarse_now_secs())
+    }
+
+    /// Same, with an injectable clock so tests need no real sleeps.
+    pub(crate) fn try_consume_at(&self, bytes: usize, now: u32) -> bool {
+        // A single reply larger than the whole per-second allowance can never
+        // be admitted; treat it as suppressed rather than looping forever.
+        let want = match u32::try_from(bytes) {
+            Ok(b) if b <= self.max_bytes_per_sec => b,
+            _ => {
+                self.bytes_refused.fetch_add(bytes as u64, Ordering::Relaxed);
+                return false;
+            }
+        };
+
+        loop {
+            let old = self.state.load(Ordering::Acquire);
+            let (old_bytes, old_ts) = unpack(old);
+
+            // Refill is a reset rather than an accrual: unused allowance does
+            // not roll over, so a long-idle port cannot bank a burst that
+            // defeats the ceiling the moment it is probed.
+            let available = if now != old_ts {
+                self.max_bytes_per_sec
+            } else {
+                old_bytes
+            };
+
+            if available < want {
+                let new = pack(available, now);
+                let _ = self
+                    .state
+                    .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire);
+                self.bytes_refused.fetch_add(want as u64, Ordering::Relaxed);
+                return false;
+            }
+
+            let new = pack(available - want, now);
+            if self
+                .state
+                .compare_exchange(old, new, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                self.bytes_admitted.fetch_add(want as u64, Ordering::Relaxed);
+                return true;
+            }
+            // Lost the race; recompute against the winner's state.
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -332,5 +434,36 @@ mod tests {
         // Third client should be rejected
         assert!(store.get_or_create(a3).is_none());
         assert_eq!(store.len(), 2);
+    }
+
+    #[test]
+    fn probe_budget_admits_up_to_the_ceiling_then_refuses() {
+        let b = GlobalProbeBudget::new(1000);
+        // Injected clock so the test needs no real sleeps.
+        assert!(b.try_consume_at(600, 100));
+        assert!(b.try_consume_at(400, 100)); // exactly drains the second
+        assert!(!b.try_consume_at(1, 100)); // nothing left this second
+        assert_eq!(b.bytes_admitted.load(Ordering::Relaxed), 1000);
+        assert_eq!(b.bytes_refused.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn probe_budget_resets_each_second_without_rollover() {
+        let b = GlobalProbeBudget::new(1000);
+        assert!(b.try_consume_at(1000, 100)); // drain second 100
+        assert!(!b.try_consume_at(1, 100));
+        // New second: full allowance again, and the unused nothing did NOT
+        // roll over (a fresh 1000, not 2000).
+        assert!(b.try_consume_at(1000, 101));
+        assert!(!b.try_consume_at(1, 101));
+    }
+
+    #[test]
+    fn probe_budget_refuses_a_reply_larger_than_the_whole_allowance() {
+        let b = GlobalProbeBudget::new(500);
+        // A single 501-byte reply can never fit; refuse rather than loop.
+        assert!(!b.try_consume_at(501, 100));
+        // ...and it did not consume the second's allowance.
+        assert!(b.try_consume_at(500, 100));
     }
 }
