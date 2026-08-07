@@ -18,6 +18,7 @@ pub mod dns;
 pub mod mdnsvpn;
 pub mod mtproxy;
 pub mod proxy;
+pub mod qqdns;
 pub mod xray;
 
 use axum::extract::FromRef;
@@ -323,6 +324,20 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/admin/proxy/restart",
             axum::routing::post(proxy::restart),
+        )
+        // QQ-Tunnel UDP-over-DNS transport (in-process, side-channel to AWG)
+        .route(
+            "/admin/qqdns/settings",
+            axum::routing::get(qqdns::get_settings).post(qqdns::update_settings),
+        )
+        .route(
+            "/admin/qqdns/status",
+            axum::routing::get(qqdns::supervisor_status),
+        )
+        .route("/admin/qqdns/restart", axum::routing::post(qqdns::restart))
+        .route(
+            "/admin/qqdns/client-config",
+            axum::routing::get(qqdns::client_config),
         )
         // MasterDnsVPN (DNS-tunnel mode) — admin inbound + supervisor
         .route(

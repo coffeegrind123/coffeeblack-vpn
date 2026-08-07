@@ -167,6 +167,15 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("DPI proxy startup failed (non-fatal): {e}");
     }
 
+    // Bring the QQ-Tunnel UDP-over-DNS transport online if enabled. Disabled
+    // by default; ensure_running is a no-op (records a reason) when the
+    // settings row is off or incomplete. No AmneziaWG rebind — it's a
+    // side-channel — so any bind failure is purely its own, surfaced as
+    // Status::Crashed rather than a startup crash.
+    if let Err(e) = awg_easy_rs::qqdns::supervisor::ensure_running().await {
+        tracing::warn!("QQ-DNS transport startup failed (non-fatal): {e}");
+    }
+
     let app_state = api::AppState::new();
 
     // In-memory mode with a configured durable path: snapshot the RAM
@@ -329,6 +338,7 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(mdnsvpn_bundled)]
     awg_easy_rs::mdnsvpn::supervisor::shutdown_for_exit().await;
     awg_easy_rs::proxy::supervisor::shutdown_for_exit().await;
+    awg_easy_rs::qqdns::supervisor::shutdown_for_exit().await;
 
     if let Ok(iface) = db::get_interface() {
         firewall::remove_legacy_compat(

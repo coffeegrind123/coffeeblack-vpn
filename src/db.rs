@@ -431,6 +431,60 @@ pub struct ProxySettings {
     pub updated_at: String,
 }
 
+/// Singleton row holding the QQ-Tunnel UDP-over-DNS transport configuration
+/// (server side). Read by `qqdns::supervisor` at startup and after every
+/// admin POST. Disabled by default — the operator must own a delegated
+/// domain, list resolvers, and opt in. See `src/qqdns/` for the engine that
+/// consumes these fields. JSON-array columns (`dns_ips`, `send_domains`,
+/// `recv_domains`) hold `serde_json`-encoded `Vec<String>`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QqdnsSettings {
+    pub id: String,
+    /// When false the supervisor keeps the engine torn down. AmneziaWG is
+    /// unaffected either way — this transport is a side-channel, not a rebind.
+    pub enabled: bool,
+    /// Resolver IPs outbound queries are sent to (always port 53), JSON array.
+    pub dns_ips: String,
+    /// Domains delegated to the *client* relay — outbound data rides these
+    /// QNAMEs. JSON array. (The `nb.<client-domain>` records.)
+    pub send_domains: String,
+    /// Our own delegated domains — inbound queries whose QNAME ends in one of
+    /// these are accepted and decoded. JSON array. (The `nb.<server-domain>`.)
+    pub recv_domains: String,
+    /// Source address the outbound query sockets bind to. Empty = `0.0.0.0`.
+    pub send_interface_ip: String,
+    /// Address the authoritative :53 listener binds to.
+    pub receive_interface_ip: String,
+    /// Port the authoritative listener binds to (53, or 5353 behind a
+    /// PREROUTING redirect when systemd-resolved owns 53).
+    pub receive_port: i64,
+    /// Local UDP endpoint the engine binds; AmneziaWG sees the tunnelled peer
+    /// arriving from here. `host:port`.
+    pub h_in_address: String,
+    /// AmneziaWG UDP port decoded traffic is delivered to on loopback. `0` =
+    /// auto (the interface's own `ListenPort`).
+    pub awg_target_port: i64,
+    /// Max final domain length without trailing dot (≤253). Set to the lowest
+    /// value all listed resolvers tolerate.
+    pub max_domain_len: i64,
+    /// Max length of each subdomain label (≤63).
+    pub max_sub_len: i64,
+    /// Extra transmissions per datagram (0 = once). Multiplies bandwidth by
+    /// `retries+1`; trades bandwidth for packet-loss resilience.
+    pub retries: i64,
+    /// Outbound DNS query type (1=A, 28=AAAA, 16=TXT, …).
+    pub send_query_type: i64,
+    /// Pacing between packets per resolver queue, milliseconds.
+    pub packets_send_interval_ms: i64,
+    /// Drop a queued datagram that waited longer than this, milliseconds.
+    pub packets_wait_time_limit_ms: i64,
+    /// Number of source sockets used to spread queries across ports
+    /// (resolver rate-limit evasion). May need a raised `ulimit -n`.
+    pub send_sock_numbers: i64,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// Singleton row holding the bundled-DNS-stack configuration. Read by
 /// `dns::supervisor` at startup and after every admin POST. The
 /// supervisor is the sole consumer — keep field-level docs in sync with
@@ -1100,6 +1154,32 @@ impl ProxySettings {
     }
 }
 
+impl QqdnsSettings {
+    fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(QqdnsSettings {
+            id: row.get("id")?,
+            enabled: int_to_bool(row.get::<_, i64>("enabled")?),
+            dns_ips: row.get("dns_ips")?,
+            send_domains: row.get("send_domains")?,
+            recv_domains: row.get("recv_domains")?,
+            send_interface_ip: row.get("send_interface_ip")?,
+            receive_interface_ip: row.get("receive_interface_ip")?,
+            receive_port: row.get("receive_port")?,
+            h_in_address: row.get("h_in_address")?,
+            awg_target_port: row.get("awg_target_port")?,
+            max_domain_len: row.get("max_domain_len")?,
+            max_sub_len: row.get("max_sub_len")?,
+            retries: row.get("retries")?,
+            send_query_type: row.get("send_query_type")?,
+            packets_send_interval_ms: row.get("packets_send_interval_ms")?,
+            packets_wait_time_limit_ms: row.get("packets_wait_time_limit_ms")?,
+            send_sock_numbers: row.get("send_sock_numbers")?,
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+        })
+    }
+}
+
 impl XrayClient {
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
         Ok(XrayClient {
@@ -1476,6 +1556,33 @@ CREATE TABLE IF NOT EXISTS proxy_settings_table (
     updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
 )"#;
 
+// qqdns_settings_table — singleton (id always 'qqdns0'). Configuration for
+// the in-process QQ-Tunnel UDP-over-DNS transport (server side). Disabled
+// by default. Mirrors proxy_settings_table's singleton pattern. JSON-array
+// columns default to '[]'; the operator fills them from the admin UI.
+const CREATE_QQDNS_SETTINGS: &str = r#"
+CREATE TABLE IF NOT EXISTS qqdns_settings_table (
+    id                          TEXT PRIMARY KEY,
+    enabled                     INTEGER NOT NULL DEFAULT 0,
+    dns_ips                     TEXT NOT NULL DEFAULT '[]',
+    send_domains                TEXT NOT NULL DEFAULT '[]',
+    recv_domains                TEXT NOT NULL DEFAULT '[]',
+    send_interface_ip           TEXT NOT NULL DEFAULT '',
+    receive_interface_ip        TEXT NOT NULL DEFAULT '0.0.0.0',
+    receive_port                INTEGER NOT NULL DEFAULT 53,
+    h_in_address                TEXT NOT NULL DEFAULT '127.0.0.1:10443',
+    awg_target_port             INTEGER NOT NULL DEFAULT 0,
+    max_domain_len              INTEGER NOT NULL DEFAULT 253,
+    max_sub_len                 INTEGER NOT NULL DEFAULT 63,
+    retries                     INTEGER NOT NULL DEFAULT 1,
+    send_query_type             INTEGER NOT NULL DEFAULT 1,
+    packets_send_interval_ms    INTEGER NOT NULL DEFAULT 1,
+    packets_wait_time_limit_ms  INTEGER NOT NULL DEFAULT 1000,
+    send_sock_numbers           INTEGER NOT NULL DEFAULT 512,
+    created_at                  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at                  TEXT NOT NULL DEFAULT (datetime('now'))
+)"#;
+
 // dns_bundle_table — singleton (id always 'dns0'). Configuration for the
 // bundled dnscrypt-proxy + (opt-in) tor stack. Defaults match the
 // "minimum risk" posture: dnscrypt off, tor off. The supervisor reads
@@ -1681,6 +1788,7 @@ fn create_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(CREATE_XRAY_INBOUND)?;
     conn.execute_batch(CREATE_XRAY_CLIENTS)?;
     conn.execute_batch(CREATE_PROXY_SETTINGS)?;
+    conn.execute_batch(CREATE_QQDNS_SETTINGS)?;
     conn.execute_batch(CREATE_MTPROXY_INBOUND)?;
     conn.execute_batch(CREATE_MTPROXY_USERS)?;
     conn.execute_batch(CREATE_MDNSVPN_INBOUND)?;
@@ -2130,6 +2238,14 @@ fn seed_if_empty(conn: &Connection) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO proxy_settings_table (id) VALUES (?1)",
         params!["proxy0"],
+    )?;
+
+    // qqdns_settings default — disabled until the operator lists resolvers,
+    // sets NS-delegated send/recv domains, and flips the toggle. Column-
+    // level defaults supply port 53, A queries, and the upstream pacing.
+    conn.execute(
+        "INSERT OR IGNORE INTO qqdns_settings_table (id) VALUES (?1)",
+        params!["qqdns0"],
     )?;
 
     // mtproxy_inbound default — disabled until the operator picks a TLS
@@ -3264,6 +3380,46 @@ pub fn update_proxy_settings(fields: &UpdateMap) -> Result<()> {
         WhereVal::Str("proxy0"),
         fields,
         VALID_PROXY_SETTINGS_COLUMNS,
+        &["id"],
+    )
+}
+
+pub fn get_qqdns_settings() -> Result<QqdnsSettings> {
+    let c = conn();
+    c.query_row(
+        "SELECT * FROM qqdns_settings_table WHERE id = 'qqdns0'",
+        [],
+        QqdnsSettings::from_row,
+    )
+    .context("No qqdns_settings row found")
+}
+
+const VALID_QQDNS_SETTINGS_COLUMNS: &[&str] = &[
+    "enabled",
+    "dns_ips",
+    "send_domains",
+    "recv_domains",
+    "send_interface_ip",
+    "receive_interface_ip",
+    "receive_port",
+    "h_in_address",
+    "awg_target_port",
+    "max_domain_len",
+    "max_sub_len",
+    "retries",
+    "send_query_type",
+    "packets_send_interval_ms",
+    "packets_wait_time_limit_ms",
+    "send_sock_numbers",
+];
+
+pub fn update_qqdns_settings(fields: &UpdateMap) -> Result<()> {
+    exec_update(
+        "qqdns_settings_table",
+        "id",
+        WhereVal::Str("qqdns0"),
+        fields,
+        VALID_QQDNS_SETTINGS_COLUMNS,
         &["id"],
     )
 }

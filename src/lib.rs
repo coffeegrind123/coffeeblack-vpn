@@ -26,6 +26,7 @@ pub mod mtproxy;
 pub mod privhelper;
 pub mod proc;
 pub mod proxy;
+pub mod qqdns;
 pub mod qr;
 pub mod rng;
 pub mod secretfile;
