@@ -270,13 +270,8 @@ async fn write_dnscrypt_config(bundle: &db::DnsBundle) -> Result<PathBuf> {
         .with_context(|| format!("create dns dir {}", dir.display()))?;
     let path = dnscrypt_config_path();
     let body = dnscrypt::generate(bundle)?;
-    let tmp = path.with_extension("toml.partial");
-    tokio::fs::write(&tmp, body.as_bytes())
-        .await
-        .with_context(|| format!("write {}", tmp.display()))?;
-    tokio::fs::rename(&tmp, &path)
-        .await
-        .with_context(|| format!("rename {} → {}", tmp.display(), path.display()))?;
+    // Owner-only at open(2) and atomic — this file carries credentials.
+    crate::secretfile::write_atomic(&path, body.as_bytes()).await?;
     Ok(path)
 }
 
@@ -384,13 +379,8 @@ async fn write_tor_config(bundle: &db::DnsBundle, bin_dir: &Path) -> Result<Path
         .with_context(|| format!("create dns dir {}", dir.display()))?;
     let path = tor_config_path();
     let body = tor::generate(bundle, bin_dir)?;
-    let tmp = path.with_extension("partial");
-    tokio::fs::write(&tmp, body.as_bytes())
-        .await
-        .with_context(|| format!("write {}", tmp.display()))?;
-    tokio::fs::rename(&tmp, &path)
-        .await
-        .with_context(|| format!("rename {} → {}", tmp.display(), path.display()))?;
+    // Owner-only at open(2) and atomic — this file carries credentials.
+    crate::secretfile::write_atomic(&path, body.as_bytes()).await?;
     Ok(path)
 }
 

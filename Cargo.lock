@@ -85,6 +85,7 @@ dependencies = [
  "qrcode",
  "quinn-proto",
  "rcgen",
+ "ring",
  "rusqlite",
  "rustls",
  "rustls-pki-types",

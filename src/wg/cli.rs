@@ -59,14 +59,25 @@ fn validate_iface_name(name: &str) -> Result<()> {
 }
 
 /// Bring up an AmneziaWG interface with awg-quick.
+///
+/// Routed through the privileged helper when one is configured, so the web
+/// process needs no `CAP_NET_ADMIN` of its own. Falls back to executing
+/// directly otherwise — that is the original single-process behaviour and
+/// stays the default until an operator opts in.
 pub fn awg_up(name: &str) -> Result<()> {
     validate_iface_name(name)?;
+    if crate::privhelper::is_enabled() {
+        return crate::privhelper::call(&crate::privhelper::Request::WgUp).map(|_| ());
+    }
     run_argv("awg-quick", &["up", name]).map(|_| ())
 }
 
 /// Take down an AmneziaWG interface with awg-quick.
 pub fn awg_down(name: &str) -> Result<()> {
     validate_iface_name(name)?;
+    if crate::privhelper::is_enabled() {
+        return crate::privhelper::call(&crate::privhelper::Request::WgDown).map(|_| ());
+    }
     run_argv("awg-quick", &["down", name]).map(|_| ())
 }
 
@@ -114,7 +125,11 @@ pub struct PeerDump {
 /// Parses tab-separated output from `awg show <name> dump`.
 pub fn awg_dump(name: &str) -> Result<Vec<PeerDump>> {
     validate_iface_name(name)?;
-    let output = run_argv("awg", &["show", name, "dump"])?;
+    let output = if crate::privhelper::is_enabled() {
+        crate::privhelper::call(&crate::privhelper::Request::WgShow)?
+    } else {
+        run_argv("awg", &["show", name, "dump"])?
+    };
     let mut peers = Vec::new();
 
     for line in output.lines().skip(1) {

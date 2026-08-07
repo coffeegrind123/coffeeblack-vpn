@@ -31,7 +31,8 @@ use tokio::time::sleep;
 
 use crate::config::CONFIG;
 use crate::db;
-use crate::mdnsvpn::{config as cfggen, runtime};
+use crate::mdnsvpn::logscrub::LogScrubber;
+use crate::mdnsvpn::{config as cfggen, keys, runtime};
 
 fn config_path() -> PathBuf {
     PathBuf::from(&CONFIG.mdnsvpn_dir).join("server_config.toml")
@@ -121,7 +122,7 @@ async fn ensure_running_inner(reset_crash: bool) -> Result<()> {
     }
 
     let bin = runtime::extract_bundled_binary().context("extract mdnsvpn binary")?;
-    let child = spawn(&bin, &path).await?;
+    let child = spawn(&bin, &path, &inbound.encryption_key).await?;
     let pid = child
         .id()
         .ok_or_else(|| anyhow!("mdnsvpn child has no PID — race during spawn"))?;
@@ -213,13 +214,8 @@ async fn write_config(inbound: &db::MdnsvpnInbound) -> Result<PathBuf> {
 
     let path = config_path();
     let body = cfggen::generate(inbound, &dir)?;
-    let tmp = path.with_extension("toml.partial");
-    tokio::fs::write(&tmp, body.as_bytes())
-        .await
-        .with_context(|| format!("write {}", tmp.display()))?;
-    tokio::fs::rename(&tmp, &path)
-        .await
-        .with_context(|| format!("rename {} → {}", tmp.display(), path.display()))?;
+    // Owner-only at open(2) and atomic — this file carries credentials.
+    crate::secretfile::write_atomic(&path, body.as_bytes()).await?;
     Ok(path)
 }
 
@@ -228,23 +224,17 @@ async fn write_config(inbound: &db::MdnsvpnInbound) -> Result<PathBuf> {
 /// re-reads this on every spawn so a key rotation is a stop-rewrite-start
 /// cycle handled by `ensure_running`.
 async fn write_key_file(inbound: &db::MdnsvpnInbound) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let path = key_path();
-    let tmp = path.with_extension("partial");
-    tokio::fs::write(&tmp, inbound.encryption_key.as_bytes())
-        .await
-        .with_context(|| format!("write {}", tmp.display()))?;
-    let perms = std::fs::Permissions::from_mode(0o600);
-    tokio::fs::set_permissions(&tmp, perms)
-        .await
-        .with_context(|| format!("chmod 0600 {}", tmp.display()))?;
-    tokio::fs::rename(&tmp, &path)
-        .await
-        .with_context(|| format!("rename {} → {}", tmp.display(), path.display()))?;
+    // Owner-only at open(2) and atomic — this file carries credentials.
+    crate::secretfile::write_atomic(&path, inbound.encryption_key.as_bytes()).await?;
     Ok(())
 }
 
-async fn spawn(bin: &PathBuf, config: &PathBuf) -> Result<Child> {
+/// Spawn mdnsvpn. `encryption_key` is not passed to the child (it reads it
+/// from `encrypt_key.txt`) — it is used to build the log scrubber, because the
+/// pinned upstream binary prints that key verbatim at INFO on every start and
+/// our log pump would otherwise forward it into the operator's log stream.
+async fn spawn(bin: &PathBuf, config: &PathBuf, encryption_key: &str) -> Result<Child> {
     let mut cmd = Command::new(bin);
     cmd.arg("-config")
         .arg(config)
@@ -260,19 +250,44 @@ async fn spawn(bin: &PathBuf, config: &PathBuf) -> Result<Child> {
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawn {}", bin.display()))?;
+    let scrubber = Arc::new(LogScrubber::new(encryption_key));
     if let Some(stdout) = child.stdout.take() {
-        spawn_log_pump(stdout, "mdnsvpn.stdout", tracing::Level::INFO);
+        spawn_log_pump(
+            stdout,
+            "mdnsvpn.stdout",
+            tracing::Level::INFO,
+            scrubber.clone(),
+        );
     }
     if let Some(stderr) = child.stderr.take() {
-        spawn_log_pump(stderr, "mdnsvpn.stderr", tracing::Level::WARN);
+        spawn_log_pump(
+            stderr,
+            "mdnsvpn.stderr",
+            tracing::Level::WARN,
+            scrubber.clone(),
+        );
     }
     let pid = child.id().unwrap_or(0);
+    // Log the fingerprint ourselves so operators keep the "did the server and
+    // this client load the same key?" affordance that the (now-scrubbed)
+    // upstream line used to provide — without the key itself.
+    let trimmed_key = encryption_key.trim();
+    if !trimmed_key.is_empty() {
+        tracing::info!(
+            fingerprint = %keys::key_fingerprint(trimmed_key),
+            "mdnsvpn encryption key fingerprint (sha256 prefix; raw key never logged)"
+        );
+    }
     tracing::info!(pid, config = %config.display(), "mdnsvpn spawned");
     Ok(child)
 }
 
-fn spawn_log_pump<R>(reader: R, target: &'static str, level: tracing::Level)
-where
+fn spawn_log_pump<R>(
+    reader: R,
+    target: &'static str,
+    level: tracing::Level,
+    scrubber: Arc<LogScrubber>,
+) where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
 {
     tokio::spawn(async move {
@@ -282,6 +297,10 @@ where
             if line.is_empty() {
                 continue;
             }
+            // Scrub before the line reaches `tracing` — once it is in the
+            // subscriber it is in journald / `docker logs` / the shipper.
+            let line = scrubber.scrub(line);
+            let line = line.as_ref();
             match level {
                 tracing::Level::ERROR => tracing::error!(target: "mdnsvpn", source = target, "{line}"),
                 tracing::Level::WARN  => tracing::warn!(target:  "mdnsvpn", source = target, "{line}"),

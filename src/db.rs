@@ -3,7 +3,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use anyhow::{anyhow, Context, Result};
 use ipnet::{Ipv4Net, Ipv6Net};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::config::CONFIG;
@@ -59,6 +59,115 @@ fn conn() -> ConnGuard {
 
 /// Generic field map used by update helpers.
 pub type UpdateMap = HashMap<String, String>;
+
+// ---------------------------------------------------------------------------
+// Secrets encrypted at rest
+// ---------------------------------------------------------------------------
+
+/// `(table, column)` pairs holding credentials, encrypted transparently by
+/// [`crate::crypto`] whenever a key is configured.
+///
+/// This is the whole list, in one place, so "what does a stolen database
+/// yield?" has an auditable answer rather than one assembled by grepping.
+///
+/// **Not** included, deliberately:
+/// - `users_table.password` and `general_table.metrics_password` are already
+///   password hashes (argon2id / SHA-256). Encrypting a hash protects nothing
+///   that the hash does not already protect.
+/// - `one_time_links_table.one_time_link` is looked up *by value*, so it
+///   cannot be randomly encrypted. It is stored as a SHA-256 digest instead —
+///   strictly better, since the server never needs the token back.
+///
+/// Note the parallel exposure this does not touch: the same secrets are
+/// rendered into the config files the bundled transports read, which must be
+/// plaintext because those processes parse them. Those files are written 0600
+/// by `crate::secretfile`; see that module.
+const ENCRYPTED_COLUMNS: &[(&str, &str)] = &[
+    ("interfaces_table", "private_key"),
+    ("clients_table", "private_key"),
+    ("clients_table", "pre_shared_key"),
+    ("xray_inbound_table", "private_key"),
+    ("xray_clients_table", "uuid"),
+    ("xray_clients_table", "short_id"),
+    ("mtproxy_users_table", "secret_hex"),
+    ("mdnsvpn_inbound_table", "encryption_key"),
+    ("general_table", "session_password"),
+    ("users_table", "totp_key"),
+];
+
+fn is_encrypted_column(table: &str, column: &str) -> bool {
+    ENCRYPTED_COLUMNS
+        .iter()
+        .any(|(t, c)| *t == table && *c == column)
+}
+
+/// Encrypt a value destined for an encrypted column. Empty stays empty — an
+/// absent secret should not become an opaque blob that looks like one.
+fn enc(v: &str) -> Result<String> {
+    if v.is_empty() || crate::crypto::is_encrypted(v) {
+        return Ok(v.to_string());
+    }
+    crate::crypto::encrypt(v)
+}
+
+/// Decrypt a value read from an encrypted column.
+///
+/// Failure is an error, never a fallback to the raw bytes: handing ciphertext
+/// to a config generator would produce a peer that silently cannot connect,
+/// and (as the TOTP path once did) treating an unreadable secret as "absent"
+/// turns a decryption failure into a disabled security control. Fail closed
+/// and loudly.
+fn dec(v: &str) -> rusqlite::Result<String> {
+    crate::crypto::decrypt(v).map_err(|e| {
+        tracing::error!("could not decrypt a stored secret: {e:#}");
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::other(format!(
+                "stored secret could not be decrypted: {e}"
+            ))),
+        )
+    })
+}
+
+/// Decrypt an optional column.
+fn dec_opt(v: Option<String>) -> rusqlite::Result<Option<String>> {
+    match v {
+        Some(v) if !v.is_empty() => dec(&v).map(Some),
+        other => Ok(other),
+    }
+}
+
+/// Default activity-history window, in days.
+///
+/// Deliberately short. The heatmap's operational value — spotting a peer that
+/// has gone quiet, or one suddenly moving far more than usual — is served
+/// well by a few weeks; the months beyond that add little but retroactive
+/// exposure if the box is ever seized. Operators who want a longer window can
+/// raise it, and `0` turns collection off entirely.
+pub const DEFAULT_ACTIVITY_RETENTION_DAYS: i64 = 30;
+
+/// Hard ceiling on the retention window, enforced at the API boundary so an
+/// operator cannot set an unbounded value that quietly turns the rollup back
+/// into an ever-growing table.
+pub const MAX_ACTIVITY_RETENTION_DAYS: i64 = 365;
+
+/// Peer private keys are handed over once at creation and never stored. The
+/// config and QR cannot be re-displayed afterwards; recovery is rotation,
+/// exactly like a lost API key.
+pub const RETENTION_NEVER: &str = "never";
+/// Peer private keys are stored, so the config and QR can be re-rendered on
+/// demand. Convenient, and strictly weaker: anyone who reaches the database —
+/// or a backup of it — can impersonate every peer.
+pub const RETENTION_PLAINTEXT: &str = "plaintext";
+
+/// The accepted values of `general_table.private_key_retention`.
+///
+/// Instance-wide rather than per-peer, deliberately: a per-peer toggle makes
+/// the question "does this server hold key material?" unanswerable without
+/// auditing every row, when it should have exactly one answer for the whole
+/// box.
+pub const PRIVATE_KEY_RETENTION_MODES: &[&str] = &[RETENTION_NEVER, RETENTION_PLAINTEXT];
 
 // ---------------------------------------------------------------------------
 // Entity structs
@@ -218,6 +327,11 @@ pub struct General {
     pub metrics_prometheus: bool,
     pub metrics_json: bool,
     pub metrics_password: Option<String>,
+    /// Days of per-client activity history to retain. `0` disables the
+    /// activity poller and purges any history already recorded.
+    pub activity_retention_days: i64,
+    /// `never` | `plaintext` — see [`PRIVATE_KEY_RETENTION_MODES`].
+    pub private_key_retention: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -718,7 +832,7 @@ impl Interface {
             name: row.get("name")?,
             device: row.get("device")?,
             port: row.get("port")?,
-            private_key: row.get("private_key")?,
+            private_key: dec(&row.get::<_, String>("private_key")?)?,
             public_key: row.get("public_key")?,
             ipv4_cidr: row.get("ipv4_cidr")?,
             ipv6_cidr: row.get("ipv6_cidr")?,
@@ -776,9 +890,9 @@ impl Client {
             name: row.get("name")?,
             ipv4_address: row.get("ipv4_address")?,
             ipv6_address: row.get("ipv6_address")?,
-            private_key: row.get("private_key")?,
+            private_key: dec(&row.get::<_, String>("private_key")?)?,
             public_key: row.get("public_key")?,
-            pre_shared_key: row.get("pre_shared_key")?,
+            pre_shared_key: dec_opt(row.get("pre_shared_key")?)?,
             pre_up: row.get("pre_up")?,
             post_up: row.get("post_up")?,
             pre_down: row.get("pre_down")?,
@@ -817,6 +931,19 @@ impl Client {
     }
 }
 
+impl Client {
+    /// Whether the server still holds this peer's private key.
+    ///
+    /// Empty rather than NULL is the "not retained" marker: the column is
+    /// `NOT NULL` from the original schema and SQLite cannot drop that
+    /// constraint without rebuilding the table, so an empty string carries
+    /// the meaning instead. Every read goes through here rather than
+    /// comparing to `""` at the call site.
+    pub fn has_private_key(&self) -> bool {
+        !self.private_key.is_empty()
+    }
+}
+
 impl User {
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
         Ok(User {
@@ -826,7 +953,18 @@ impl User {
             email: row.get("email")?,
             name: row.get("name")?,
             role: row.get("role")?,
-            totp_key: row.get("totp_key")?,
+            // Transparently decrypted on the way out, so no call site has to
+            // know whether this instance has encryption configured. A value
+            // stored before a key was supplied has no `enc$` prefix and comes
+            // back unchanged.
+            //
+            // A decryption failure is an ERROR, not a `None`. Returning None
+            // here would mean the login path sees no TOTP secret, skips the
+            // second-factor check entirely, and accepts a password alone —
+            // turning a key misconfiguration into a silent 2FA bypass. Failing
+            // the whole row load instead means such a user simply cannot
+            // authenticate until the key is fixed. Fail closed.
+            totp_key: dec_opt(row.get("totp_key")?)?,
             totp_verified: int_to_bool(row.get::<_, i64>("totp_verified")?),
             enabled: int_to_bool(row.get::<_, i64>("enabled")?),
             created_at: row.get("created_at")?,
@@ -880,11 +1018,22 @@ impl General {
         Ok(General {
             id: row.get("id")?,
             setup_step: row.get("setup_step")?,
-            session_password: row.get("session_password")?,
+            session_password: dec(&row.get::<_, String>("session_password")?)?,
             session_timeout: row.get("session_timeout")?,
             metrics_prometheus: int_to_bool(row.get::<_, i64>("metrics_prometheus")?),
             metrics_json: int_to_bool(row.get::<_, i64>("metrics_json")?),
             metrics_password: row.get("metrics_password")?,
+            // Tolerate the pre-migration shape (see Client::from_row): fall
+            // back to the same 90-day default the DDL declares.
+            activity_retention_days: row
+                .get::<_, i64>("activity_retention_days")
+                .unwrap_or(DEFAULT_ACTIVITY_RETENTION_DAYS),
+            // Pre-migration rows fall back to the safe mode, not the
+            // permissive one: an unreadable setting must never be the reason
+            // key material starts being retained.
+            private_key_retention: row
+                .get::<_, String>("private_key_retention")
+                .unwrap_or_else(|_| RETENTION_NEVER.to_string()),
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
         })
@@ -895,7 +1044,15 @@ impl OneTimeLink {
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
         Ok(OneTimeLink {
             id: row.get("id")?,
-            one_time_link: row.get("one_time_link")?,
+            // The struct field carries the *token*, which is what every caller
+            // needs (building the /cnf/<token> URL). The column now holds a
+            // digest, so the usable value comes from the encrypted copy —
+            // falling back to the column itself for rows written before the
+            // split, which still hold the plaintext token there.
+            one_time_link: match dec_opt(row.get("token_enc").unwrap_or(None))? {
+                Some(t) if !t.is_empty() => t,
+                _ => row.get("one_time_link")?,
+            },
             expires_at: row.get("expires_at")?,
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
@@ -910,7 +1067,7 @@ impl XrayInbound {
             port: row.get("port")?,
             dest: row.get("dest")?,
             server_names: row.get("server_names")?,
-            private_key: row.get("private_key")?,
+            private_key: dec(&row.get::<_, String>("private_key")?)?,
             public_key: row.get("public_key")?,
             fingerprint_default: row.get("fingerprint_default")?,
             transport: row.get("transport")?,
@@ -950,8 +1107,8 @@ impl XrayClient {
             user_id: row.get("user_id")?,
             inbound_id: row.get("inbound_id")?,
             name: row.get("name")?,
-            uuid: row.get("uuid")?,
-            short_id: row.get("short_id")?,
+            uuid: dec(&row.get::<_, String>("uuid")?)?,
+            short_id: dec(&row.get::<_, String>("short_id")?)?,
             expires_at: row.get("expires_at")?,
             additional_config: row.get("additional_config")?,
             enabled: int_to_bool(row.get::<_, i64>("enabled")?),
@@ -1014,7 +1171,7 @@ impl MdnsvpnInbound {
             port: row.get("port")?,
             bind: row.get("bind")?,
             encryption_method: row.get("encryption_method")?,
-            encryption_key: row.get("encryption_key")?,
+            encryption_key: dec(&row.get::<_, String>("encryption_key")?)?,
             protocol_type: row.get("protocol_type")?,
             dns_upstream_servers: row.get("dns_upstream_servers")?,
             forward_ip: row.get("forward_ip")?,
@@ -1058,7 +1215,7 @@ impl MtproxyUser {
             user_id: row.get("user_id")?,
             inbound_id: row.get("inbound_id")?,
             username: row.get("username")?,
-            secret_hex: row.get("secret_hex")?,
+            secret_hex: dec(&row.get::<_, String>("secret_hex")?)?,
             // ad_tag is nullable — None means "use the inbound default".
             ad_tag: row.get::<_, Option<String>>("ad_tag")?,
             enabled: int_to_bool(row.get::<_, i64>("enabled")?),
@@ -1146,11 +1303,18 @@ CREATE TABLE IF NOT EXISTS clients_table (
     advanced_security   INTEGER,
     additional_config   TEXT,
     enabled             INTEGER NOT NULL DEFAULT 1,
+    -- NOTE: there are deliberately no traffic/activity-accounting columns
+    -- here. Per-peer connection history never enters the schema, because
+    -- everything in the schema is written to disk when `IN_MEMORY=false`,
+    -- and is copied verbatim into the durable snapshot when
+    -- `WG_EASY_PERSIST_DB` is set. That history lives in process memory
+    -- only — see `src/activity.rs`.
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (user_id)      REFERENCES users_table(id),
     FOREIGN KEY (interface_id) REFERENCES interfaces_table(name)
 )"#;
+
 
 const CREATE_USERS: &str = r#"
 CREATE TABLE IF NOT EXISTS users_table (
@@ -1212,6 +1376,19 @@ CREATE TABLE IF NOT EXISTS general_table (
     metrics_prometheus  INTEGER NOT NULL DEFAULT 0,
     metrics_json        INTEGER NOT NULL DEFAULT 0,
     metrics_password    TEXT,
+    -- How many days of per-client activity history the poller keeps in
+    -- memory (never on disk — see src/activity.rs). 0 disables collection
+    -- entirely *and* makes the poller purge whatever is already held — the
+    -- operator's off switch is a real off switch, not just a
+    -- stop-writing-more switch.
+    -- Keep in step with DEFAULT_ACTIVITY_RETENTION_DAYS; the round-trip
+    -- test in tests/activity.rs fails if these two ever drift apart.
+    activity_retention_days INTEGER NOT NULL DEFAULT 30,
+    -- Whether peer private keys are kept after the config is issued.
+    -- 'never' (default) hands the key over exactly once at create time and
+    -- stores nothing; 'plaintext' keeps it so the config can be re-rendered.
+    -- Instance-wide on purpose — see PRIVATE_KEY_RETENTION_MODES.
+    private_key_retention TEXT NOT NULL DEFAULT 'never',
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 )"#;
@@ -1219,7 +1396,16 @@ CREATE TABLE IF NOT EXISTS general_table (
 const CREATE_ONE_TIME_LINKS: &str = r#"
 CREATE TABLE IF NOT EXISTS one_time_links_table (
     id              INTEGER PRIMARY KEY,
+    -- SHA-256 hex of the token, not the token. This column is the lookup
+    -- key, so it cannot be randomly encrypted (every write would produce a
+    -- different value and `WHERE` would never match). Hashing gives the
+    -- same protection for free: the server only ever needs to *recognise* a
+    -- token, never to reproduce it.
     one_time_link   TEXT UNIQUE NOT NULL,
+    -- The token itself, encrypted, kept solely so an active link can still be
+    -- re-displayed in the UI within its short lifetime. Lookup never touches
+    -- this column.
+    token_enc       TEXT,
     expires_at      TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1389,7 +1575,18 @@ CREATE TABLE IF NOT EXISTS mdnsvpn_inbound_table (
     domains                 TEXT NOT NULL DEFAULT '[]',
     port                    INTEGER NOT NULL DEFAULT 53,
     bind                    TEXT NOT NULL DEFAULT '0.0.0.0',
-    encryption_method       INTEGER NOT NULL DEFAULT 1,
+    -- 5 = AES-256-GCM. Upstream's own sample defaults to 1 (XOR against a
+    -- repeating key), which is neither confidential nor authenticated — an
+    -- active on-path attacker can tamper with tunnel payloads undetected.
+    -- We default new installs to the strongest AEAD instead. No key format
+    -- change is implied: upstream derives the AES key as sha256(rawKey) for
+    -- methods 2 and 5, so our 32-hex-char keys work unchanged.
+    --
+    -- Deliberately NOT retrofitted onto existing rows by a migration: the
+    -- method is baked into every client config already handed out, so
+    -- flipping it under a live deployment would break every peer. Existing
+    -- installs are warned instead (see api/mdnsvpn.rs securityWarnings).
+    encryption_method       INTEGER NOT NULL DEFAULT 5,
     encryption_key          TEXT NOT NULL DEFAULT '',
     protocol_type           TEXT NOT NULL DEFAULT 'SOCKS5',
     dns_upstream_servers    TEXT NOT NULL DEFAULT '["1.1.1.1:53","1.0.0.1:53"]',
@@ -1604,6 +1801,40 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         )?;
         tracing::info!("DB migration: added proxy_settings_table.session_ttl");
     }
+    if !column_exists(conn, "one_time_links_table", "token_enc")? {
+        conn.execute_batch("ALTER TABLE one_time_links_table ADD COLUMN token_enc TEXT")?;
+        tracing::info!(
+            "DB migration: added one_time_links_table.token_enc \
+             (tokens are now stored hashed, with an encrypted copy for display)"
+        );
+    }
+    if !column_exists(conn, "general_table", "private_key_retention")? {
+        // Existing installs created every peer in what is now 'plaintext'
+        // mode, and their rows still hold those keys. Defaulting the column
+        // to 'plaintext' would be the honest description of that state, but
+        // it would also silently keep the weaker behaviour forever on every
+        // upgraded box. Default to 'never' instead — new peers stop leaving
+        // key material behind immediately, and the admin UI offers a purge
+        // for the keys already stored.
+        conn.execute_batch(&format!(
+            "ALTER TABLE general_table ADD COLUMN private_key_retention \
+             TEXT NOT NULL DEFAULT '{RETENTION_NEVER}'"
+        ))?;
+        tracing::info!(
+            "DB migration: added general_table.private_key_retention \
+             (default '{RETENTION_NEVER}' — new peers no longer store private keys)"
+        );
+    }
+    if !column_exists(conn, "general_table", "activity_retention_days")? {
+        conn.execute_batch(&format!(
+            "ALTER TABLE general_table ADD COLUMN activity_retention_days \
+             INTEGER NOT NULL DEFAULT {DEFAULT_ACTIVITY_RETENTION_DAYS}"
+        ))?;
+        tracing::info!(
+            "DB migration: added general_table.activity_retention_days \
+             (activity history window, 0 = disabled)"
+        );
+    }
     // One-shot: replace the iptables-flavoured default hooks from earlier
     // versions with the native nftables equivalents. Only fires when the
     // stored post_up still contains "iptables" — operators who already
@@ -1695,6 +1926,120 @@ fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     Ok(false)
 }
 
+/// Every user table in the live schema.
+///
+/// Schema introspection exists so the "activity history is never persisted"
+/// guarantee can be asserted against the database itself rather than against
+/// the current call graph — a future table or column would otherwise
+/// reintroduce on-disk history silently.
+pub fn table_names() -> Result<Vec<String>> {
+    let c = conn();
+    let mut stmt = c.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' \
+         AND name NOT LIKE 'sqlite_%' ORDER BY name",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Every column of `table`, in declaration order. See [`table_names`].
+pub fn column_names(table: &str) -> Result<Vec<String>> {
+    let c = conn();
+    // `table` is a caller-supplied identifier and cannot be bound as a
+    // parameter in a PRAGMA, so reject anything that is not a plain
+    // identifier rather than interpolating it blind.
+    if !table.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return Err(anyhow!("invalid table name: {table}"));
+    }
+    let mut stmt = c.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>("name"))?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Read `users_table.totp_key` exactly as stored, bypassing the decryption
+/// that [`User::from_row`] applies.
+///
+/// Exists so the encryption boundary can be asserted rather than assumed: a
+/// test that only ever reads through the mapper cannot tell an encrypted
+/// column from a plaintext one, because the mapper makes them look identical
+/// — which is the whole point of the mapper and precisely why it cannot be
+/// the thing that verifies itself.
+pub fn raw_totp_key(user_id: i64) -> Result<Option<String>> {
+    let c = conn();
+    let v: Option<String> = c
+        .query_row(
+            "SELECT totp_key FROM users_table WHERE id = ?1",
+            params![user_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    Ok(v)
+}
+
+/// Read every non-empty value of `table.column` exactly as stored, bypassing
+/// the decryption the row mappers apply. See [`raw_totp_key`] for why this has
+/// to exist: a test that reads through a mapper cannot distinguish an
+/// encrypted column from a plaintext one.
+pub fn raw_column(table: &str, column: &str) -> Result<Vec<String>> {
+    if !ident_ok(table) || !ident_ok(column) {
+        return Err(anyhow!("invalid identifier: {table}.{column}"));
+    }
+    let c = conn();
+    let mut stmt = c.prepare(&format!(
+        "SELECT {column} FROM {table} WHERE {column} IS NOT NULL AND {column} <> ''"
+    ))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+/// Write `table.column` verbatim for every row, bypassing encryption.
+///
+/// Test support only: it manufactures the pre-encryption shape that
+/// [`encrypt_plaintext_secrets`] is meant to upgrade.
+#[doc(hidden)]
+pub fn force_raw_column(table: &str, column: &str, value: &str) -> Result<()> {
+    if !ident_ok(table) || !ident_ok(column) {
+        return Err(anyhow!("invalid identifier: {table}.{column}"));
+    }
+    let c = conn();
+    c.execute(&format!("UPDATE {table} SET {column} = ?1"), params![value])?;
+    Ok(())
+}
+
+/// Plain-identifier guard for the few places a table or column name has to be
+/// interpolated (PRAGMA and dynamic SELECT cannot bind identifiers).
+fn ident_ok(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Write `users_table.totp_key` verbatim, bypassing encryption.
+///
+/// Test support only: it manufactures the pre-encryption row shape that
+/// [`encrypt_plaintext_totp_secrets`] is meant to upgrade. Nothing in the
+/// service calls it — writes go through [`update_user`], which encrypts.
+#[doc(hidden)]
+pub fn force_raw_totp_key(user_id: i64, value: &str) -> Result<()> {
+    let c = conn();
+    c.execute(
+        "UPDATE users_table SET totp_key = ?1 WHERE id = ?2",
+        params![value, user_id],
+    )?;
+    Ok(())
+}
+
 /// Seed default rows when general_table is empty (first run).
 fn seed_if_empty(conn: &Connection) -> Result<()> {
     let count: i64 =
@@ -1731,7 +2076,10 @@ fn seed_if_empty(conn: &Connection) -> Result<()> {
         "INSERT OR IGNORE INTO general_table \
          (id, setup_step, session_password, session_timeout) \
          VALUES (?1, ?2, ?3, ?4)",
-        params![1, 1, &session_pass, 3600],
+        // Seeded through `enc` like every other secret write; the seed path
+        // predates the encryption layer and would otherwise be the one place
+        // a credential still landed in plaintext.
+        params![1, 1, enc(&session_pass)?, 3600],
     )?;
 
     // hooks_table default
@@ -2060,7 +2408,16 @@ fn build_update<'a>(
     let mut vals: Vec<Box<dyn rusqlite::types::ToSql + 'a>> = Vec::with_capacity(fields.len() + 1);
     for (col, val) in fields {
         sets.push(format!("{} = ?", col));
-        vals.push(Box::new(val.clone()));
+        // Single choke point for every update in the codebase: a secret column
+        // is encrypted here, so no caller can write one in plaintext by
+        // forgetting a step. Encryption failure must abort the write rather
+        // than fall through to storing the plaintext.
+        let val: String = if is_encrypted_column(table, col) {
+            enc(val).map_err(|e| anyhow!("encrypting {table}.{col}: {e}"))?
+        } else {
+            val.clone()
+        };
+        vals.push(Box::new(val));
     }
     if sets.is_empty() {
         return Err(anyhow!("No fields to update on {}", table));
@@ -2234,9 +2591,9 @@ fn insert_client(tx: &rusqlite::Transaction, data: &CreateClientParams) -> Resul
             data.name,
             data.ipv4_address,
             data.ipv6_address,
-            data.private_key,
+            enc(&data.private_key)?,
             data.public_key,
-            data.pre_shared_key,
+            data.pre_shared_key.as_deref().map(enc).transpose()?,
             data.pre_up,
             data.post_up,
             data.pre_down,
@@ -2353,7 +2710,49 @@ pub fn delete_client(id: i64) -> Result<()> {
     if n == 0 {
         return Err(anyhow!("Client {id} not found"));
     }
+    // The activity history lives outside SQLite (see `src/activity.rs`), so
+    // there is no foreign key to cascade it away — dropping it is this
+    // function's job. Doing it here rather than in the delete handler means
+    // no future caller can delete a peer and silently leave its connection
+    // record behind in memory.
+    drop(c);
+    crate::activity::forget_client(id);
     Ok(())
+}
+
+/// Replace a client's keypair. Used by the rotate flow — the recovery path
+/// when a config was issued once and lost, and the revocation path when a
+/// device is compromised.
+///
+/// `private_key` is `""` when the caller is not retaining it, which is the
+/// same representation [`Client::has_private_key`] reads.
+pub fn update_client_keypair(id: i64, private_key: &str, public_key: &str) -> Result<()> {
+    let c = conn();
+    let n = c.execute(
+        "UPDATE clients_table SET private_key = ?1, public_key = ?2, \
+         updated_at = datetime('now') WHERE id = ?3",
+        params![enc(private_key)?, public_key, id],
+    )?;
+    if n == 0 {
+        return Err(anyhow!("Client {id} not found"));
+    }
+    Ok(())
+}
+
+/// Forget every stored peer private key. Run when the operator switches
+/// retention to `never`: without it, flipping the mode would protect only
+/// peers created afterwards while every existing key stayed on disk — the
+/// setting would describe an intention rather than a fact.
+///
+/// Returns how many rows actually held a key.
+pub fn purge_client_private_keys() -> Result<usize> {
+    let c = conn();
+    let n = c.execute(
+        "UPDATE clients_table SET private_key = '', updated_at = datetime('now') \
+         WHERE private_key <> ''",
+        [],
+    )?;
+    Ok(n)
 }
 
 pub fn toggle_client(id: i64, enabled: bool) -> Result<()> {
@@ -2429,7 +2828,11 @@ pub fn create_user(data: &CreateUserParams) -> Result<i64> {
             data.email,
             data.name,
             data.role,
-            data.totp_key,
+            // Encrypted here rather than at the call site, for the same
+            // reason it is decrypted in `User::from_row`: a secret that is
+            // only protected when someone remembers to protect it is not
+            // protected.
+            data.totp_key.as_deref().map(enc).transpose()?,
             bool_to_int(data.totp_verified),
             bool_to_int(data.enabled),
         ],
@@ -2465,14 +2868,121 @@ pub fn set_totp_last_step(user_id: i64, step: i64) -> Result<()> {
 }
 
 pub fn update_user(id: i64, fields: &UpdateMap) -> Result<()> {
+    // `totp_key` is the one column here that carries a secret, and callers
+    // hand it over in plaintext. Encrypting inside the generic updater rather
+    // than at each call site means a future caller cannot introduce a
+    // plaintext write by forgetting a step. Already-encrypted input is left
+    // alone so a re-save is idempotent.
+    let mut fields = fields.clone();
+    if let Some(v) = fields.get("totp_key") {
+        if !v.is_empty() && !crate::crypto::is_encrypted(v) {
+            let enc = crate::crypto::encrypt(v)?;
+            fields.insert("totp_key".into(), enc);
+        }
+    }
     exec_update(
         "users_table",
         "id",
         WhereVal::I64(id),
-        fields,
+        &fields,
         VALID_USER_COLUMNS,
         &["id"],
     )
+}
+
+/// Encrypt every secret column that is still stored as plaintext.
+///
+/// Runs at startup once a key is configured. Without it, enabling encryption
+/// would only protect secrets written afterwards, leaving every peer key,
+/// pre-shared key, Reality key, client UUID and MTProxy secret readable in the
+/// database — the same "the setting describes an intention, not a fact" trap
+/// the private-key retention switch avoids.
+///
+/// Reads each column directly rather than through a row mapper, because the
+/// mappers have already decrypted and so cannot tell the two shapes apart.
+/// Idempotent: values that already carry the `enc$` prefix are skipped.
+///
+/// Returns the number of values upgraded.
+pub fn encrypt_plaintext_secrets() -> Result<usize> {
+    if !crate::crypto::is_configured() {
+        return Ok(0);
+    }
+    let mut upgraded = 0usize;
+    for (table, column) in ENCRYPTED_COLUMNS {
+        // The primary key column differs per table; `rowid` is present on all
+        // of them (none is WITHOUT ROWID) and is stable for an in-place update.
+        let rows: Vec<(i64, String)> = {
+            let c = conn();
+            let mut stmt = c.prepare(&format!(
+                "SELECT rowid, {column} FROM {table} \
+                 WHERE {column} IS NOT NULL AND {column} <> ''"
+            ))?;
+            let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get::<_, String>(1)?)))?;
+            let mut out = Vec::new();
+            for r in mapped {
+                out.push(r?);
+            }
+            out
+        };
+        for (rowid, stored) in rows {
+            if crate::crypto::is_encrypted(&stored) {
+                continue;
+            }
+            let enc_val = enc(&stored)?;
+            let c = conn();
+            c.execute(
+                &format!("UPDATE {table} SET {column} = ?1 WHERE rowid = ?2"),
+                params![enc_val, rowid],
+            )?;
+            upgraded += 1;
+        }
+    }
+    Ok(upgraded)
+}
+
+/// Re-encrypt any TOTP secret still stored as plaintext.
+///
+/// Runs at startup once a key is configured. Without it, enabling encryption
+/// would only protect secrets created afterwards, leaving every existing
+/// second factor readable in the database — the same "the setting describes an
+/// intention, not a fact" trap the private-key retention switch avoids.
+///
+/// Reads the column directly rather than through `get_user`, whose row mapper
+/// has already decrypted it and so cannot tell the two shapes apart.
+///
+/// Returns how many rows were upgraded.
+pub fn encrypt_plaintext_totp_secrets() -> Result<usize> {
+    if !crate::crypto::is_configured() {
+        return Ok(0);
+    }
+    let rows: Vec<(i64, String)> = {
+        let c = conn();
+        let mut stmt = c.prepare(
+            "SELECT id, totp_key FROM users_table \
+             WHERE totp_key IS NOT NULL AND totp_key <> ''",
+        )?;
+        let mapped = stmt.query_map([], |row| Ok((row.get(0)?, row.get::<_, String>(1)?)))?;
+        let mut out = Vec::new();
+        for r in mapped {
+            out.push(r?);
+        }
+        out
+    };
+
+    let mut upgraded = 0;
+    for (id, stored) in rows {
+        if crate::crypto::is_encrypted(&stored) {
+            continue;
+        }
+        let enc = crate::crypto::encrypt(&stored)?;
+        let c = conn();
+        c.execute(
+            "UPDATE users_table SET totp_key = ?1 WHERE id = ?2",
+            params![enc, id],
+        )?;
+        upgraded += 1;
+    }
+    Ok(upgraded)
 }
 
 pub fn update_password(id: i64, hash: &str) -> Result<()> {
@@ -2565,6 +3075,7 @@ pub fn get_general() -> Result<General> {
 const VALID_GENERAL_COLUMNS: &[&str] = &[
     "setup_step", "session_timeout",
     "metrics_prometheus", "metrics_json", "metrics_password",
+    "activity_retention_days", "private_key_retention",
 ];
 
 pub fn update_general(data: &UpdateMap) -> Result<()> {
@@ -2599,22 +3110,36 @@ pub fn set_setup_step(step: i64) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 pub fn create_one_time_link(client_id: i64, token: &str, expires: &str) -> Result<()> {
+    let digest = crate::auth::sha256(token);
+    let token_enc = enc(token)?;
     let c = conn();
     c.execute(
         "INSERT OR REPLACE INTO one_time_links_table \
-         (id, one_time_link, expires_at) VALUES (?1, ?2, ?3)",
-        params![client_id, token, expires],
+         (id, one_time_link, token_enc, expires_at) VALUES (?1, ?2, ?3, ?4)",
+        params![client_id, digest, token_enc, expires],
     )?;
     Ok(())
 }
 
 pub fn get_one_time_link(token: &str) -> Result<OneTimeLink> {
     let c = conn();
+    // Primary lookup is by digest. The second attempt matches rows written
+    // before this column held a hash: links live about five minutes, so the
+    // legacy shape disappears on its own shortly after an upgrade, but a link
+    // already in a user's hands should not break the moment the service
+    // restarts under them.
     c.query_row(
         "SELECT * FROM one_time_links_table WHERE one_time_link = ?1",
-        params![token],
+        params![crate::auth::sha256(token)],
         OneTimeLink::from_row,
     )
+    .or_else(|_| {
+        c.query_row(
+            "SELECT * FROM one_time_links_table WHERE one_time_link = ?1",
+            params![token],
+            OneTimeLink::from_row,
+        )
+    })
     .context("One-time link not found")
 }
 
@@ -2800,8 +3325,8 @@ pub fn create_xray_client(data: &CreateXrayClientParams) -> Result<i64> {
             data.user_id,
             data.inbound_id,
             data.name,
-            data.uuid,
-            data.short_id,
+            enc(&data.uuid)?,
+            enc(&data.short_id)?,
             data.expires_at,
             data.additional_config,
             bool_to_int(data.enabled),
@@ -2956,7 +3481,7 @@ pub fn create_mtproxy_user(data: &CreateMtproxyUserParams) -> Result<i64> {
             data.user_id,
             data.inbound_id,
             data.username,
-            data.secret_hex,
+            enc(&data.secret_hex)?,
             data.ad_tag,
             bool_to_int(data.enabled),
         ],
@@ -3046,12 +3571,15 @@ pub fn update_mdnsvpn_inbound(fields: &UpdateMap) -> Result<()> {
 /// admin endpoint can issue a single-column UPDATE without smuggling
 /// the rest of the inbound's state into an UpdateMap.
 pub fn update_mdnsvpn_encryption_key(key: &str) -> Result<()> {
+    // Raw UPDATE, so it bypasses `exec_update`'s encryption choke point and
+    // has to encrypt here itself.
+    let stored = enc(key)?;
     let c = conn();
     c.execute(
         "UPDATE mdnsvpn_inbound_table \
          SET encryption_key = ?1, updated_at = datetime('now') \
          WHERE id = 'mdnsvpn0'",
-        params![key],
+        params![stored],
     )?;
     Ok(())
 }

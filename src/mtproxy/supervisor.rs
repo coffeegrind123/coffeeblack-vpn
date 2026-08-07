@@ -225,13 +225,8 @@ async fn write_config(inbound: &db::MtproxyInbound) -> Result<PathBuf> {
 
     let path = config_path();
     let body = cfggen::generate(inbound, &dir)?;
-    let tmp = path.with_extension("toml.partial");
-    tokio::fs::write(&tmp, body.as_bytes())
-        .await
-        .with_context(|| format!("write {}", tmp.display()))?;
-    tokio::fs::rename(&tmp, &path)
-        .await
-        .with_context(|| format!("rename {} → {}", tmp.display(), path.display()))?;
+    // Owner-only at open(2) and atomic — this file carries credentials.
+    crate::secretfile::write_atomic(&path, body.as_bytes()).await?;
     Ok(path)
 }
 

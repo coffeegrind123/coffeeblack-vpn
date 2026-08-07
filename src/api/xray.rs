@@ -32,7 +32,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::admin::require_admin;
-use super::{api_err, map_err, ok_success, require_auth, value_to_string, AppState};
+use super::{
+    api_err, map_err, no_store_headers, ok_success, require_auth, value_to_string, AppState,
+};
 use crate::db;
 use crate::xray;
 
@@ -519,6 +521,8 @@ pub async fn client_share_url(
         header::CONTENT_TYPE,
         "text/plain; charset=utf-8".parse().unwrap(),
     );
+    // The vless:// URL carries the client UUID and transport secrets.
+    no_store_headers(&mut headers);
     Ok((StatusCode::OK, headers, url))
 }
 
@@ -533,6 +537,8 @@ pub async fn client_qrcode(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("qr: {e}")))?;
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/svg+xml".parse().unwrap());
+    // The QR encodes the vless:// URL, i.e. the client's credentials.
+    no_store_headers(&mut headers);
     Ok((StatusCode::OK, headers, svg))
 }
 
@@ -548,6 +554,8 @@ pub async fn client_amnezia_json(
         header::CONTENT_TYPE,
         "application/json; charset=utf-8".parse().unwrap(),
     );
+    // AmneziaVPN import payload — same credentials as the vless:// URL.
+    no_store_headers(&mut headers);
     Ok((StatusCode::OK, headers, body))
 }
 

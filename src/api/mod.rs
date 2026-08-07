@@ -3,10 +3,12 @@
 //! All HTTP handlers are organised into sub-modules:
 //! - `session`  — authentication and session management
 //! - `clients`  — AmneziaWG client CRUD
+//! - `activity` — per-client activity history (heatmap matrix, purge)
 //! - `admin`    — administrative endpoints (general, hooks, interface, etc.)
 //! - `setup`    — first-run setup wizard
 //! - `routes`   — miscellaneous routes (one-time links, metrics)
 
+pub mod activity;
 pub mod admin;
 pub mod clients;
 pub mod routes;
@@ -89,7 +91,7 @@ impl FromRef<AppState> for Arc<Mutex<HashMap<String, SessionData>>> {
 // Error helpers
 // ---------------------------------------------------------------------------
 
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::Json;
 use serde_json::{json, Value};
 
@@ -105,6 +107,23 @@ pub fn api_err(status: StatusCode, msg: &str) -> (StatusCode, Json<Value>) {
 pub fn attachment_disposition(filename: &str) -> HeaderValue {
     HeaderValue::from_str(&format!("attachment; filename=\"{filename}\""))
         .unwrap_or_else(|_| HeaderValue::from_static("attachment"))
+}
+
+/// Headers for a response body that carries secrets (keys, peer configs,
+/// share URLs, QR codes).
+///
+/// `no-store` is the operative directive: it forbids any cache — browser disk
+/// cache, a corporate proxy, a CDN in front of the panel — from writing the
+/// body to storage. Without it a downloaded tunnel config (which embeds the
+/// shared encryption key) can outlive the session that fetched it, on disks we
+/// do not control. `Pragma` is the HTTP/1.0 belt-and-braces for old
+/// intermediaries that ignore `Cache-Control`.
+pub fn no_store_headers(headers: &mut HeaderMap) {
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-store, no-cache, must-revalidate, private"),
+    );
+    headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
 }
 
 /// Convert an `anyhow::Error` into a 500 response. The detailed error
@@ -129,6 +148,12 @@ pub fn build_router(state: AppState) -> Router {
         // Information & interface
         .route("/information", axum::routing::get(routes::information))
         .route("/interface", axum::routing::get(routes::interface_info))
+        // Activity history
+        .route(
+            "/activity/heatmap",
+            axum::routing::get(activity::heatmap),
+        )
+        .route("/activity", axum::routing::delete(activity::purge))
         // Session
         .route(
             "/session",
@@ -170,6 +195,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/client/:id/disable",
             axum::routing::post(clients::disable_client),
+        )
+        .route(
+            "/client/:id/rotateKey",
+            axum::routing::post(clients::rotate_client_key),
         )
         .route(
             "/client/:id/generateOneTimeLink",
@@ -338,6 +367,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/mdnsvpn/clients/:id/share",
             axum::routing::get(mdnsvpn::client_share_url),
+        )
+        .route(
+            "/mdnsvpn/clients/:id/bundle.zip",
+            axum::routing::get(mdnsvpn::client_bundle_zip),
         )
         .route(
             "/mdnsvpn/clients/:id/qrcode.svg",

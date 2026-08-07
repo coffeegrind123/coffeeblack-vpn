@@ -20,7 +20,13 @@
 //! * `config`     — assemble `server_config.toml` from the singleton DB row.
 //! * `share`      — generate per-client `client_config.toml`, resolver
 //!   list, JSON, and base64 share blobs.
+//! * `bundle`     — pack those artifacts into a `bundle.zip` a peer can run.
+//!   Exists because a peer needs *two* files: mdnsvpn reads the resolver list
+//!   only from `client_resolvers.txt`, and a missing one is fatal.
 //! * `keys`       — generate / validate the shared encryption key.
+//! * `logscrub`   — strip the shared secret out of the child's log stream
+//!   before it reaches `tracing` (the pinned upstream binary prints the raw
+//!   key at INFO on every start).
 //! * `supervisor` — own the mdnsvpn child process. No HTTP control plane
 //!   to reconcile (mdnsvpn has no live API for users — every client
 //!   shares the singleton encryption key, so changing the user roster
@@ -51,8 +57,10 @@
 //! tunnel. Per-client rows are pure UX state (share-link slot, expiry,
 //! enabled toggle).
 
+pub mod bundle;
 pub mod config;
 pub mod keys;
+pub mod logscrub;
 pub mod share;
 
 #[cfg(mdnsvpn_bundled)]

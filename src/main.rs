@@ -1,4 +1,4 @@
-use awg_easy_rs::{api, config, db, firewall, init_setup, wg};
+use awg_easy_rs::{activity, api, config, db, firewall, init_setup, wg};
 
 use std::net::SocketAddr;
 use std::sync::OnceLock;
@@ -24,6 +24,24 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    // `--privileged-helper` runs the root side and nothing else: no database,
+    // no HTTP listener, no supervisors. Handled before any of that is set up
+    // precisely so the privileged process carries none of it — the whole point
+    // is that the code holding CAP_NET_ADMIN is small enough to audit.
+    if std::env::args().any(|a| a == "--privileged-helper") {
+        let cfg = awg_easy_rs::privhelper::HelperConfig {
+            socket_path: awg_easy_rs::privhelper::socket_path()
+                .unwrap_or_else(|| awg_easy_rs::privhelper::DEFAULT_SOCKET.into()),
+            interface: std::env::var("WG_EASY_HELPER_INTERFACE")
+                .unwrap_or_else(|_| "awg0".to_string()),
+            conf_dir: config::CONFIG.wg_conf_dir.clone().into(),
+            allow_gid: std::env::var("WG_EASY_HELPER_GID")
+                .ok()
+                .and_then(|g| g.parse().ok()),
+        };
+        return awg_easy_rs::privhelper::serve(cfg);
+    }
+
     db::init_db()?;
     tracing::info!("Database initialized");
 
@@ -35,18 +53,31 @@ async fn main() -> anyhow::Result<()> {
     // here silently reintroduces the disk dependency the operator is trying
     // to escape.
     if config::CONFIG.in_memory {
-        match awg_easy_rs::memexec::is_ram_backed(&config::CONFIG.wg_conf_dir) {
-            Some(true) => tracing::info!(
-                "IN_MEMORY: runtime dir {} is tmpfs (RAM-backed)",
-                config::CONFIG.wg_conf_dir
-            ),
-            Some(false) => tracing::warn!(
-                "IN_MEMORY is set but the runtime dir {} is NOT tmpfs — config \
-                 files, the AmneziaWG .conf, and tor's data dir will still hit \
-                 disk. Mount it as tmpfs (the bundled docker-compose does).",
-                config::CONFIG.wg_conf_dir
-            ),
-            None => {}
+        // Check every directory that receives a rendered credential, not just
+        // the WireGuard one. Each bundled transport writes its own config
+        // holding its own secrets — the Reality private key and client UUIDs,
+        // the MTProxy user secrets, the DNS-tunnel encryption key — and each
+        // has its own configurable path, so checking one dir and reporting
+        // "RAM-backed" was answering for files it does not contain.
+        for (label, dir) in [
+            ("WireGuard", &config::CONFIG.wg_conf_dir),
+            ("Xray (Reality key, client UUIDs)", &config::CONFIG.xray_dir),
+            ("MTProxy (user secrets)", &config::CONFIG.mtproxy_dir),
+            ("MasterDnsVPN (tunnel key)", &config::CONFIG.mdnsvpn_dir),
+            ("DNS bundle", &config::CONFIG.dns_dir),
+        ] {
+            match awg_easy_rs::memexec::is_ram_backed(dir) {
+                Some(true) => {
+                    tracing::info!("IN_MEMORY: {label} dir {dir} is tmpfs (RAM-backed)")
+                }
+                Some(false) => tracing::warn!(
+                    "IN_MEMORY is set but the {label} dir {dir} is NOT tmpfs — the \
+                     credentials rendered there reach a block device. Mount it as \
+                     tmpfs (the bundled docker-compose does). The files are written \
+                     0600, so this is a persistence concern rather than an access one."
+                ),
+                None => {}
+            }
         }
     }
 
@@ -171,6 +202,41 @@ async fn main() -> anyhow::Result<()> {
                 );
             }
         }
+    }
+
+    // Surface the secret-encryption mode in the journal, and upgrade any
+    // TOTP secret still stored as plaintext now that a key is available.
+    // Ordering matters: this has to run after the DB is open and before the
+    // first login can read a secret.
+    awg_easy_rs::crypto::log_status();
+    if awg_easy_rs::privhelper::is_enabled() {
+        // Verify the socket answers before anything depends on it, so a
+        // misconfigured deployment fails at startup with a clear message
+        // rather than at the first peer change with a confusing one.
+        match awg_easy_rs::privhelper::call(&awg_easy_rs::privhelper::Request::Ping) {
+            Ok(_) => tracing::info!(
+                "privileged helper: connected — this process needs no CAP_NET_ADMIN"
+            ),
+            Err(e) => tracing::error!(
+                "privileged helper configured but unreachable ({e:#}); \
+                 interface and firewall changes will fail"
+            ),
+        }
+    }
+    match db::encrypt_plaintext_secrets() {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("encrypted {n} secret(s) previously stored as plaintext"),
+        Err(e) => tracing::error!("secret encryption migration failed (non-fatal): {e:#}"),
+    }
+
+    // Start the activity poller: samples `awg show dump` every 30s into the
+    // per-client lifetime totals and the daily rollup behind the heatmap.
+    // Runs unconditionally — it re-reads `activity_retention_days` on every
+    // tick, so an operator toggling the feature off (or back on) in the admin
+    // UI takes effect within one interval without a restart.
+    match db::get_interface() {
+        Ok(iface) => activity::spawn(iface.name),
+        Err(e) => tracing::warn!("activity poller not started (interface read failed): {e}"),
     }
 
     // Start background cron job (every 60 seconds): expire clients/one-time

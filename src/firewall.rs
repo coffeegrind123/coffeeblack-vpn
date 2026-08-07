@@ -91,6 +91,12 @@ fn nft(args: &[&str]) -> Result<String> {
     if !cfg!(target_os = "linux") {
         return Ok(String::new());
     }
+    // With the privileged helper enabled the only read this code needs is the
+    // table listing, which the helper exposes as its own fixed operation —
+    // arbitrary `nft` argument vectors are deliberately not forwardable.
+    if crate::privhelper::is_enabled() {
+        return crate::privhelper::call(&crate::privhelper::Request::NftList);
+    }
     let out = Command::new("nft").args(args).output()?;
     if !out.status.success() {
         return Err(anyhow!(
@@ -108,6 +114,12 @@ fn nft(args: &[&str]) -> Result<String> {
 fn nft_apply(transaction: &str) -> Result<()> {
     if !cfg!(target_os = "linux") {
         return Ok(());
+    }
+    if crate::privhelper::is_enabled() {
+        return crate::privhelper::call(&crate::privhelper::Request::NftApply {
+            ruleset: transaction.to_string(),
+        })
+        .map(|_| ());
     }
     let mut child = Command::new("nft")
         .arg("-f")

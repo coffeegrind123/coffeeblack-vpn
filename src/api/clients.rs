@@ -21,7 +21,7 @@ use axum_extra::extract::cookie::CookieJar;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use super::{api_err, map_err, ok_success, require_auth, AppState};
+use super::{api_err, map_err, no_store_headers, ok_success, require_auth, AppState};
 use crate::{db, wg};
 
 /// Maximum AmneziaWG clients a non-admin user may create. Bounds the
@@ -47,6 +47,52 @@ pub struct CreateClientRequest {
     pub name: String,
     #[serde(rename = "expiresAt")]
     pub expires_at: Option<String>,
+    /// Optional caller-supplied peer public key ("bring your own key").
+    ///
+    /// The strongest mode available: the client generates its own keypair and
+    /// sends only the public half, so the server never sees the private key
+    /// at all and cannot leak what it never had. When omitted the server
+    /// generates the pair and hands the private key back exactly once.
+    #[serde(rename = "publicKey")]
+    pub public_key: Option<String>,
+}
+
+/// Reject a re-display request for a peer whose private key was not retained.
+///
+/// Without this the caller gets a 500 from the config generator; the whole
+/// point of `never` retention is that this is an expected, explainable state,
+/// so it answers 409 with the action that actually resolves it.
+fn require_retained_key(client: &db::Client) -> Result<(), (StatusCode, Json<Value>)> {
+    if client.has_private_key() {
+        return Ok(());
+    }
+    Err(api_err(
+        StatusCode::CONFLICT,
+        "This server does not hold this peer's private key — it was issued once when \
+         the peer was created. Rotate the peer's key to issue a new configuration.",
+    ))
+}
+
+/// Accept a caller-supplied WireGuard public key.
+///
+/// Curve25519 keys are exactly 32 bytes, which is 44 base64 characters ending
+/// in `=`. Validating the shape here keeps a malformed value from reaching
+/// the generated config, where it would silently produce a peer that can
+/// never complete a handshake.
+fn validate_public_key(key: &str) -> Result<String, (StatusCode, Json<Value>)> {
+    let key = key.trim();
+    let valid = key.len() == 44
+        && key.ends_with('=')
+        && key[..43]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/');
+    if !valid {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "publicKey must be a base64-encoded 32-byte WireGuard key (44 characters ending in '=')",
+        ));
+    }
+    Ok(key.to_string())
 }
 
 #[derive(Deserialize)]
@@ -123,6 +169,9 @@ where
 
 fn client_to_json(client: &db::Client, peers: &[wg::cli::PeerDump]) -> Value {
     let peer = peers.iter().find(|p| p.public_key == client.public_key);
+    // Activity lives in process memory, not in the client row — see
+    // `crate::activity`. Absent means never sampled, which is all-zero.
+    let recorded = crate::activity::client_activity(client.id).unwrap_or_default();
 
     // dns / allowedIps / serverAllowedIps / firewallIps are stored as JSON-
     // encoded arrays in TEXT columns. Deserialize them on the way out so the
@@ -155,7 +204,10 @@ fn client_to_json(client: &db::Client, peers: &[wg::cli::PeerDump]) -> Value {
         "name": client.name,
         "ipv4Address": client.ipv4_address,
         "ipv6Address": client.ipv6_address,
-        "privateKey": client.private_key,
+        // Null rather than "" when the key was not retained, so the UI can
+        // tell "no key on this server" apart from "key is the empty string".
+        "privateKey": if client.has_private_key() { json!(client.private_key) } else { Value::Null },
+        "keyRetained": client.has_private_key(),
         "publicKey": client.public_key,
         "preSharedKey": client.pre_shared_key,
         "preUp": client.pre_up,
@@ -183,11 +235,21 @@ fn client_to_json(client: &db::Client, peers: &[wg::cli::PeerDump]) -> Value {
         "enabled": client.enabled,
         "createdAt": client.created_at,
         "updatedAt": client.updated_at,
-        // Runtime data from wg dump
+        // Runtime data from wg dump — current since the interface last came
+        // up, and back to zero after a restart.
         "transferRx": peer.map(|p| p.transfer_rx).unwrap_or(0),
         "transferTx": peer.map(|p| p.transfer_tx).unwrap_or(0),
         "latestHandshakeAt": peer.and_then(|p| p.latest_handshake.map(crate::datetime::to_rfc3339)),
         "endpoint": peer.and_then(|p| p.endpoint.clone()),
+        // Counterparts accumulated by the activity poller from clamped
+        // deltas — these survive an interface restart (though not a restart
+        // of this process, by design), and are what the UI labels "lifetime".
+        "totalRx": recorded.total_rx_bytes,
+        "totalTx": recorded.total_tx_bytes,
+        // Last tick the poller saw a handshake. Distinct from
+        // `latestHandshakeAt`: that is the kernel's own timestamp and is
+        // lost when the interface restarts, this one is not.
+        "lastSeenAt": recorded.last_seen_at,
         "oneTimeLink": one_time_link,
     })
 }
@@ -271,8 +333,26 @@ pub async fn create_client(
     let iface = db::get_interface().map_err(map_err)?;
     let user_config = db::get_user_config().map_err(map_err)?;
 
-    // Generate keys
-    let (private_key, public_key) = wg::generate_keypair().map_err(map_err)?;
+    // Key acquisition, in order of decreasing trust placed in this server:
+    //   1. caller supplied a public key  → we never hold a private key at all
+    //   2. we generate the pair          → private key is handed back once,
+    //                                      and persisted only in `plaintext`
+    //                                      retention mode
+    let general = db::get_general().map_err(map_err)?;
+    let retain = general.private_key_retention == db::RETENTION_PLAINTEXT;
+    let (issued_private_key, public_key) = match body.public_key.as_deref() {
+        Some(byo) => (None, validate_public_key(byo)?),
+        None => {
+            let (private_key, public_key) = wg::generate_keypair().map_err(map_err)?;
+            (Some(private_key), public_key)
+        }
+    };
+    // What actually goes into the row: the key itself only when the operator
+    // has opted into retention, otherwise the empty "not retained" marker.
+    let stored_private_key = match (&issued_private_key, retain) {
+        (Some(pk), true) => pk.clone(),
+        _ => String::new(),
+    };
     let psk = wg::generate_psk().map_err(map_err)?;
 
     // Build CreateClientParams with sensible defaults from user_config. The
@@ -285,7 +365,7 @@ pub async fn create_client(
         name: body.name,
         ipv4_address: None,
         ipv6_address: None,
-        private_key,
+        private_key: stored_private_key,
         public_key,
         pre_shared_key: Some(psk),
         pre_up: None,
@@ -329,9 +409,117 @@ pub async fn create_client(
         crate::firewall::rebuild_rules_async().await.map_err(map_err).ok();
     }
 
+    // The one-and-only delivery. Under `never` retention this response is the
+    // sole moment the private key and the rendered config exist outside the
+    // client's own device, so both are returned here rather than left for a
+    // follow-up GET that would have nothing to serve.
+    let config = issued_private_key
+        .as_deref()
+        .map(|pk| wg::build_client_config(client_id, Some(pk)))
+        .transpose()
+        .map_err(map_err)?;
+    // The QR must ride along with the config rather than being fetched from
+    // /qrcode.svg afterwards: under `never` retention that endpoint has no
+    // key to render from, so this response is the only chance to produce one.
+    let qr_svg = config
+        .as_deref()
+        .map(crate::qr::generate_qr_svg)
+        .transpose()
+        .map_err(map_err)?;
+
     Ok(Json(json!({
         "success": true,
         "clientId": client_id,
+        // Present only when this server generated the pair. Null for a
+        // caller-supplied public key — there was never a private half here.
+        "privateKey": issued_private_key,
+        "config": config,
+        "qrSvg": qr_svg,
+        // Tells the UI whether it may offer download/QR later, or must make
+        // the operator save this response now.
+        "keyRetained": retain && issued_private_key.is_some(),
+        "retentionMode": general.private_key_retention,
+    })))
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/client/:id/rotateKey — re-issue the peer's keypair
+// ---------------------------------------------------------------------------
+
+/// Issue a fresh keypair for an existing peer and return the new config once.
+///
+/// This is the counterpart that makes `never` retention usable: with no
+/// re-display possible, a lost config is recovered by rotating rather than by
+/// keeping a copy on the server forever. It doubles as revocation — the old
+/// public key stops being accepted the moment the interface reloads.
+pub async fn rotate_client_key(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(client_id): Path<i64>,
+    body: Option<Json<Value>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let user = require_auth(&jar, &state)?;
+
+    let client = db::get_client(client_id)
+        .map_err(|_| api_err(StatusCode::NOT_FOUND, "Client not found"))?;
+    if user.role == 0 && client.user_id != Some(user.id) {
+        return Err(api_err(StatusCode::FORBIDDEN, "Access denied"));
+    }
+
+    let general = db::get_general().map_err(map_err)?;
+    let retain = general.private_key_retention == db::RETENTION_PLAINTEXT;
+
+    let supplied = body
+        .as_ref()
+        .and_then(|Json(v)| v.get("publicKey"))
+        .and_then(|v| v.as_str());
+    let (issued_private_key, public_key) = match supplied {
+        Some(byo) => (None, validate_public_key(byo)?),
+        None => {
+            let (private_key, public_key) = wg::generate_keypair().map_err(map_err)?;
+            (Some(private_key), public_key)
+        }
+    };
+    let stored_private_key = match (&issued_private_key, retain) {
+        (Some(pk), true) => pk.clone(),
+        _ => String::new(),
+    };
+
+    db::update_client_keypair(client_id, &stored_private_key, &public_key).map_err(map_err)?;
+
+    // Any config still in flight for the old key is now worthless, and the
+    // link that would serve it must not outlive it.
+    let _ = db::delete_one_time_link(client_id);
+
+    wg::save_config_async().await.map_err(map_err)?;
+    let iface = db::get_interface().map_err(map_err)?;
+    if iface.firewall_enabled {
+        crate::firewall::rebuild_rules_async().await.map_err(map_err).ok();
+    }
+
+    let config = issued_private_key
+        .as_deref()
+        .map(|pk| wg::build_client_config(client_id, Some(pk)))
+        .transpose()
+        .map_err(map_err)?;
+    let qr_svg = config
+        .as_deref()
+        .map(crate::qr::generate_qr_svg)
+        .transpose()
+        .map_err(map_err)?;
+
+    tracing::info!(
+        "client {client_id} keypair rotated by user {} (retained: {retain})",
+        user.username
+    );
+
+    Ok(Json(json!({
+        "success": true,
+        "clientId": client_id,
+        "privateKey": issued_private_key,
+        "config": config,
+        "qrSvg": qr_svg,
+        "keyRetained": retain && issued_private_key.is_some(),
     })))
 }
 
@@ -671,6 +859,7 @@ pub async fn client_configuration(
         return Err(api_err(StatusCode::FORBIDDEN, "Access denied"));
     }
 
+    require_retained_key(&client)?;
     let config = wg::get_client_config(client_id).map_err(|_| {
         api_err(StatusCode::NOT_FOUND, "Client not found or config generation failed")
     })?;
@@ -683,6 +872,8 @@ pub async fn client_configuration(
         header::HeaderValue::from_static("application/x-wireguard-config"),
     );
     headers.insert(header::CONTENT_DISPOSITION, super::attachment_disposition(&filename));
+    // Body embeds the peer's WireGuard private key.
+    no_store_headers(&mut headers);
 
     Ok((StatusCode::OK, headers, config))
 }
@@ -705,17 +896,22 @@ pub async fn client_qrcode(
         return Err(api_err(StatusCode::FORBIDDEN, "Access denied"));
     }
 
+    require_retained_key(&client)?;
     let config = wg::get_client_config(client_id).map_err(|_| {
         api_err(StatusCode::NOT_FOUND, "Client not found or config generation failed")
     })?;
 
     let svg = crate::qr::generate_qr_svg(&config).map_err(map_err)?;
 
-    Ok((
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "image/svg+xml")],
-        svg,
-    ))
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("image/svg+xml"),
+    );
+    // The QR encodes the full peer config, private key included.
+    no_store_headers(&mut headers);
+
+    Ok((StatusCode::OK, headers, svg))
 }
 
 // ---------------------------------------------------------------------------
@@ -797,6 +993,7 @@ pub async fn generate_one_time_link(
         return Err(api_err(StatusCode::FORBIDDEN, "Access denied"));
     }
 
+    require_retained_key(&client)?;
     // Generate CSPRNG-based token (validate config generation)
     let _config = wg::get_client_config(client_id).map_err(map_err)?;
     let mut bytes = [0u8; 32];

@@ -19,6 +19,29 @@ RestartSec=5s
 # The simplest correct model (and the one upstream's Docker image uses) is to
 # run as root. The ambient capabilities below are declared explicitly so the
 # intent is documented and so a future move to a non-root User= keeps working.
+#
+# --- Optional: privilege separation ------------------------------------------
+# With `awg-easy-rs-helper.service` running, this process needs NO capabilities
+# at all: every `awg-quick` / `awg` / `nft` call and the interface config write
+# go over the helper's Unix socket instead. To switch:
+#
+#   1. systemctl enable --now awg-easy-rs-helper.service
+#   2. useradd --system --no-create-home --shell /usr/sbin/nologin awg-easy
+#   3. set WG_EASY_HELPER_GID in the helper unit to that user's gid
+#   4. uncomment the four lines below and comment out User=root/Group=root
+#      and both capability lines
+#   5. systemctl daemon-reload && systemctl restart awg-easy-rs
+#
+# Left opt-in rather than default because it needs an account and a second
+# unit; an upgrade should not silently change how the service is deployed.
+# Note the bundled transports that bind low ports (Xray on 443, MasterDnsVPN
+# on 53) still need CAP_NET_BIND_SERVICE — add it back if you enable those.
+#
+#User=awg-easy
+#Group=awg-easy
+#Environment=WG_EASY_HELPER_SOCKET=/run/awg-easy-rs/helper.sock
+#AmbientCapabilities=
+#
 User=root
 Group=root
 AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_MODULE
@@ -26,6 +49,29 @@ CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_MODULE CAP_NET_RAW CAP_NET_BIND_SERV
 
 # --- Binary and configuration ------------------------------------------------
 ExecStart=/usr/local/bin/awg-easy-rs
+
+# --- Secret encryption key (optional but recommended) ------------------------
+# Encrypts secrets at rest (TOTP seeds) so a stolen database or backup yields
+# nothing usable. Create the machine-bound credential once:
+#
+#   openssl rand -base64 32 \
+#     | systemd-ask-password --no-tty -n \
+#     | systemd-creds encrypt --name=SECRET_KEY - /etc/awg-easy-rs/secret.cred
+#
+# or more simply:
+#
+#   openssl rand -base64 32 > /tmp/k && \
+#     systemd-creds encrypt --name=SECRET_KEY /tmp/k \
+#       /etc/awg-easy-rs/secret.cred && shred -u /tmp/k
+#
+# then uncomment both lines. systemd decrypts it into a tmpfs at start, so the
+# plaintext key never touches disk. Without it the service still runs and logs
+# a warning that secrets are stored unencrypted.
+#
+# NOTE: this protects the database at rest. It does not protect a live
+# compromise — the running process necessarily holds the key.
+#LoadCredentialEncrypted=SECRET_KEY:/etc/awg-easy-rs/secret.cred
+#Environment=WG_EASY_SECRET_KEY_PATH=%d/SECRET_KEY
 
 # EnvironmentFile is optional (leading '-'): the binary has working defaults and
 # the setup wizard can seed the first admin if the file is absent.
@@ -59,6 +105,10 @@ LimitNOFILE=65536
 #   * PrivateNetwork=yes        → hides the interface/namespace entirely
 #   * RestrictAddressFamilies=  → blocks AF_NETLINK used to program the interface
 NoNewPrivileges=false
+# No core dumps. A dump of this process contains the decrypted secret key,
+# every session token, and any peer key material in flight — written to disk
+# by the kernel, outside every other protection here. Costs nothing to refuse.
+LimitCORE=0
 ProtectSystem=full
 ProtectHome=yes
 PrivateTmp=yes

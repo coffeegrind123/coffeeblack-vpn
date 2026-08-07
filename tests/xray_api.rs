@@ -557,3 +557,47 @@ async fn non_admin_only_sees_own_clients() {
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["name"], "bobs-phone");
 }
+
+/// The vless:// URL, its QR, and the AmneziaVPN JSON all carry the client's
+/// credentials. None of them may be cacheable.
+#[tokio::test]
+#[serial(db)]
+async fn share_artifacts_forbid_caching() {
+    seed();
+    let _admin = create_admin();
+    let app = router();
+    let cookie = login(&app, "admin", "adminpass").await;
+
+    db::update_xray_keypair("PRIV", "PUB").unwrap();
+    db::update_host_port("vpn.example.com", 51820).unwrap();
+    let (_, c) = json_post(&app, "/api/xray/clients", &cookie, json!({"name": "alice"})).await;
+    let id = c["id"].as_i64().unwrap();
+
+    for path in [
+        format!("/api/xray/clients/{id}/share"),
+        format!("/api/xray/clients/{id}/qrcode.svg"),
+        format!("/api/xray/clients/{id}/json"),
+    ] {
+        let req = Request::builder()
+            .method("GET")
+            .uri(&path)
+            .header(header::COOKIE, format!("awg_session={cookie}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{path}");
+        let cc = resp
+            .headers()
+            .get(header::CACHE_CONTROL)
+            .unwrap_or_else(|| panic!("{path}: no Cache-Control"))
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(cc.contains("no-store"), "{path}: {cc:?}");
+        assert_eq!(
+            resp.headers().get(header::PRAGMA).map(|v| v.to_str().unwrap()),
+            Some("no-cache"),
+            "{path}: missing Pragma"
+        );
+    }
+}

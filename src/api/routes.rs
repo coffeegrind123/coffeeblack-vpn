@@ -14,7 +14,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde_json::{json, Value};
 
-use super::{api_err, map_err};
+use super::{api_err, map_err, no_store_headers};
 use crate::{auth, db, wg};
 
 /// Escape a string for use inside a Prometheus label value (`name="…"`).
@@ -143,6 +143,10 @@ pub async fn one_time_link(
         header::HeaderValue::from_static("application/x-wireguard-config"),
     );
     headers.insert(header::CONTENT_DISPOSITION, super::attachment_disposition(&filename));
+    // One-time link: the body embeds the peer's WireGuard private key, and the
+    // link is already burnt above. A cached copy would outlive the single use
+    // this endpoint exists to enforce.
+    no_store_headers(&mut headers);
 
     Ok((StatusCode::OK, headers, config))
 }
@@ -170,16 +174,26 @@ pub async fn metrics_json(
     let clients = db::get_all_clients().map_err(map_err)?;
     let peers = wg::dump_peers_async(iface.name.clone()).await.unwrap_or_default();
 
+    // One lock acquisition for the whole response rather than one per row.
+    let ids: Vec<i64> = clients.iter().map(|c| c.id).collect();
+    let recorded = crate::activity::client_activity_map(&ids);
+
     let metrics: Vec<Value> = clients
         .iter()
         .map(|client| {
             let peer = peers.iter().find(|p| p.public_key == client.public_key);
+            let act = recorded.get(&client.id).cloned().unwrap_or_default();
             json!({
                 "id": client.id,
                 "name": client.name,
                 "enabled": client.enabled,
                 "transferRx": peer.map(|p| p.transfer_rx).unwrap_or(0),
                 "transferTx": peer.map(|p| p.transfer_tx).unwrap_or(0),
+                // Accumulated by the activity poller — monotonic across
+                // interface restarts, unlike the two above.
+                "totalRx": act.total_rx_bytes,
+                "totalTx": act.total_tx_bytes,
+                "lastSeenAt": act.last_seen_at,
                 "latestHandshakeAt": peer.and_then(|p| p.latest_handshake.map(crate::datetime::to_rfc3339)),
                 "endpoint": peer.and_then(|p| p.endpoint.clone()),
                 "online": peer.map(|p| p.latest_handshake.is_some()).unwrap_or(false),
@@ -241,6 +255,20 @@ pub async fn metrics_prometheus(
     output.push_str("# HELP wireguard_peer_tx_bytes Bytes transmitted per peer\n");
     output.push_str("# TYPE wireguard_peer_tx_bytes counter\n");
 
+    // The two above are read straight from `awg show dump` and therefore
+    // restart at 0 with the interface — which is exactly the pattern
+    // Prometheus's `rate()` reads as a counter reset. These two are the
+    // poller's accumulated equivalents: genuinely monotonic across restarts,
+    // so `increase()` over a window that contains one is still correct.
+    output.push_str("# HELP wireguard_peer_total_rx_bytes Bytes received per peer, accumulated across interface restarts\n");
+    output.push_str("# TYPE wireguard_peer_total_rx_bytes counter\n");
+
+    output.push_str("# HELP wireguard_peer_total_tx_bytes Bytes transmitted per peer, accumulated across interface restarts\n");
+    output.push_str("# TYPE wireguard_peer_total_tx_bytes counter\n");
+
+    output.push_str("# HELP wireguard_peer_last_seen Unix timestamp the poller last observed a handshake for this peer\n");
+    output.push_str("# TYPE wireguard_peer_last_seen gauge\n");
+
     output.push_str("# HELP wireguard_peer_latest_handshake Latest handshake timestamp\n");
     output.push_str("# TYPE wireguard_peer_latest_handshake gauge\n");
 
@@ -248,8 +276,11 @@ pub async fn metrics_prometheus(
     output.push_str("# TYPE wireguard_peer_online gauge\n");
 
     let safe_iface = escape_prometheus_label(&iface.name);
+    let ids: Vec<i64> = clients.iter().map(|c| c.id).collect();
+    let recorded = crate::activity::client_activity_map(&ids);
     for client in &clients {
         let peer = peers.iter().find(|p| p.public_key == client.public_key);
+        let act = recorded.get(&client.id).cloned().unwrap_or_default();
         let safe_name = escape_prometheus_label(&client.name);
 
         let rx = peer.map(|p| p.transfer_rx).unwrap_or(0);
@@ -267,6 +298,25 @@ pub async fn metrics_prometheus(
         output.push_str(&format!(
             "wireguard_peer_tx_bytes{{interface=\"{}\",name=\"{}\",id=\"{}\"}} {}\n",
             safe_iface, safe_name, client.id, tx
+        ));
+        output.push_str(&format!(
+            "wireguard_peer_total_rx_bytes{{interface=\"{}\",name=\"{}\",id=\"{}\"}} {}\n",
+            safe_iface, safe_name, client.id, act.total_rx_bytes
+        ));
+        output.push_str(&format!(
+            "wireguard_peer_total_tx_bytes{{interface=\"{}\",name=\"{}\",id=\"{}\"}} {}\n",
+            safe_iface, safe_name, client.id, act.total_tx_bytes
+        ));
+        output.push_str(&format!(
+            "wireguard_peer_last_seen{{interface=\"{}\",name=\"{}\",id=\"{}\"}} {}\n",
+            safe_iface,
+            safe_name,
+            client.id,
+            act.last_seen_at
+                .as_deref()
+                .and_then(crate::datetime::parse_rfc3339)
+                .map(|d| d.unix_timestamp())
+                .unwrap_or(0)
         ));
         output.push_str(&format!(
             "wireguard_peer_latest_handshake{{interface=\"{}\",name=\"{}\",id=\"{}\"}} {}\n",

@@ -32,7 +32,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::admin::require_admin;
-use super::{api_err, map_err, ok_success, value_to_string, AppState};
+use super::{api_err, map_err, no_store_headers, ok_success, value_to_string, AppState};
 use crate::db;
 use crate::mtproxy;
 
@@ -608,6 +608,8 @@ pub async fn user_qrcode(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("qr: {e}")))?;
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/svg+xml".parse().unwrap());
+    // The QR encodes the tg:// proxy link, i.e. the user's MTProxy secret.
+    no_store_headers(&mut headers);
     Ok((StatusCode::OK, headers, svg))
 }
 

@@ -117,6 +117,23 @@ async fn raw_get(app: &axum::Router, path: &str, cookie: &str) -> (StatusCode, S
     (status, s)
 }
 
+/// Like `raw_get`, but keeps the response headers so cache-policy can be
+/// asserted on secret-bearing bodies.
+async fn headers_get(
+    app: &axum::Router,
+    path: &str,
+    cookie: &str,
+) -> (StatusCode, axum::http::HeaderMap) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    (resp.status(), resp.headers().clone())
+}
+
 // ---------------------------------------------------------------------------
 // Auth
 // ---------------------------------------------------------------------------
@@ -174,7 +191,16 @@ async fn get_inbound_returns_seeded_defaults() {
     assert_eq!(body["id"], "mdnsvpn0");
     assert_eq!(body["port"], 53);
     assert_eq!(body["bind"], "0.0.0.0");
-    assert_eq!(body["encryptionMethod"], 1);
+    // Fresh installs must default to authenticated encryption, NOT upstream's
+    // method 1 (XOR against a repeating key — neither confidential nor
+    // authenticated). Guards against the schema default regressing.
+    assert_eq!(body["encryptionMethod"], 5);
+    assert_eq!(body["encryptionMethodName"], "AES-256-GCM");
+    assert_eq!(body["encryptionIsAuthenticated"], true);
+    assert_eq!(body["recommendedEncryptionMethod"], 5);
+    // No key set yet, so nothing to fingerprint and nothing to warn about.
+    assert_eq!(body["encryptionKeyFingerprint"], "");
+    assert_eq!(body["securityWarnings"], json!([]));
     assert_eq!(body["protocolType"], "SOCKS5");
     assert_eq!(body["enabled"], false);
     assert_eq!(body["hasEncryptionKey"], false);
@@ -508,7 +534,11 @@ async fn share_config_toml_download_works() {
     assert!(body.contains(r#"DOMAINS = ["v.example.com"]"#));
     assert!(body.contains("LISTEN_PORT = 19000"));
     assert!(body.contains("ENCRYPTION_KEY ="));
-    assert!(body.contains("RESOLVERS ="));
+    // `RESOLVERS = […]` is NOT a real mdnsvpn config key — it used to be
+    // emitted here and was silently discarded by the client. It must stay gone.
+    assert!(!body.contains("RESOLVERS ="), "{body}");
+    // Instead the config states where the resolver file must live.
+    assert!(body.contains("client_resolvers.txt"));
 }
 
 #[tokio::test]
@@ -608,4 +638,267 @@ async fn share_qrcode_returns_svg() {
         raw_get(&app, &format!("/api/mdnsvpn/clients/{id}/qrcode.svg"), &cookie).await;
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("<svg"));
+}
+
+// ---------------------------------------------------------------------------
+// Security posture
+// ---------------------------------------------------------------------------
+
+/// Every endpoint whose body carries (or decodes to) the shared encryption key
+/// must forbid caching. Without `no-store`, a downloaded tunnel config can be
+/// written to a browser disk cache or a proxy/CDN in front of the panel and
+/// outlive the session that fetched it.
+#[tokio::test]
+#[serial(db)]
+async fn secret_bearing_downloads_forbid_caching() {
+    seed();
+    let _admin = create_admin();
+    let app = router();
+    let cookie = login(&app, "admin", "adminpass").await;
+
+    let id = setup_for_share(&app, &cookie).await;
+
+    for path in [
+        format!("/api/mdnsvpn/clients/{id}/config.toml"),
+        format!("/api/mdnsvpn/clients/{id}/config.json"),
+        format!("/api/mdnsvpn/clients/{id}/resolvers.txt"),
+        format!("/api/mdnsvpn/clients/{id}/share"),
+        format!("/api/mdnsvpn/clients/{id}/qrcode.svg"),
+    ] {
+        let (status, headers) = headers_get(&app, &path, &cookie).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        let cc = headers
+            .get(header::CACHE_CONTROL)
+            .unwrap_or_else(|| panic!("{path} has no Cache-Control"))
+            .to_str()
+            .unwrap();
+        assert!(cc.contains("no-store"), "{path} Cache-Control = {cc:?}");
+        assert_eq!(
+            headers.get(header::PRAGMA).map(|v| v.to_str().unwrap()),
+            Some("no-cache"),
+            "{path} missing Pragma: no-cache"
+        );
+    }
+}
+
+/// Selecting a non-AEAD cipher must be visible in the admin surface rather
+/// than silently accepted. Upstream's own default (1 = XOR) lands here.
+#[tokio::test]
+#[serial(db)]
+async fn non_aead_cipher_is_flagged_in_the_admin_surface() {
+    seed();
+    let _admin = create_admin();
+    let app = router();
+    let cookie = login(&app, "admin", "adminpass").await;
+
+    let (status, _) = json_post(
+        &app,
+        "/api/admin/mdnsvpn/inbound",
+        &cookie,
+        json!({ "domains": ["v.example.com"], "encryptionMethod": 1 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = json_get(&app, "/api/admin/mdnsvpn/inbound", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["encryptionMethod"], 1);
+    assert_eq!(body["encryptionMethodName"], "XOR");
+    assert_eq!(body["encryptionIsAuthenticated"], false);
+
+    let warnings = body["securityWarnings"].as_array().expect("array");
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.as_str().unwrap_or_default().contains("not authenticated")),
+        "expected a non-AEAD warning, got {warnings:?}"
+    );
+}
+
+/// An AEAD cipher with a full-length key must produce no advisories — so the
+/// warning list stays meaningful instead of always being non-empty.
+#[tokio::test]
+#[serial(db)]
+async fn aead_cipher_with_generated_key_raises_no_warnings() {
+    seed();
+    let _admin = create_admin();
+    let app = router();
+    let cookie = login(&app, "admin", "adminpass").await;
+
+    setup_for_share(&app, &cookie).await;
+
+    let (status, body) = json_get(&app, "/api/admin/mdnsvpn/inbound", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["encryptionIsAuthenticated"], true);
+    assert_eq!(body["securityWarnings"], json!([]));
+}
+
+/// The admin surface exposes a key *fingerprint* so operators can match a
+/// client config to the running server — and must never expose the key itself.
+#[tokio::test]
+#[serial(db)]
+async fn inbound_exposes_a_fingerprint_never_the_key() {
+    seed();
+    let _admin = create_admin();
+    let app = router();
+    let cookie = login(&app, "admin", "adminpass").await;
+
+    let id = setup_for_share(&app, &cookie).await;
+
+    // Recover the real key from a peer config (the only place it is served).
+    let (status, toml) =
+        raw_get(&app, &format!("/api/mdnsvpn/clients/{id}/config.toml"), &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    let key = toml
+        .lines()
+        .find_map(|l| l.strip_prefix("ENCRYPTION_KEY = "))
+        .expect("client config carries the key")
+        .trim()
+        .trim_matches('"')
+        .to_string();
+    assert!(!key.is_empty());
+
+    let (status, body) = json_get(&app, "/api/admin/mdnsvpn/inbound", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    let fp = body["encryptionKeyFingerprint"].as_str().expect("fingerprint");
+    assert_eq!(fp.len(), 8, "fingerprint = {fp:?}");
+    assert!(fp.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(!key.contains(fp), "fingerprint is a substring of the key");
+
+    // Belt and braces: the whole admin payload must not contain the key.
+    let serialized = serde_json::to_string(&body).unwrap();
+    assert!(
+        !serialized.contains(&key),
+        "admin inbound payload leaked the encryption key"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// bundle.zip — the artifact that actually starts a client
+// ---------------------------------------------------------------------------
+
+/// A peer needs two files. Every single-file download leaves them one short,
+/// because mdnsvpn reads its resolver list only from `client_resolvers.txt` and
+/// aborts startup when it is absent. `bundle.zip` is the fix.
+#[tokio::test]
+#[serial(db)]
+async fn bundle_zip_contains_config_and_resolver_file() {
+    seed();
+    let _admin = create_admin();
+    let app = router();
+    let cookie = login(&app, "admin", "adminpass").await;
+
+    let id = setup_for_share(&app, &cookie).await;
+
+    let (status, headers) =
+        headers_get(&app, &format!("/api/mdnsvpn/clients/{id}/bundle.zip"), &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers.get(header::CONTENT_TYPE).unwrap(),
+        "application/zip"
+    );
+    let disposition = headers
+        .get(header::CONTENT_DISPOSITION)
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(disposition.contains("mdnsvpn_alice.zip"), "{disposition}");
+    // Archive embeds the shared key, so it must not be cacheable.
+    assert!(headers
+        .get(header::CACHE_CONTROL)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("no-store"));
+
+    // Fetch the bytes and check the archive shape + stored contents.
+    let req = Request::builder()
+        .method("GET")
+        .uri(format!("/api/mdnsvpn/clients/{id}/bundle.zip"))
+        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+
+    assert!(bytes.starts_with(b"PK\x03\x04"), "not a zip");
+    let blob = String::from_utf8_lossy(&bytes);
+    // Stored (uncompressed) entries, so names and contents appear verbatim.
+    assert!(blob.contains("client_config.toml"));
+    assert!(blob.contains("client_resolvers.txt"));
+    assert!(blob.contains("run.sh"));
+    assert!(blob.contains("run.cmd"));
+    assert!(blob.contains("README.txt"));
+    assert!(blob.contains("LISTEN_PORT = 19000"));
+    assert!(blob.contains("8.8.8.8"));
+    // The launcher wires both files together.
+    assert!(blob.contains("-config client_config.toml -resolvers client_resolvers.txt"));
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn bundle_zip_requires_a_configured_inbound() {
+    seed();
+    let _admin = create_admin();
+    let app = router();
+    let cookie = login(&app, "admin", "adminpass").await;
+
+    // Client exists but the inbound has no key/domains yet.
+    let (status, _) = json_post(
+        &app,
+        "/api/admin/mdnsvpn/inbound",
+        &cookie,
+        json!({ "domains": ["v.example.com"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = json_post(
+        &app,
+        "/api/mdnsvpn/clients",
+        &cookie,
+        json!({ "name": "bob", "listen_port": 19100 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = body["id"].as_i64().unwrap();
+
+    let (status, _) =
+        raw_get(&app, &format!("/api/mdnsvpn/clients/{id}/bundle.zip"), &cookie).await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+}
+
+/// The share string must stay pasteable into `-json_base64` *and* carry the
+/// resolver list, so scanning the QR does not lose it.
+#[tokio::test]
+#[serial(db)]
+async fn share_url_carries_resolvers_without_corrupting_the_blob() {
+    seed();
+    let _admin = create_admin();
+    let app = router();
+    let cookie = login(&app, "admin", "adminpass").await;
+
+    let id = setup_for_share(&app, &cookie).await;
+
+    let (status, url) =
+        raw_get(&app, &format!("/api/mdnsvpn/clients/{id}/share"), &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(url.starts_with("mdnsvpn://b64?"));
+
+    let query = url.strip_prefix("mdnsvpn://b64?").unwrap();
+    let mut parts = query.split('&');
+    let payload = parts.next().unwrap();
+    // Must remain valid *standard* base64 with padding — upstream decodes with
+    // base64.StdEncoding, which rejects the URL-safe alphabet.
+    use base64::Engine as _;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(payload)
+        .expect("share payload must be standard base64");
+    let blob: Value = serde_json::from_slice(&decoded).unwrap();
+    assert_eq!(blob["LISTEN_PORT"], 19000);
+    // The dead key must not have crept back into the blob.
+    assert!(blob.get("RESOLVERS").is_none());
+
+    let resolvers = parts.next().expect("resolvers param present");
+    assert!(resolvers.starts_with("resolvers="));
+    assert!(resolvers.contains("8.8.8.8"));
 }

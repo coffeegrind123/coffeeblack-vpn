@@ -92,7 +92,38 @@ pub fn startup() -> Result<()> {
 }
 
 /// Save AmneziaWG config to disk and sync to running interface.
+///
+/// With the privileged helper enabled the rendered text is handed to the
+/// helper instead, which owns both the write and the sync. That keeps the web
+/// process without write access to `/etc/wireguard` — where the server private
+/// key lives — as well as without `CAP_NET_ADMIN`.
 pub fn save_config() -> Result<()> {
+    let iface = crate::db::get_interface()?;
+    let config = render_server_config()?;
+
+    if crate::privhelper::is_enabled() {
+        crate::privhelper::call(&crate::privhelper::Request::WgSync { config })?;
+        return Ok(());
+    }
+
+    let path = format!("{}/{}.conf", crate::config::CONFIG.wg_conf_dir, iface.name);
+    std::fs::write(&path, &config)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
+    cli::awg_sync(&iface.name)?;
+    Ok(())
+}
+
+/// Render the full server `.conf` (interface block plus every enabled peer).
+///
+/// Split out of [`save_config`] so the same text can either be written here or
+/// handed to the privileged helper, with exactly one implementation of what
+/// the config should contain.
+pub fn render_server_config() -> Result<String> {
     let iface = crate::db::get_interface()?;
     let clients = crate::db::get_all_clients()?;
     let hooks = crate::db::get_hooks()?;
@@ -138,23 +169,38 @@ pub fn save_config() -> Result<()> {
     }
     config.push('\n');
 
-    let path = format!("{}/{}.conf", crate::config::CONFIG.wg_conf_dir, iface.name);
-    std::fs::write(&path, &config)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-    }
-
-    cli::awg_sync(&iface.name)?;
-    Ok(())
+    Ok(config)
 }
 
 /// Generate a client's `.conf` file contents.
 pub fn get_client_config(client_id: i64) -> Result<String> {
+    let client = crate::db::get_client(client_id)?;
+    if !client.has_private_key() {
+        // Under `never` retention the key was handed over once at creation
+        // and not kept, so there is nothing to re-render. Fail loudly rather
+        // than emitting a config with an empty `PrivateKey =` line, which
+        // would look valid, import cleanly, and then silently never connect.
+        return Err(anyhow::anyhow!(
+            "private key for client {client_id} is not retained on this server; \
+             rotate the peer to issue a new configuration"
+        ));
+    }
+    build_client_config(client_id, None)
+}
+
+/// Render a client config, optionally supplying the private key rather than
+/// reading it from the database.
+///
+/// The override is what makes one-time issuance possible: the create and
+/// rotate flows hold a freshly generated key in memory just long enough to
+/// render the config the operator walks away with, and never persist it.
+pub fn build_client_config(client_id: i64, private_key_override: Option<&str>) -> Result<String> {
     let iface = crate::db::get_interface()?;
     let user_config = crate::db::get_user_config()?;
-    let client = crate::db::get_client(client_id)?;
+    let mut client = crate::db::get_client(client_id)?;
+    if let Some(pk) = private_key_override {
+        client.private_key = pk.to_string();
+    }
 
     // Mirror the server-side F1 suppression on the client config: with the
     // proxy active, a client that emits native `Jc`/`I1–I5` junk toward the

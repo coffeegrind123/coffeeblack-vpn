@@ -215,21 +215,13 @@ fn should_remain_disabled(
 }
 
 async fn write_config(inbound: &db::XrayInbound, clients: &[db::XrayClient]) -> Result<PathBuf> {
-    let dir = PathBuf::from(&CONFIG.xray_dir);
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .with_context(|| format!("create xray dir {}", dir.display()))?;
     let path = config_path();
     let body = config_gen::generate_server_config(inbound, clients)?;
-    // Atomic write so a crash mid-render can't leave Xray with a
-    // half-written config.
-    let tmp = path.with_extension("json.partial");
-    tokio::fs::write(&tmp, body.as_bytes())
-        .await
-        .with_context(|| format!("write {}", tmp.display()))?;
-    tokio::fs::rename(&tmp, &path)
-        .await
-        .with_context(|| format!("rename {} → {}", tmp.display(), path.display()))?;
+    // Atomic AND owner-only: this file holds the Reality private key and every
+    // client's UUID + shortId, so a world-readable render would hand any local
+    // account working tunnel credentials. `write_atomic` creates it 0600 at
+    // open(2) and tightens the directory, in every deployment mode.
+    crate::secretfile::write_atomic(&path, body.as_bytes()).await?;
     Ok(path)
 }
 

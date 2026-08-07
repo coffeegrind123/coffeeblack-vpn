@@ -75,6 +75,49 @@ pub fn validate_encryption_method(method: i64) -> Result<()> {
     }
 }
 
+/// Method we default new deployments to: AES-256-GCM.
+///
+/// Safe to select for *any* key we accept — upstream derives the AES key
+/// with `sha256(rawKey)` for methods 2 and 5 (`internal/security/codec.go`,
+/// `deriveKey`), so moving an existing key from method 1 to method 5 needs
+/// no re-keying. It does need every already-distributed client config to be
+/// re-issued, because the method itself is baked into each client config.
+pub const RECOMMENDED_ENCRYPTION_METHOD: i64 = 5;
+
+/// Does this method authenticate the ciphertext?
+///
+/// Only the AES-GCM methods (3, 4, 5) are AEAD. Method 0 is plaintext,
+/// method 1 is XOR against a repeating key (neither confidential nor
+/// authenticated), and method 2 is bare ChaCha20 without Poly1305 — so an
+/// active on-path attacker can tamper with tunnel payloads undetected on
+/// 0/1/2. Upstream's method numbering hides this, hence the helper.
+pub fn is_aead(method: i64) -> bool {
+    matches!(method, 3..=5)
+}
+
+/// Human-readable name for a `DATA_ENCRYPTION_METHOD` value.
+pub fn method_name(method: i64) -> &'static str {
+    match method {
+        0 => "None",
+        1 => "XOR",
+        2 => "ChaCha20",
+        3 => "AES-128-GCM",
+        4 => "AES-192-GCM",
+        5 => "AES-256-GCM",
+        _ => "unknown",
+    }
+}
+
+/// Non-reversible identifier for a key: the first 8 hex chars of
+/// SHA-256(key).
+///
+/// Operators need *some* way to confirm a server and a client loaded the
+/// same shared secret. A fingerprint gives them that without the secret
+/// itself ever reaching a log stream, a support ticket, or a screenshot.
+pub fn key_fingerprint(key: &str) -> String {
+    crate::auth::sha256(key.trim()).chars().take(8).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +181,44 @@ mod tests {
         assert!(validate_encryption_method(-1).is_err());
         assert!(validate_encryption_method(6).is_err());
         assert!(validate_encryption_method(99).is_err());
+    }
+
+    #[test]
+    fn only_aes_gcm_methods_are_aead() {
+        for m in 0..=2 {
+            assert!(!is_aead(m), "method {m} must not be treated as AEAD");
+        }
+        for m in 3..=5 {
+            assert!(is_aead(m), "method {m} must be treated as AEAD");
+        }
+        assert!(is_aead(RECOMMENDED_ENCRYPTION_METHOD));
+    }
+
+    #[test]
+    fn recommended_method_is_valid_and_named() {
+        validate_encryption_method(RECOMMENDED_ENCRYPTION_METHOD).unwrap();
+        assert_eq!(method_name(RECOMMENDED_ENCRYPTION_METHOD), "AES-256-GCM");
+        assert_eq!(method_name(1), "XOR");
+        assert_eq!(method_name(42), "unknown");
+    }
+
+    #[test]
+    fn fingerprint_is_short_hex_and_hides_the_key() {
+        let key = "deadbeefcafebabe1234567890abcdef";
+        let fp = key_fingerprint(key);
+        assert_eq!(fp.len(), 8);
+        assert!(fp.chars().all(|c| c.is_ascii_hexdigit()));
+        // The point of the whole exercise: the key must not be recoverable
+        // from, or textually present in, the fingerprint.
+        assert!(!key.contains(&fp));
+        assert!(!fp.contains(key));
+    }
+
+    #[test]
+    fn fingerprint_is_stable_and_ignores_surrounding_whitespace() {
+        let a = key_fingerprint("0123456789abcdef");
+        let b = key_fingerprint("  0123456789abcdef\n");
+        assert_eq!(a, b);
+        assert_ne!(a, key_fingerprint("0123456789abcdee"));
     }
 }

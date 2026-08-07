@@ -1,0 +1,67 @@
+[Unit]
+Description=awg-easy-rs privileged helper (AmneziaWG + nftables allowlist)
+Documentation=https://github.com/coffeegrind123/awg-easy-rs
+# The main service is useless without this one when privilege separation is
+# enabled, and must not start before the socket exists.
+Before=awg-easy-rs.service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Restart=on-failure
+RestartSec=5s
+
+# --- This is the ONLY part of awg-easy-rs that runs as root -------------------
+# It serves a fixed allowlist of operations (wg_up / wg_down / wg_sync /
+# wg_show / nft_apply / nft_list) over a Unix socket, as argument vectors, with
+# the interface name and every path fixed at startup and never read from a
+# request. It has no HTTP listener, no database, no parsers beyond one JSON
+# line, and no dependencies on the web application's code paths.
+#
+# What this buys: a remote-code-execution bug in the web layer no longer means
+# root on the host. What it does not buy: a compromised web process can still
+# ask for rulesets and interface changes, because that is the product's job.
+User=root
+Group=root
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_MODULE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_MODULE CAP_NET_RAW CAP_DAC_OVERRIDE
+
+ExecStart=/usr/local/bin/awg-easy-rs --privileged-helper
+
+Environment=WG_EASY_HELPER_SOCKET=/run/awg-easy-rs/helper.sock
+Environment=WG_EASY_HELPER_INTERFACE=awg0
+Environment=WG_EASY_CONF_DIR=/etc/wireguard
+# GID permitted to connect. Must match the group of the unprivileged user the
+# main service runs as (see awg-easy-rs.service). Without it the socket is
+# 0600 and only root can reach the helper — safe, but the split does nothing.
+#Environment=WG_EASY_HELPER_GID=987
+
+RuntimeDirectory=awg-easy-rs
+RuntimeDirectoryMode=0750
+
+ExecStartPre=-/sbin/modprobe amneziawg
+
+# No core dumps: a dump of this process would contain the server private key
+# read back from the interface config.
+LimitCORE=0
+
+# Hardening. Deliberately tighter than the main unit can be, because this
+# process does exactly six things and none of them need a home directory, a
+# writable /usr, or new privileges.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+# Writable paths: the interface config it owns, and its runtime socket dir
+# (granted by RuntimeDirectory= above).
+ReadWritePaths=/etc/wireguard
+ReadWritePaths=-/proc/sys/net
+
+[Install]
+WantedBy=multi-user.target

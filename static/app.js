@@ -8,6 +8,14 @@ let ADMIN_TAB = 'general';
 let SETUP_STEP = 1;
 let SERVER_INFO = null;
 const HISTORY_LEN = 14;
+// Activity heatmap: server-side daily rollup, its own slow refresh timer.
+let HEATMAP = null;
+let HEAT_METRIC = 'hits'; // 'hits' = time connected, 'bytes' = traffic volume
+let HEAT_DAYS = 30;
+let heatmapTimer = null;
+// Peers currently holding a server-side private key, from the admin general
+// payload. Drives the confirm before a retention switch purges them.
+let ADMIN_STORED_KEYS = 0;
 
 // ===================== HELPERS =====================
 function $(id) { return document.getElementById(id); }
@@ -147,6 +155,7 @@ function routeInternal(path) {
     $('page-clients').classList.add('active');
     renderNav();
     refreshClients();
+    refreshHeatmap();
   } else if (path.startsWith('/clients/')) {
     $('page-client-edit').classList.add('active');
     renderNav();
@@ -173,6 +182,7 @@ function routeInternal(path) {
     $('page-clients').classList.add('active');
     renderNav();
     refreshClients();
+    refreshHeatmap();
   }
 }
 
@@ -319,6 +329,151 @@ async function refreshClients() {
   }
 }
 
+// ===================== ACTIVITY HEATMAP =====================
+// Clients x days, painted from the server-side daily rollup. Refreshed on its
+// own slow timer rather than with the 5s client poll: the underlying data is
+// a daily aggregate fed by a 30s sampler, so re-fetching it every 5s would be
+// ~99% redundant requests for a view that cannot have changed.
+
+async function refreshHeatmap() {
+  if (heatmapTimer) { clearTimeout(heatmapTimer); heatmapTimer = null; }
+  try {
+    HEATMAP = await GET('/api/activity/heatmap?days=' + HEAT_DAYS);
+    renderHeatmap();
+  } catch (e) {
+    const body = $('heatmap-body');
+    if (body) body.innerHTML = `<div class="heat-note">Could not load activity history: ${esc(e.message)}</div>`;
+  }
+  if (onClientsPage()) heatmapTimer = setTimeout(refreshHeatmap, 60000);
+}
+
+function onClientsPage() {
+  const h = window.location.hash;
+  return h === '#/' || h === '' || h === '#/clients';
+}
+
+function setHeatMetric(metric) {
+  HEAT_METRIC = metric;
+  for (const b of $$('#heat-metric button')) b.classList.toggle('is-active', b.dataset.metric === metric);
+  renderHeatmap();
+}
+
+function setHeatDays(days) {
+  HEAT_DAYS = days;
+  for (const b of $$('#heat-range button')) b.classList.toggle('is-active', Number(b.dataset.days) === days);
+  refreshHeatmap();
+}
+
+// Value a cell is coloured by, under the currently selected metric.
+function heatValue(row, i) {
+  return HEAT_METRIC === 'bytes'
+    ? (row.rxBytes[i] || 0) + (row.txBytes[i] || 0)
+    : (row.sampleHits[i] || 0);
+}
+
+// Intensity is relative to that day's busiest peer, not to an absolute scale:
+// a quiet Sunday should still show its shape rather than washing out to blank
+// because a different day had a large transfer.
+function heatLevel(value, dayMax) {
+  if (!value || !dayMax) return 0;
+  return Math.max(1, Math.min(5, Math.ceil((value / dayMax) * 5)));
+}
+
+// sampleHits counts poll ticks that saw a live handshake — not measured
+// session time. Scaled by the server's actual interval so the estimate stays
+// right if that cadence is ever retuned.
+function heatDuration(hits) {
+  const mins = Math.round((hits * (HEATMAP.pollIntervalSeconds || 30)) / 60);
+  if (mins < 60) return '~' + mins + 'm';
+  return '~' + Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+}
+
+function heatCellTitle(row, i) {
+  const day = HEATMAP.days[i];
+  const hits = row.sampleHits[i] || 0;
+  const detail = HEAT_METRIC === 'bytes'
+    ? '↓ ' + formatBytes(row.rxBytes[i] || 0) + ' · ↑ ' + formatBytes(row.txBytes[i] || 0)
+    : (hits > 0 ? 'connected ' + heatDuration(hits) : 'no activity');
+  return row.name + ' · ' + day + ' · ' + detail;
+}
+
+// One label per calendar month the window spans, colspan'd across its days —
+// a label per day column would be unreadable at 90 days.
+function heatMonthSegments(days) {
+  const out = [];
+  for (const iso of days) {
+    const d = new Date(iso + 'T00:00:00Z');
+    const key = d.getUTCFullYear() * 12 + d.getUTCMonth();
+    const last = out[out.length - 1];
+    if (last && last.key === key) last.span++;
+    else out.push({ key: key, span: 1, label: d.toLocaleString(undefined, { month: 'short', timeZone: 'UTC' }) });
+  }
+  return out;
+}
+
+function renderHeatmap() {
+  const body = $('heatmap-body');
+  const sub = $('heatmap-sub');
+  if (!body || !HEATMAP) return;
+
+  if (!HEATMAP.enabled) {
+    if (sub) sub.textContent = 'Disabled';
+    body.innerHTML = '<div class="heat-note">Activity history is turned off. Enable it in ' +
+      '<a href="#/admin" style="color:var(--accent)">Admin → General</a> by setting a retention window above 0 days.</div>';
+    return;
+  }
+  if (!HEATMAP.clients.length) {
+    if (sub) sub.textContent = '';
+    body.innerHTML = '<div class="heat-note">No peers yet.</div>';
+    return;
+  }
+
+  const days = HEATMAP.days;
+  const today = days[days.length - 1];
+  // Per-day maximum across peers — computed once per render, not per cell.
+  const dayMax = days.map((_, i) => Math.max(0, ...HEATMAP.clients.map(r => heatValue(r, i))));
+  const recorded = HEATMAP.clients.some(r => r.sampleHits.some(h => h > 0));
+
+  if (sub) {
+    // "in memory" is not decoration: this history is never written to disk
+    // and does not survive a restart of the service, and an operator reading
+    // a 90-day window should not have to discover that the hard way.
+    sub.textContent = days.length + ' days · UTC · sampled every ' +
+      (HEATMAP.pollIntervalSeconds || 30) + 's · kept in memory for ' + HEATMAP.retentionDays + 'd';
+  }
+
+  const months = heatMonthSegments(days);
+  let html = '<div class="heat-wrap"><table class="heat"><thead><tr><th class="heat-name"></th>';
+  for (const m of months) html += `<th class="heat-month" colspan="${m.span}">${esc(m.label)}</th>`;
+  html += '</tr><tr><th class="heat-name">Peer</th>';
+  for (const d of days) html += `<th class="heat-day">${new Date(d + 'T00:00:00Z').getUTCDate()}</th>`;
+  html += '</tr></thead><tbody>';
+
+  for (const row of HEATMAP.clients) {
+    html += `<tr class="${row.enabled ? '' : 'heat-row-disabled'}">`;
+    html += `<td class="heat-name" title="${esc(row.name)}">${esc(row.name)}</td>`;
+    for (let i = 0; i < days.length; i++) {
+      const lvl = heatLevel(heatValue(row, i), dayMax[i]);
+      const isToday = days[i] === today ? ' heat-today' : '';
+      html += `<td class="heat-cell heat-l${lvl}${isToday}" title="${esc(heatCellTitle(row, i))}"></td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+
+  html += '<div class="heat-legend"><span>Less</span>' +
+    [0, 1, 2, 3, 4, 5].map(l => `<i class="heat-l${l}"></i>`).join('') +
+    '<span>More</span>' +
+    `<span style="margin-left:10px">${HEAT_METRIC === 'bytes' ? 'shaded by traffic volume' : 'shaded by time connected'}, relative to each day’s busiest peer</span></div>`;
+
+  if (!recorded) {
+    html += '<div class="heat-note">No activity recorded yet — the sampler records its first cells within ' +
+      (HEATMAP.pollIntervalSeconds || 30) + 's of a peer connecting. History is kept in memory, so it starts empty after every restart.</div>';
+  }
+
+  body.innerHTML = html;
+}
+
 (function wireClientSearch() {
   const el = $('client-search');
   if (!el) return;
@@ -336,7 +491,14 @@ function renderStats() {
   const totalRxRate = CLIENTS.reduce((a, c) => a + (c.rxRate || 0), 0);
   const totalTxRate = CLIENTS.reduce((a, c) => a + (c.txRate || 0), 0);
   const totalThroughput = totalRxRate + totalTxRate;
-  const lifetime = CLIENTS.reduce((a, c) => a + (c.transferRx || 0) + (c.transferTx || 0), 0);
+  // totalRx/totalTx are the poller's accumulated counters and survive an
+  // interface restart; transferRx/transferTx come straight from the kernel
+  // and reset with it. Fall back to the live values when the poller has not
+  // recorded anything yet — a fresh install, history disabled, or a
+  // just-restarted service, since the history is held in memory only.
+  const accumulated = CLIENTS.reduce((a, c) => a + (c.totalRx || 0) + (c.totalTx || 0), 0);
+  const live = CLIENTS.reduce((a, c) => a + (c.transferRx || 0) + (c.transferTx || 0), 0);
+  const lifetime = accumulated > 0 ? accumulated : live;
 
   // Aggregate sparkline = sum across peers, last N samples
   const aggSpark = [];
@@ -415,8 +577,14 @@ function renderClients() {
     const expiresSoon = c.expiresAt && (new Date(c.expiresAt) - Date.now()) < 7 * 86400000;
     const rxRate = c.rxRate ? formatBytes(c.rxRate) + '/s' : '—';
     const txRate = c.txRate ? formatBytes(c.txRate) + '/s' : '—';
-    const lastSeen = timeAgo(c.latestHandshakeAt);
-    const lastSeenAge = c.latestHandshakeAt ? (Date.now() - new Date(c.latestHandshakeAt).getTime()) : Infinity;
+    // The kernel's handshake timestamp is authoritative while the interface
+    // has been up, but it is gone after a restart — at which point a peer
+    // that connected an hour ago reads as "never". Fall back to the poller's
+    // recorded lastSeenAt, which persists, so the column keeps answering the
+    // question it is there to answer.
+    const seenAt = c.latestHandshakeAt || c.lastSeenAt;
+    const lastSeen = timeAgo(seenAt);
+    const lastSeenAge = seenAt ? (Date.now() - new Date(seenAt).getTime()) : Infinity;
     // 3-tier freshness: <60s green-pulse, <3min soft white, otherwise muted.
     const lastSeenClass = lastSeenAge < 60000 ? 'is-fresh' : lastSeenAge < 180000 ? 'is-recent' : '';
     const sparkSvg = renderSpark(CLIENT_HISTORY[c.id] || []);
@@ -464,9 +632,12 @@ function renderClients() {
             <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleClient(${c.id}, this.checked)">
             <span class="toggle-track"></span>
           </label>
+          ${c.keyRetained ? `
           <button class="btn btn--quiet btn--icon" title="QR code" onclick="showQR(${c.id})"><svg><use href="#i-qr"/></svg></button>
           <button class="btn btn--quiet btn--icon" title="Download config" onclick="downloadConfig(${c.id})"><svg><use href="#i-download"/></svg></button>
-          <button class="btn btn--quiet btn--icon" title="One-time link" onclick="generateOTL(${c.id})"><svg><use href="#i-link"/></svg></button>
+          <button class="btn btn--quiet btn--icon" title="One-time link" onclick="generateOTL(${c.id})"><svg><use href="#i-link"/></svg></button>` : `
+          <span class="peer-nokey" title="This server does not hold this peer's private key — it was issued once at creation. Rotate to issue a new configuration.">key not held</span>`}
+          <button class="btn btn--quiet btn--icon" title="Rotate key — issues a new config once and invalidates the current one" onclick="event.stopPropagation();rotateClientKey(${c.id}, '${escJs(c.name)}')"><svg><use href="#i-refresh"/></svg></button>
           <button class="btn btn--quiet btn--icon" title="Edit" onclick="navigate('/clients/${c.id}')"><svg><use href="#i-edit"/></svg></button>
         </div>
         ${otlBlock}
@@ -530,16 +701,67 @@ document.addEventListener('keydown', (e) => {
 
 async function createClient(e) {
   e.preventDefault();
-  const body = { name: $('create-name').value };
+  const name = $('create-name').value;
+  const body = { name: name };
   const expires = $('create-expires').value;
   if (expires) body.expiresAt = new Date(expires).toISOString();
+  const byo = ($('create-pubkey') && $('create-pubkey').value || '').trim();
+  if (byo) body.publicKey = byo;
   try {
-    await POST('/api/client', body);
+    const res = await POST('/api/client', body);
     closeModal('modal-create');
     $('create-name').value = '';
     $('create-expires').value = '';
+    if ($('create-pubkey')) $('create-pubkey').value = '';
     showToast('Peer created', 'success');
     refreshClients();
+    // A caller-supplied public key produces no config here — the client
+    // already holds the private half and needs nothing back from us.
+    if (res && res.config) showIssuedConfig(res, name);
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+// ===================== ONE-TIME ISSUANCE =====================
+// Under 'never' retention the create/rotate response is the only moment the
+// config exists outside the peer's device, so it is surfaced here rather than
+// left to a follow-up fetch that would have nothing to serve.
+let ISSUED = null;
+
+function showIssuedConfig(res, name) {
+  ISSUED = { config: res.config, name: name || 'peer' };
+  $('issued-title').textContent = 'Configuration for ' + (name || 'peer');
+  // In 'plaintext' mode the config remains re-displayable, so the blunt
+  // save-it-now warning would be false. Only show it when it's true.
+  $('issued-warning').style.display = res.keyRetained ? 'none' : 'flex';
+  $('issued-config').textContent = res.config;
+  $('issued-qr').innerHTML = res.qrSvg || '';
+  $('issued-qr').style.display = res.qrSvg ? 'block' : 'none';
+  $('modal-issued').classList.add('active');
+}
+
+function copyIssuedConfig() {
+  if (!ISSUED) return;
+  copyText(ISSUED.config);
+}
+
+function downloadIssuedConfig() {
+  if (!ISSUED) return;
+  const blob = new Blob([ISSUED.config], { type: 'application/x-wireguard-config' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = ISSUED.name.replace(/[^a-zA-Z0-9_.-]/g, '_') + '.conf';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function rotateClientKey(id, name) {
+  if (!confirm('Rotate the key for "' + name + '"?\n\nA new keypair is issued and shown once. The current configuration on the device stops working immediately and must be replaced.')) return;
+  try {
+    const res = await POST('/api/client/' + id + '/rotateKey', {});
+    showToast('Key rotated', 'success');
+    refreshClients();
+    if (res && res.config) showIssuedConfig(res, name);
   } catch(e) { showToast(e.message, 'error'); }
 }
 
@@ -767,12 +989,26 @@ async function loadClientEdit(id) {
                 <span class="otl-countdown" id="edit-otl-${id}">—</span>
                 <button type="button" class="btn btn--quiet btn--sm" onclick="copyText('${escJs(window.location.origin + '/cnf/' + c.oneTimeLink.oneTimeLink)}')"><svg><use href="#i-copy"/></svg> copy</button>
               </div>` : ''}
+              ${c.keyRetained ? `
               <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
                 <button type="button" class="btn btn--ghost btn--sm" onclick="showQR(${id})"><svg><use href="#i-qr"/></svg> Show QR</button>
                 <button type="button" class="btn btn--ghost btn--sm" onclick="showConfig(${id})"><svg><use href="#i-eye"/></svg> View config</button>
                 <button type="button" class="btn btn--ghost btn--sm" onclick="downloadConfig(${id})"><svg><use href="#i-download"/></svg> Download .conf</button>
                 <button type="button" class="btn btn--ghost btn--sm" onclick="generateOTL(${id})"><svg><use href="#i-link"/></svg> ${c.oneTimeLink ? 'Regenerate link' : 'One-time link'}</button>
+                <button type="button" class="btn btn--ghost btn--sm" onclick="rotateClientKey(${id}, '${escJs(c.name)}')"><svg><use href="#i-refresh"/></svg> Rotate key</button>
+              </div>` : `
+              <div class="issued-warning" style="margin-top:14px">
+                <svg><use href="#i-alert"/></svg>
+                <div>
+                  <b>This server does not hold this peer's private key.</b>
+                  It was issued once when the peer was created, so the configuration and QR
+                  cannot be shown again. If the device lost it, rotate the key to issue a new
+                  one — the current configuration stops working at that moment.
+                </div>
               </div>
+              <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+                <button type="button" class="btn btn--ghost btn--sm" onclick="rotateClientKey(${id}, '${escJs(c.name)}')"><svg><use href="#i-refresh"/></svg> Rotate key</button>
+              </div>`}
             </div>
           </div>
         </div>
@@ -933,12 +1169,23 @@ async function showAdminTab(tab, e) {
   try {
     if (tab === 'general') {
       const g = await GET('/api/admin/general');
+      ADMIN_STORED_KEYS = g.clientsWithStoredKeys || 0;
       el.innerHTML = `
+        ${g.privateKeyRetention === 'plaintext' ? `
+        <div class="retention-banner">
+          <svg><use href="#i-alert"/></svg>
+          <div>
+            <b>Peer private keys are stored unencrypted on this server.</b>
+            Anyone who reaches the database — or any backup of it — can impersonate every peer.
+            This buys the ability to re-display a peer's configuration and QR; the tunnel itself
+            does not need it. Switch to <b>never</b> below to erase them.
+          </div>
+        </div>` : ''}
         <div class="card">
           <div class="card-head">
             <div>
               <div class="card-title">General</div>
-              <div class="card-sub">Session policy and metrics endpoints.</div>
+              <div class="card-sub">Session policy, metrics endpoints and activity history.</div>
             </div>
           </div>
           <div class="card-body">
@@ -971,11 +1218,32 @@ async function showAdminTab(tab, e) {
                     <p class="field-help"><span class="mono">/metrics.json</span></p>
                   </div>
                 </div>
+                <div class="field">
+                  <label class="field-label" for="adm-key-retention" title="Whether the server keeps each peer's private key after handing over the configuration. 'never' issues it once and stores nothing — the config and QR cannot be shown again, and a lost config is recovered by rotating the key. 'plaintext' keeps the key so the config can be re-displayed, which also means anyone who reaches the database or a backup of it can impersonate every peer.">Peer private keys</label>
+                  <select id="adm-key-retention" class="select" style="max-width:320px">
+                    <option value="never" ${g.privateKeyRetention !== 'plaintext' ? 'selected' : ''}>Never store — issue once at creation</option>
+                    <option value="plaintext" ${g.privateKeyRetention === 'plaintext' ? 'selected' : ''}>Store in plaintext — allow re-display</option>
+                  </select>
+                  <p class="field-help">The server only ever needs each peer's <b>public</b> key to run the tunnel. Switching to <b>never</b> immediately erases the ${g.clientsWithStoredKeys || 0} stored key${(g.clientsWithStoredKeys || 0) === 1 ? '' : 's'} as well.</p>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="adm-activity-retention" title="How many days of per-peer connection history to keep for the activity heatmap. 0 disables collection and erases everything already recorded. Max ${g.activityMaxRetentionDays || 365}.">Activity history</label>
+                  <div class="input-wrap" style="max-width:200px">
+                    <input type="number" id="adm-activity-retention" class="mono-input" min="0" max="${g.activityMaxRetentionDays || 365}"
+                           value="${g.activityRetentionDays != null ? g.activityRetentionDays : 30}" style="padding-right:72px">
+                    <span class="input-suffix">days</span>
+                  </div>
+                  <p class="field-help">Per-peer connection history behind the activity heatmap, sampled every ${g.activityPollIntervalSeconds || 30}s. Held <b>in memory only</b> — never written to the database or a snapshot, and cleared when the service restarts. <b>0 turns collection off and purges what is held.</b></p>
+                </div>
               </div>
               <div style="display:flex;justify-content:flex-end;margin-top:18px">
                 <button class="btn btn--primary">Save changes</button>
               </div>
             </form>
+            <div class="card-foot" style="margin:18px -18px -18px;justify-content:space-between;align-items:center">
+              <span class="field-help" style="margin:0">Erase every recorded connection record, transfer total and last-seen timestamp from memory.</span>
+              <button type="button" class="btn btn--outline" onclick="purgeActivity()">Erase activity history</button>
+            </div>
           </div>
         </div>`;
     } else if (tab === 'config') {
@@ -1320,7 +1588,7 @@ async function showAdminTab(tab, e) {
                     </select>
                   </div>
                   <div class="field" id="adm-xr-xhttp-path-field" style="${isXhttp?'':'display:none'}">
-                    <label class="field-label" title="Secret routing path the xhttp transport listens on — `/<32 hex chars>`. Generated automatically on the first switch to xhttp and kept stable until you rotate it. Any existing share links pointing at the old path stop working immediately after rotation.">XHTTP routing path</label>
+                    <label class="field-label" title="Secret routing path the xhttp transport listens on — \`/<32 hex chars>\`. Generated automatically on the first switch to xhttp and kept stable until you rotate it. Any existing share links pointing at the old path stop working immediately after rotation.">XHTTP routing path</label>
                     <div style="display:flex;gap:10px;align-items:center">
                       <input type="text" id="adm-xr-xhttp-path" class="mono-input" readonly value="${esc(inbound.xhttpPath || '(none — switch transport to xhttp to generate)')}" style="flex:1">
                       <button type="button" class="btn btn--ghost" onclick="regenerateXhttpPath()" ${inbound.xhttpPath?'':'disabled'}>Rotate</button>
@@ -1778,13 +2046,37 @@ async function showAdminTab(tab, e) {
 
 async function saveAdminGeneral(e) {
   e.preventDefault();
+  // Switching to 'never' is destructive in a way the rest of this form is
+  // not: it erases key material for peers that already exist, and those
+  // configs can never be re-displayed afterwards. Make that explicit.
+  const keyRetention = $('adm-key-retention').value;
+  if (keyRetention === 'never' && ADMIN_STORED_KEYS > 0) {
+    if (!confirm('Erase the stored private keys for ' + ADMIN_STORED_KEYS + ' existing peer(s)?\n\nTheir tunnels keep working — the server only needs the public keys — but their configurations and QR codes can never be shown again. A peer that loses its config will need its key rotated.')) return;
+  }
   try {
     await POST('/api/admin/general', {
       sessionTimeout: parseInt($('adm-session-timeout').value) || 3600,
       metricsPrometheus: $('adm-metrics-prom').checked,
-      metricsJson: $('adm-metrics-json').checked
+      metricsJson: $('adm-metrics-json').checked,
+      // `|| 0` would be wrong here only if 0 were invalid — it is the
+      // documented "disabled" value, so an empty/NaN field falling back to 0
+      // is the safe direction: it stops collecting rather than starts.
+      activityRetentionDays: parseInt($('adm-activity-retention').value) || 0,
+      privateKeyRetention: $('adm-key-retention').value
     });
     showToast('Saved', 'success');
+    // The banner and the stored-key count both depend on what was just
+    // saved, so re-render rather than leaving stale text on screen.
+    showAdminTab('general');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function purgeActivity() {
+  if (!confirm('Erase all recorded activity history?\n\nThis drops every per-peer daily record, the accumulated transfer totals and the last-seen timestamps from memory. It cannot be undone.')) return;
+  try {
+    await DEL('/api/activity');
+    HEATMAP = null;
+    showToast('Activity history erased', 'success');
   } catch(e) { showToast(e.message, 'error'); }
 }
 

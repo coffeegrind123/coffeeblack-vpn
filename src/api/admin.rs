@@ -220,6 +220,16 @@ pub async fn get_general(
         "metricsPrometheus": general.metrics_prometheus,
         "metricsJson": general.metrics_json,
         "metricsPasswordSet": metrics_password_set,
+        "activityRetentionDays": general.activity_retention_days,
+        "privateKeyRetention": general.private_key_retention,
+        // Lets the admin UI show how many peers would actually be affected by
+        // a switch to `never`, instead of asking the operator to confirm a
+        // purge whose scope they cannot see.
+        "clientsWithStoredKeys": db::get_all_clients()
+            .map(|cs| cs.iter().filter(|c| c.has_private_key()).count())
+            .unwrap_or(0),
+        "activityMaxRetentionDays": db::MAX_ACTIVITY_RETENTION_DAYS,
+        "activityPollIntervalSeconds": crate::activity::POLL_INTERVAL_SECS,
     })))
 }
 
@@ -261,6 +271,50 @@ pub async fn update_general(
                     ));
                 }
             }
+        }
+        // Retention window: bounded for the same class of reason as the
+        // session timeout above — an unchecked value here either turns the
+        // bounded daily rollup back into an unbounded table, or (if negative)
+        // reads as "disabled" through one code path and "keep forever"
+        // through another.
+        if let Some(val) = map.get("activityRetentionDays") {
+            let days = val
+                .as_i64()
+                .or_else(|| value_to_string(val).and_then(|s| s.parse().ok()))
+                .ok_or_else(|| {
+                    api_err(
+                        StatusCode::BAD_REQUEST,
+                        "activityRetentionDays must be an integer",
+                    )
+                })?;
+            let days = super::activity::validate_retention_days(days)?;
+            fields.insert("activity_retention_days".into(), days.to_string());
+        }
+        // Private-key retention. Switching to `never` must also destroy the
+        // keys already stored, or the setting would describe an intention
+        // rather than a fact: every peer created before the switch would keep
+        // its key on disk indefinitely while the UI claimed otherwise.
+        if let Some(val) = map.get("privateKeyRetention") {
+            let mode = value_to_string(val).unwrap_or_default();
+            if !db::PRIVATE_KEY_RETENTION_MODES.contains(&mode.as_str()) {
+                return Err(api_err(
+                    StatusCode::BAD_REQUEST,
+                    &format!(
+                        "privateKeyRetention must be one of: {}",
+                        db::PRIVATE_KEY_RETENTION_MODES.join(", ")
+                    ),
+                ));
+            }
+            if mode == db::RETENTION_NEVER {
+                let purged = db::purge_client_private_keys().map_err(map_err)?;
+                if purged > 0 {
+                    tracing::info!(
+                        "private-key retention set to 'never' — purged stored keys for \
+                         {purged} peer(s); their configs can no longer be re-displayed"
+                    );
+                }
+            }
+            fields.insert("private_key_retention".into(), mode);
         }
         for (json_key, db_key) in mappings {
             if *json_key == "sessionTimeout" {

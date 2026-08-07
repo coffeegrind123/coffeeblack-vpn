@@ -57,6 +57,69 @@ pub fn from_unix(ts: i64) -> Option<OffsetDateTime> {
     OffsetDateTime::from_unix_timestamp(ts).ok()
 }
 
+// ---------------------------------------------------------------------------
+// UTC day strings — the activity history's bucket key
+// ---------------------------------------------------------------------------
+
+/// `YYYY-MM-DD`. Fixed-width by construction (`[year]` pads to 4, `[month]`
+/// and `[day]` to 2), which is what lets the activity table's `day` column be
+/// range-compared and sorted as plain text.
+const DAY_FMT: &[time::format_description::FormatItem<'_>] =
+    format_description!("[year]-[month]-[day]");
+
+/// Format a date as `YYYY-MM-DD`.
+///
+/// `format` can only fail here if the format description references a
+/// component the type doesn't carry, which this one does not — so the error
+/// arm is unreachable, and `unwrap_or_default` keeps callers infallible.
+pub fn format_day(d: time::Date) -> String {
+    d.format(&DAY_FMT).unwrap_or_default()
+}
+
+/// Today's UTC date as `YYYY-MM-DD`. Everything about the activity history is
+/// keyed on UTC rather than local time so a server that changes timezone (or
+/// crosses a DST boundary) doesn't split or merge a day's bucket.
+pub fn today_utc() -> String {
+    format_day(now_utc().date())
+}
+
+/// The UTC day `n` days before today, as `YYYY-MM-DD`. Used for the retention
+/// cutoff and the start of the heatmap window.
+///
+/// Saturating rather than wrapping: `n` is operator-supplied, and clamping to
+/// the minimum representable date makes an absurd value degrade to "keep
+/// everything" instead of panicking or silently selecting a future cutoff
+/// that would delete the whole table.
+pub fn day_utc_ago(n: i64) -> String {
+    let date = now_utc()
+        .date()
+        .saturating_sub(time::Duration::days(n.max(0)));
+    format_day(date)
+}
+
+/// The `n` UTC days ending today, ascending — the heatmap's x-axis.
+///
+/// Built by walking the calendar rather than emitting a range the caller
+/// re-derives, so month lengths and leap days are the `time` crate's problem
+/// and not the frontend's. `n <= 0` yields an empty axis.
+pub fn last_n_days(n: i64) -> Vec<String> {
+    if n <= 0 {
+        return Vec::new();
+    }
+    let today = now_utc().date();
+    let mut days = Vec::with_capacity(n as usize);
+    let mut d = today.saturating_sub(time::Duration::days(n - 1));
+    while d <= today {
+        days.push(format_day(d));
+        match d.next_day() {
+            Some(next) => d = next,
+            // Only reachable at the maximum representable date.
+            None => break,
+        }
+    }
+    days
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

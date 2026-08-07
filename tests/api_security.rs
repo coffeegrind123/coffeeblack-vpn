@@ -1539,3 +1539,534 @@ async fn cron_disables_expired_client() {
         "expired client should be disabled by the cron"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Activity heatmap
+// ---------------------------------------------------------------------------
+
+/// Record `hits` ticks for a client on today's UTC day, into the in-memory
+/// activity store (the history never touches the DB — see `src/activity.rs`).
+fn seed_activity(client_id: i64, hits: usize, bytes_per_tick: i64) {
+    let day = awg_easy_rs::datetime::today_utc();
+    let now = awg_easy_rs::datetime::now_rfc3339();
+    for i in 0..hits {
+        awg_easy_rs::activity::record_samples(
+            &day,
+            &now,
+            &[awg_easy_rs::activity::ActivitySample {
+                client_id,
+                rx_total: bytes_per_tick * (i as i64 + 1),
+                tx_total: bytes_per_tick * (i as i64 + 1),
+            }],
+        );
+    }
+}
+
+/// True if the store holds any day bucket at all.
+fn any_activity_recorded() -> bool {
+    awg_easy_rs::activity::client_ids()
+        .into_iter()
+        .filter_map(awg_easy_rs::activity::client_activity)
+        .any(|a| !a.days.is_empty())
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn heatmap_requires_authentication() {
+    seed();
+    let app = router();
+    let (status, _) = get_req(&app, "/api/activity/heatmap", "not-a-session").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn heatmap_returns_aligned_series() {
+    seed();
+    let admin_id = create_user("admin", "adminpass", 1);
+    let cid = create_client(Some(admin_id), "c1", "10.8.0.10");
+    seed_activity(cid, 3, 1_000);
+
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+    let (status, body) = get_req(&app, "/api/activity/heatmap?days=7", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let days = body["days"].as_array().unwrap();
+    assert_eq!(days.len(), 7);
+    assert_eq!(days[6].as_str().unwrap(), awg_easy_rs::datetime::today_utc());
+
+    let clients = body["clients"].as_array().unwrap();
+    assert_eq!(clients.len(), 1);
+    let row = &clients[0];
+    // Every series must be exactly as long as the day axis — the frontend
+    // indexes them positionally, so a short array would silently paint the
+    // wrong day.
+    for key in ["sampleHits", "rxBytes", "txBytes"] {
+        assert_eq!(row[key].as_array().unwrap().len(), 7, "{key} misaligned");
+    }
+    assert_eq!(row["sampleHits"][6].as_i64().unwrap(), 3);
+    // Days with no data are explicit zeros, not nulls or gaps.
+    assert_eq!(row["sampleHits"][0].as_i64().unwrap(), 0);
+    assert_eq!(row["rxBytes"][0].as_i64().unwrap(), 0);
+
+    assert!(body["enabled"].as_bool().unwrap());
+    assert!(body["pollIntervalSeconds"].as_i64().unwrap() > 0);
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn heatmap_clamps_the_day_window() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    for (query, expected) in [("?days=0", 1), ("?days=-5", 1), ("?days=99999", 365), ("", 30)] {
+        let (status, body) = get_req(&app, &format!("/api/activity/heatmap{query}"), &cookie).await;
+        assert_eq!(status, StatusCode::OK, "days{query}");
+        assert_eq!(
+            body["days"].as_array().unwrap().len(),
+            expected,
+            "days{query} should clamp to {expected}"
+        );
+    }
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn heatmap_does_not_leak_other_users_activity() {
+    seed();
+    let admin_id = create_user("admin", "adminpass", 1);
+    let user_id = create_user("bob", "bobpass1234", 0);
+    let mine = create_client(Some(user_id), "bob-phone", "10.8.0.20");
+    let theirs = create_client(Some(admin_id), "admin-phone", "10.8.0.21");
+    seed_activity(mine, 2, 500);
+    seed_activity(theirs, 9, 500);
+
+    let app = router();
+    let cookie = login_get_cookie(&app, "bob", "bobpass1234").await;
+    let (status, body) = get_req(&app, "/api/activity/heatmap", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let clients = body["clients"].as_array().unwrap();
+    assert_eq!(clients.len(), 1, "a non-admin must see only their own peers");
+    assert_eq!(clients[0]["name"].as_str().unwrap(), "bob-phone");
+
+    // And the admin still sees both.
+    let admin_cookie = login_get_cookie(&app, "admin", "adminpass").await;
+    let (_, admin_body) = get_req(&app, "/api/activity/heatmap", &admin_cookie).await;
+    assert_eq!(admin_body["clients"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn heatmap_reports_disabled_when_retention_is_zero() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let mut f = db::UpdateMap::new();
+    f.insert("activity_retention_days".into(), "0".into());
+    db::update_general(&f).unwrap();
+
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+    let (status, body) = get_req(&app, "/api/activity/heatmap", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!body["enabled"].as_bool().unwrap());
+    assert_eq!(body["retentionDays"].as_i64().unwrap(), 0);
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn activity_purge_is_admin_only() {
+    seed();
+    let admin_id = create_user("admin", "adminpass", 1);
+    create_user("bob", "bobpass1234", 0);
+    let cid = create_client(Some(admin_id), "c1", "10.8.0.10");
+    seed_activity(cid, 4, 1_000);
+
+    let app = router();
+
+    // A non-admin must not be able to destroy everyone's history.
+    let user_cookie = login_get_cookie(&app, "bob", "bobpass1234").await;
+    let (status, _) = delete_req(&app, "/api/activity", &user_cookie).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(any_activity_recorded());
+
+    let admin_cookie = login_get_cookie(&app, "admin", "adminpass").await;
+    let (status, _) = delete_req(&app, "/api/activity", &admin_cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!any_activity_recorded());
+    let recorded = awg_easy_rs::activity::client_activity(cid).unwrap_or_default();
+    assert_eq!(recorded.total_rx_bytes, 0);
+    assert!(recorded.last_seen_at.is_none());
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn retention_setting_is_bounded() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    for bad in [-1, 366, 100_000] {
+        let (status, _) = post(
+            &app,
+            "/api/admin/general",
+            &cookie,
+            &json!({ "activityRetentionDays": bad }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} should be rejected");
+    }
+
+    for good in [0, 1, 365] {
+        let (status, _) = post(
+            &app,
+            "/api/admin/general",
+            &cookie,
+            &json!({ "activityRetentionDays": good }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{good} should be accepted");
+        assert_eq!(db::get_general().unwrap().activity_retention_days, good);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private-key retention
+// ---------------------------------------------------------------------------
+
+fn set_retention(mode: &str) {
+    let mut f = db::UpdateMap::new();
+    f.insert("private_key_retention".into(), mode.into());
+    db::update_general(&f).unwrap();
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn default_retention_is_never() {
+    seed();
+    assert_eq!(db::get_general().unwrap().private_key_retention, db::RETENTION_NEVER);
+}
+
+// NOTE: `awg genkey` is not present in the test environment, so server-side
+// keypair generation yields empty strings. Tests that need a peer to actually
+// hold a key therefore seed it through `create_client` (which sets explicit
+// key material) or supply a public key on the request, rather than relying on
+// the generator. Assertions below are written so they stay meaningful either
+// way — none of them passes merely because a key came back empty.
+
+#[tokio::test]
+#[serial(db)]
+async fn create_issues_the_key_once_and_stores_nothing() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    let (status, body) = post(&app, "/api/client", &cookie, &json!({ "name": "phone" })).await;
+    assert_eq!(status, StatusCode::OK);
+    let id = body["clientId"].as_i64().unwrap();
+
+    // The create response is the one and only delivery: it must carry the
+    // rendered config, because no later request will be able to produce one.
+    assert!(body["config"].as_str().is_some(), "config must be returned at create time");
+    assert!(body["privateKey"].as_str().is_some(), "the issued key must be returned once");
+    assert!(!body["keyRetained"].as_bool().unwrap());
+    assert_eq!(body["retentionMode"].as_str().unwrap(), db::RETENTION_NEVER);
+
+    // And nothing was kept.
+    assert!(
+        !db::get_client(id).unwrap().has_private_key(),
+        "private key must not be persisted under 'never'"
+    );
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn re_display_is_refused_when_the_key_was_not_retained() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+    let (_, body) = post(&app, "/api/client", &cookie, &json!({ "name": "phone" })).await;
+    let id = body["clientId"].as_i64().unwrap();
+
+    // All three re-display routes must refuse, and say so distinguishably —
+    // not 404 (which reads as "no such peer") and not 500.
+    for path in [
+        format!("/api/client/{id}/configuration"),
+        format!("/api/client/{id}/qrcode.svg"),
+    ] {
+        let req = Request::builder()
+            .method("GET")
+            .uri(&path)
+            .header(header::COOKIE, format!("awg_session={cookie}"))
+            .body(Body::empty())
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::CONFLICT, "{path}");
+    }
+    let (status, _) = post(
+        &app,
+        &format!("/api/client/{id}/generateOneTimeLink"),
+        &cookie,
+        &json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    // The listing must not claim to have a key either.
+    let (_, listed) = get_req(&app, "/api/client", &cookie).await;
+    assert!(listed[0]["privateKey"].is_null());
+    assert!(!listed[0]["keyRetained"].as_bool().unwrap());
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn plaintext_mode_retains_and_re_displays() {
+    seed();
+    let admin_id = create_user("admin", "adminpass", 1);
+    set_retention(db::RETENTION_PLAINTEXT);
+    // Seeded directly so the peer really holds key material (see NOTE above).
+    let id = create_client(Some(admin_id), "phone", "10.8.0.10");
+    assert!(db::get_client(id).unwrap().has_private_key());
+
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+    for path in [
+        format!("/api/client/{id}/configuration"),
+        format!("/api/client/{id}/qrcode.svg"),
+    ] {
+        let req = Request::builder()
+            .method("GET")
+            .uri(&path)
+            .header(header::COOKIE, format!("awg_session={cookie}"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.clone().oneshot(req).await.unwrap().status(),
+            StatusCode::OK,
+            "{path} must work when the key is retained"
+        );
+    }
+    let (status, listed) = get_req(&app, "/api/client", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(listed[0]["keyRetained"].as_bool().unwrap());
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn switching_to_never_purges_keys_already_stored() {
+    seed();
+    let admin_id = create_user("admin", "adminpass", 1);
+    set_retention(db::RETENTION_PLAINTEXT);
+    let ida = create_client(Some(admin_id), "a", "10.8.0.10");
+    let idb = create_client(Some(admin_id), "b", "10.8.0.11");
+    let pub_before = db::get_client(ida).unwrap().public_key;
+    assert!(db::get_client(ida).unwrap().has_private_key());
+    assert!(db::get_client(idb).unwrap().has_private_key());
+
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+    // Flipping the mode must destroy what is already on disk — otherwise the
+    // setting describes an intention rather than a fact.
+    let (status, _) = post(
+        &app,
+        "/api/admin/general",
+        &cookie,
+        &json!({ "privateKeyRetention": "never" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!db::get_client(ida).unwrap().has_private_key());
+    assert!(!db::get_client(idb).unwrap().has_private_key());
+    // Peers keep working: the server only ever needed the public half.
+    assert_eq!(db::get_client(ida).unwrap().public_key, pub_before);
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn bring_your_own_public_key_means_the_server_never_sees_a_private_one() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    set_retention(db::RETENTION_PLAINTEXT); // even the permissive mode
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    let byo = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=";
+    let (status, body) = post(
+        &app,
+        "/api/client",
+        &cookie,
+        &json!({ "name": "byo", "publicKey": byo }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let id = body["clientId"].as_i64().unwrap();
+
+    assert!(body["privateKey"].is_null(), "there was never a private half to return");
+    assert!(body["config"].is_null());
+    let stored = db::get_client(id).unwrap();
+    assert_eq!(stored.public_key, byo);
+    assert!(!stored.has_private_key());
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn malformed_public_keys_are_rejected() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    for bad in ["", "short", "not-base64!!!!", "aGVsbG8gd29ybGQ="] {
+        let (status, _) = post(
+            &app,
+            "/api/client",
+            &cookie,
+            &json!({ "name": "x", "publicKey": bad }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "should reject {bad:?}");
+    }
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn rotate_issues_a_new_key_and_invalidates_the_old_one() {
+    seed();
+    let admin_id = create_user("admin", "adminpass", 1);
+    set_retention(db::RETENTION_PLAINTEXT);
+    let id = create_client(Some(admin_id), "phone", "10.8.0.10");
+    let original_pub = db::get_client(id).unwrap().public_key;
+    assert!(db::get_client(id).unwrap().has_private_key());
+
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+    // A one-time link outstanding against the old key must not survive the
+    // rotation — it would serve a config that can no longer connect.
+    let (status, _) = post(
+        &app,
+        &format!("/api/client/{id}/generateOneTimeLink"),
+        &cookie,
+        &json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(db::get_active_one_time_link(id).unwrap().is_some());
+
+    let byo = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=";
+    let (status, rot) = post(
+        &app,
+        &format!("/api/client/{id}/rotateKey"),
+        &cookie,
+        &json!({ "publicKey": byo }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let after = db::get_client(id).unwrap();
+    assert_eq!(after.public_key, byo);
+    assert_ne!(after.public_key, original_pub, "the old key must stop being accepted");
+    assert!(
+        !after.has_private_key(),
+        "a caller-supplied key leaves no private half behind, even in plaintext mode"
+    );
+    assert!(rot["privateKey"].is_null());
+    assert!(
+        db::get_active_one_time_link(id).unwrap().is_none(),
+        "the stale one-time link must be revoked with the key it was issued for"
+    );
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn rotate_enforces_ownership() {
+    seed();
+    let admin_id = create_user("admin", "adminpass", 1);
+    create_user("bob", "bobpass1234", 0);
+    let cid = create_client(Some(admin_id), "admins-peer", "10.8.0.10");
+    let app = router();
+
+    let bob = login_get_cookie(&app, "bob", "bobpass1234").await;
+    let (status, _) = post(&app, &format!("/api/client/{cid}/rotateKey"), &bob, &json!({})).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "a user must not rotate another user's peer");
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn retention_mode_is_validated() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+    for bad in ["encrypted", "yes", "NEVER "] {
+        let (status, _) = post(
+            &app,
+            "/api/admin/general",
+            &cookie,
+            &json!({ "privateKeyRetention": bad }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "should reject {bad:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cache policy on secret-bearing responses
+// ---------------------------------------------------------------------------
+
+/// Fetch a path and return its response headers.
+async fn headers_for(
+    app: &axum::Router,
+    path: &str,
+    cookie: &str,
+) -> (StatusCode, axum::http::HeaderMap) {
+    let req = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    (resp.status(), resp.headers().clone())
+}
+
+fn assert_no_store(headers: &axum::http::HeaderMap, path: &str) {
+    let cc = headers
+        .get(header::CACHE_CONTROL)
+        .unwrap_or_else(|| panic!("{path}: no Cache-Control header"))
+        .to_str()
+        .unwrap();
+    assert!(cc.contains("no-store"), "{path}: Cache-Control = {cc:?}");
+    assert_eq!(
+        headers.get(header::PRAGMA).map(|v| v.to_str().unwrap()),
+        Some("no-cache"),
+        "{path}: missing Pragma: no-cache"
+    );
+}
+
+/// The WireGuard peer config and its QR both embed the peer's private key.
+/// Without `no-store` a cache — browser disk, corporate proxy, CDN in front of
+/// the panel — can persist them beyond the session that fetched them.
+#[tokio::test]
+#[serial(db)]
+async fn wireguard_config_and_qr_forbid_caching() {
+    seed();
+    let admin_id = create_user("admin", "adminpass", 1);
+    let client_id = create_client(Some(admin_id), "peer", "10.8.0.10");
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    for path in [
+        format!("/api/client/{client_id}/configuration"),
+        format!("/api/client/{client_id}/qrcode.svg"),
+    ] {
+        let (status, headers) = headers_for(&app, &path, &cookie).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_no_store(&headers, &path);
+    }
+}

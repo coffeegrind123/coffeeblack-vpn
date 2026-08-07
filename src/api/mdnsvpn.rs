@@ -17,6 +17,12 @@
 //! | GET    | /api/mdnsvpn/clients/:id/config.json                    | auth   | client config as JSON                |
 //! | GET    | /api/mdnsvpn/clients/:id/share                          | auth   | mdnsvpn://b64?<base64> share string  |
 //! | GET    | /api/mdnsvpn/clients/:id/qrcode.svg                     | auth   | QR of the share string               |
+//! | GET    | /api/mdnsvpn/clients/:id/bundle.zip                     | auth   | config + resolvers + launcher (zip)  |
+//!
+//! `bundle.zip` is the download to point peers at. Every other artifact leaves
+//! them one file short: mdnsvpn reads its resolver list only from
+//! `client_resolvers.txt`, and a missing one aborts startup (see the
+//! `mdnsvpn::share` module docs for the exact lookup rules).
 
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -27,7 +33,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::admin::require_admin;
-use super::{api_err, map_err, ok_success, require_auth, value_to_string, AppState};
+use super::{
+    api_err, map_err, no_store_headers, ok_success, require_auth, value_to_string, AppState,
+};
 use crate::db;
 use crate::mdnsvpn;
 
@@ -51,6 +59,18 @@ pub async fn get_inbound(
         "port": inbound.port,
         "bind": inbound.bind,
         "encryptionMethod": inbound.encryption_method,
+        "encryptionMethodName": mdnsvpn::keys::method_name(inbound.encryption_method),
+        "encryptionIsAuthenticated": mdnsvpn::keys::is_aead(inbound.encryption_method),
+        "recommendedEncryptionMethod": mdnsvpn::keys::RECOMMENDED_ENCRYPTION_METHOD,
+        // Non-reversible key identifier so an operator can confirm a peer
+        // config matches the running server without either side revealing the
+        // key. Empty when no key is set.
+        "encryptionKeyFingerprint": if inbound.encryption_key.trim().is_empty() {
+            String::new()
+        } else {
+            mdnsvpn::keys::key_fingerprint(&inbound.encryption_key)
+        },
+        "securityWarnings": security_warnings(&inbound),
         // Don't ship the key plaintext — UI just needs to know whether
         // one is set. Operators who need the value can read the DB
         // directly or download a peer config (which embeds the key).
@@ -69,6 +89,48 @@ pub async fn get_inbound(
         "isBundled": mdnsvpn::is_bundled(),
         "version": mdnsvpn::MDNSVPN_VERSION,
     })))
+}
+
+/// Operator-facing security advisories for the current inbound.
+///
+/// These are advisories, not errors: none of them block startup. The point is
+/// that a weak posture inherited from upstream's defaults (or from an install
+/// that predates a default change) should be *visible* in the admin UI rather
+/// than silently carried forever.
+fn security_warnings(inbound: &db::MdnsvpnInbound) -> Vec<String> {
+    let mut out = Vec::new();
+
+    if !mdnsvpn::keys::is_aead(inbound.encryption_method) {
+        out.push(format!(
+            "DATA_ENCRYPTION_METHOD {} ({}) is not authenticated encryption — an \
+             active on-path attacker can tamper with tunnel payloads undetected. \
+             Switch to {} (AES-256-GCM) and re-issue every client config (the \
+             method is baked into each one). The existing key works unchanged.",
+            inbound.encryption_method,
+            mdnsvpn::keys::method_name(inbound.encryption_method),
+            mdnsvpn::keys::RECOMMENDED_ENCRYPTION_METHOD,
+        ));
+    }
+
+    // One shared secret authenticates every peer, so a short key is the whole
+    // deployment's weakest link.
+    let key_len = inbound.encryption_key.trim().len();
+    if key_len > 0 && key_len < mdnsvpn::keys::DEFAULT_KEY_HEX_LEN {
+        out.push(format!(
+            "Encryption key is {key_len} hex chars — shorter than the {} that \
+             `regenerate-key` produces. Every peer shares this one secret; \
+             regenerate it and re-issue client configs.",
+            mdnsvpn::keys::DEFAULT_KEY_HEX_LEN,
+        ));
+    }
+
+    if inbound.socks5_auth && inbound.socks5_pass.trim().is_empty() {
+        out.push(
+            "SOCKS5_AUTH is enabled but no upstream SOCKS5 password is set.".to_string(),
+        );
+    }
+
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -605,6 +667,8 @@ pub async fn client_config_toml(
         header::CONTENT_DISPOSITION,
         super::attachment_disposition(&filename),
     );
+    // Body embeds the shared encryption key.
+    no_store_headers(&mut headers);
     Ok((StatusCode::OK, headers, bundle.config_toml))
 }
 
@@ -625,6 +689,9 @@ pub async fn client_resolvers_txt(
         header::CONTENT_DISPOSITION,
         super::attachment_disposition(&filename),
     );
+    // No key in this one, but it is half of a peer's credentials bundle and
+    // reveals which resolvers a peer uses — not worth caching either.
+    no_store_headers(&mut headers);
     Ok((StatusCode::OK, headers, bundle.resolvers_txt))
 }
 
@@ -640,6 +707,8 @@ pub async fn client_config_json(
         header::CONTENT_TYPE,
         "application/json; charset=utf-8".parse().unwrap(),
     );
+    // Body embeds the shared encryption key.
+    no_store_headers(&mut headers);
     Ok((StatusCode::OK, headers, bundle.config_json))
 }
 
@@ -650,17 +719,47 @@ pub async fn client_share_url(
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let (inbound, client) = load_for_share(&state, &jar, id).await?;
     let bundle = mdnsvpn::share::render_bundle(&inbound, &client).map_err(map_err)?;
-    // Custom URI scheme so a single share string carries everything
-    // mdnsvpn needs. Mirrors `vless://` and `tg://proxy?…` — the
-    // upstream client doesn't natively parse `mdnsvpn://`, but the
-    // base64 payload is what feeds into `mdnsvpn -json_base64 <blob>`.
-    let url = format!("mdnsvpn://b64?{}", bundle.config_json_base64);
+    // Custom URI scheme mirroring `vless://` / `tg://proxy?…`. The upstream
+    // client doesn't parse `mdnsvpn://`; the base64 segment is what feeds into
+    // `mdnsvpn -json_base64 <blob>`, and `resolvers=` carries the list that
+    // blob structurally cannot (see mdnsvpn::share module docs).
+    //
+    // NOTE: `-json_base64` alone still needs a `client_resolvers.txt` in the
+    // working directory. `bundle.zip` is the artifact that just works.
+    let url = mdnsvpn::share::share_url(&bundle);
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         "text/plain; charset=utf-8".parse().unwrap(),
     );
+    // The base64 payload decodes to the shared encryption key.
+    no_store_headers(&mut headers);
     Ok((StatusCode::OK, headers, url))
+}
+
+/// `bundle.zip` — the artifact a peer can actually run: config, resolver file
+/// under the exact name mdnsvpn looks for, launcher, and a README. The
+/// single-file downloads above each leave the peer one file short.
+pub async fn client_bundle_zip(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
+    let (inbound, client) = load_for_share(&state, &jar, id).await?;
+    let zip = mdnsvpn::bundle::build(&inbound, &client).map_err(map_err)?;
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        header::HeaderValue::from_static("application/zip"),
+    );
+    let filename = format!("mdnsvpn_{}.zip", sanitize_filename(&client.name));
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        super::attachment_disposition(&filename),
+    );
+    // Archive embeds the shared encryption key.
+    no_store_headers(&mut headers);
+    Ok((StatusCode::OK, headers, zip))
 }
 
 pub async fn client_qrcode(
@@ -670,11 +769,13 @@ pub async fn client_qrcode(
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let (inbound, client) = load_for_share(&state, &jar, id).await?;
     let bundle = mdnsvpn::share::render_bundle(&inbound, &client).map_err(map_err)?;
-    let url = format!("mdnsvpn://b64?{}", bundle.config_json_base64);
+    let url = mdnsvpn::share::share_url(&bundle);
     let svg = crate::qr::generate_qr_svg(&url)
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("qr: {e}")))?;
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "image/svg+xml".parse().unwrap());
+    // The QR encodes the share URL, i.e. the shared encryption key.
+    no_store_headers(&mut headers);
     Ok((StatusCode::OK, headers, svg))
 }
 

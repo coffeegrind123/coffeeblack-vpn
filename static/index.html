@@ -35,6 +35,15 @@
   --accent-tint: rgba(251, 178, 106, 0.10);
   --accent-line: rgba(251, 178, 106, 0.30);
 
+  /* Activity-heatmap intensity ramp. Defined here rather than inline in the
+     cell rules so the table and its legend cannot drift apart. */
+  --heat-0: #16161f;
+  --heat-1: rgba(251, 178, 106, 0.16);
+  --heat-2: rgba(251, 178, 106, 0.34);
+  --heat-3: rgba(251, 178, 106, 0.54);
+  --heat-4: rgba(251, 178, 106, 0.76);
+  --heat-5: #FBB26A;
+
   --ok: #4ade80;
   --ok-tint: rgba(74, 222, 128, 0.14);
   --warn: #fbbf24;
@@ -451,6 +460,96 @@ label { color: var(--fg-soft); }
 .stat-sub { font-size: 11px; color: var(--fg-mute); margin-top: 4px; font-family: var(--font-mono); }
 .stat-sub b { color: var(--ok); font-weight: 500; }
 .stat-sub .down { color: var(--fg-soft); }
+
+/* ============== ONE-TIME ISSUANCE ============== */
+.issued-warning {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--warn-tint); border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: var(--r-sm); padding: 11px 13px; margin-bottom: 14px;
+  font-size: 12px; line-height: 1.5; color: var(--fg-soft);
+}
+.issued-warning svg { width: 15px; height: 15px; color: var(--warn); flex-shrink: 0; margin-top: 1px; }
+.issued-warning b { color: var(--fg); font-weight: 600; }
+.issued-split { display: flex; gap: 14px; align-items: flex-start; }
+/* Cap the config block rather than letting it grow: an AmneziaWG config runs
+   to ~25 lines, which pushed the "I've saved it" / Download buttons below the
+   fold — on a dialog whose entire purpose is getting the operator to save the
+   contents before closing it. */
+.issued-split .code-block { flex: 1; min-width: 0; max-height: 320px; overflow-y: auto; }
+.issued-qr {
+  width: 168px; height: 168px; flex-shrink: 0;
+  background: #fff; border-radius: var(--r-sm); padding: 7px;
+}
+.issued-qr svg { width: 100%; height: 100%; display: block; }
+/* Peers whose key the server no longer holds cannot be re-exported; the row
+   says so rather than offering buttons that would 409. */
+.peer-nokey { font-size: 11px; color: var(--fg-faint); font-family: var(--font-mono); }
+.retention-banner {
+  display: flex; gap: 10px; align-items: flex-start;
+  background: var(--warn-tint); border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: var(--r-sm); padding: 11px 13px; margin-bottom: 16px;
+  font-size: 12px; line-height: 1.5; color: var(--fg-soft);
+}
+.retention-banner svg { width: 15px; height: 15px; color: var(--warn); flex-shrink: 0; margin-top: 1px; }
+.retention-banner b { color: var(--fg); font-weight: 600; }
+
+/* ============== ACTIVITY HEATMAP ============== */
+.heat-head { display: flex; align-items: center; gap: 8px; }
+.heat-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; }
+.heat-seg button {
+  background: var(--bg-elevated); border: none; color: var(--fg-mute);
+  font-family: inherit; font-size: 11px; padding: 4px 10px; cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.heat-seg button + button { border-left: 1px solid var(--border); }
+.heat-seg button:hover { color: var(--fg); }
+.heat-seg button.is-active { background: var(--accent-tint); color: var(--accent-hi); }
+/* The day axis is fixed-width but the peer count is not, so the table scrolls
+   horizontally inside the card rather than widening the page. */
+.heat-wrap { overflow-x: auto; padding-bottom: 4px; }
+/* Natural width, not `min-width:100%`: forcing the table to fill the card
+   hands the slack to the auto-sized name column and pushes the whole grid to
+   the right edge. Sized to content it sits next to the names and scrolls
+   inside .heat-wrap once the day axis outgrows the card. */
+.heat { border-collapse: separate; border-spacing: 2px; width: auto; }
+.heat th { font-weight: 400; font-size: 10px; color: var(--fg-faint); padding: 0; height: 16px; }
+.heat td { padding: 0; }
+.heat-month { text-align: left; padding-left: 2px !important; letter-spacing: 0.04em; }
+.heat-day { text-align: center; font-family: var(--font-mono); min-width: 14px; }
+/* Sticky name column: it has to paint over the cells scrolling under it, so
+   it carries an opaque background rather than inheriting the card's. */
+.heat-name {
+  position: sticky; left: 0; z-index: 1;
+  background: var(--bg-surface);
+  text-align: left; font-size: 12px; color: var(--fg-soft);
+  white-space: nowrap; padding-right: 10px !important;
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis;
+}
+th.heat-name { color: var(--fg-faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; }
+.heat-row-disabled .heat-name { color: var(--fg-faint); text-decoration: line-through; }
+td.heat-cell {
+  width: 14px; min-width: 14px; height: 14px;
+  border-radius: 2px; background: var(--heat-0);
+}
+/* `td.heat-cell` (element + class) outranks a bare `.heat-lN` (class only),
+   so the level classes must match its specificity or every cell would keep
+   the empty background regardless of activity. The legend's <i> elements
+   need their own rules for exactly the same reason — they are not <td>s. */
+td.heat-cell.heat-l1, .heat-legend i.heat-l1 { background: var(--heat-1); }
+td.heat-cell.heat-l2, .heat-legend i.heat-l2 { background: var(--heat-2); }
+td.heat-cell.heat-l3, .heat-legend i.heat-l3 { background: var(--heat-3); }
+td.heat-cell.heat-l4, .heat-legend i.heat-l4 { background: var(--heat-4); }
+td.heat-cell.heat-l5, .heat-legend i.heat-l5 { background: var(--heat-5); }
+td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
+.heat-legend {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 11px; color: var(--fg-faint); margin-top: 10px;
+}
+.heat-legend i {
+  width: 11px; height: 11px; border-radius: 2px;
+  display: inline-block; background: var(--heat-0);
+}
+.heat-note { font-size: 11px; color: var(--fg-faint); margin-top: 8px; }
 
 /* ============== PEER TABLE ============== */
 .tbl { background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
@@ -974,6 +1073,26 @@ label { color: var(--fg-soft); }
       </div>
       <div class="scroll">
         <div class="stats" id="client-stats"></div>
+        <div class="card" id="heatmap-card" style="margin-bottom:22px">
+          <div class="card-head">
+            <div>
+              <div class="card-title">Connection activity</div>
+              <div class="card-sub" id="heatmap-sub">Loading…</div>
+            </div>
+            <div class="heat-head">
+              <div class="heat-seg" id="heat-metric">
+                <button type="button" data-metric="hits" class="is-active" onclick="setHeatMetric('hits')">Connected</button>
+                <button type="button" data-metric="bytes" onclick="setHeatMetric('bytes')">Traffic</button>
+              </div>
+              <div class="heat-seg" id="heat-range">
+                <button type="button" data-days="30" class="is-active" onclick="setHeatDays(30)">30d</button>
+                <button type="button" data-days="60" onclick="setHeatDays(60)">60d</button>
+                <button type="button" data-days="90" onclick="setHeatDays(90)">90d</button>
+              </div>
+            </div>
+          </div>
+          <div class="card-body" id="heatmap-body"></div>
+        </div>
         <div id="client-list"></div>
       </div>
     </div>
@@ -1283,6 +1402,11 @@ label { color: var(--fg-soft); }
           <input type="date" id="create-expires">
           <p class="field-help">Leave empty for permanent access.</p>
         </div>
+        <div class="field">
+          <label class="field-label" for="create-pubkey" title="Paste a public key the device generated itself (wg genkey | wg pubkey). The server then never sees the private half at all, and cannot leak what it never had. Leave empty to have the server generate the pair and hand it to you once.">Device public key <span class="opt">optional</span></label>
+          <input type="text" id="create-pubkey" class="mono-input" placeholder="server generates the keypair if left empty" autocomplete="off">
+          <p class="field-help">Paste a key the device generated itself (<span class="mono">wg genkey | wg pubkey</span>) and the server never sees the private half.</p>
+        </div>
       </div>
       <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
         <button type="button" class="btn btn--ghost" onclick="closeModal('modal-create')">Cancel</button>
@@ -1301,6 +1425,32 @@ label { color: var(--fg-soft); }
       <button class="btn btn--ghost" onclick="closeModal('modal-qr')">Close</button>
       <button class="btn btn--ghost" onclick="copyQR()"><svg><use href="#i-copy"/></svg> Copy PNG</button>
       <button class="btn btn--primary" onclick="downloadQR()"><svg><use href="#i-download"/></svg> Download SVG</button>
+    </div>
+  </div>
+</div>
+
+<!-- Shown once, immediately after a peer is created or its key rotated. Under
+     'never' retention this is the only moment the config exists outside the
+     peer's own device, so the dialog is deliberately blunt about that. -->
+<div class="modal-overlay" id="modal-issued">
+  <div class="modal modal--lg">
+    <h3 id="issued-title">Peer configuration</h3>
+    <div id="issued-warning" class="issued-warning">
+      <svg><use href="#i-alert"/></svg>
+      <div>
+        <b>This is the only time this configuration will be shown.</b>
+        The server does not keep this peer's private key, so it cannot be displayed again.
+        Save it now — if it is lost, rotate the peer's key to issue a new one.
+      </div>
+    </div>
+    <div class="issued-split">
+      <div class="code-block" id="issued-config"></div>
+      <div id="issued-qr" class="issued-qr"></div>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
+      <button class="btn btn--ghost" onclick="copyIssuedConfig()"><svg><use href="#i-copy"/></svg> Copy</button>
+      <button class="btn btn--ghost" onclick="downloadIssuedConfig()"><svg><use href="#i-download"/></svg> Download .conf</button>
+      <button class="btn btn--primary" onclick="closeModal('modal-issued')">I've saved it</button>
     </div>
   </div>
 </div>

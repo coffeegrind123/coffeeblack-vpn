@@ -63,6 +63,17 @@ services:
       # Seconds between RAM→disk snapshots. 0 disables periodic snapshots
       # (shutdown still snapshots). Raise it to write the disk less often.
       - WG_EASY_PERSIST_INTERVAL=30
+      # Encrypt secrets at rest (TOTP seeds) so a stolen wg-easy.db — the
+      # snapshot above is a real file on the host — yields nothing usable.
+      # Generate once with: openssl rand -base64 32
+      # Unset means plaintext storage, with a warning at startup.
+      # - WG_EASY_SECRET_KEY=<base64 32 bytes>
+      #
+      # Route privileged work through a helper so this container needs no
+      # CAP_NET_ADMIN. Requires running `awg-easy-rs --privileged-helper` on
+      # the host (or in a sidecar) and sharing the socket directory.
+      # - WG_EASY_HELPER_SOCKET=/run/awg-easy-rs/helper.sock
+      #
       # Uncomment for automatic initial setup:
       # - INIT_ENABLED=true
       # - INIT_USERNAME=admin
