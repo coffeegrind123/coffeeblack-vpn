@@ -141,6 +141,18 @@ fn should_remain_disabled(settings: &db::ProxySettings, iface: &db::Interface) -
     if !(1..=65535).contains(&backend) {
         return Some(format!("backend port {backend} out of range"));
     }
+    // AmneziaWG 3 knobs that change the datagram shape this proxy parses.
+    // The admin API rejects the combination from either direction, so this
+    // is the backstop for a DB that got into the state some other way: it
+    // is much better to leave the proxy off (peers keep working on the
+    // native port) than to front a port whose packets we would misread as
+    // probes and answer with imitation traffic.
+    if let Some(reason) = crate::wg::awg3::proxy_conflict(
+        &iface.header_protection_key,
+        iface.random_trailers,
+    ) {
+        return Some(reason.to_string());
+    }
     None
 }
 
@@ -553,6 +565,15 @@ mod tests {
             i3: String::new(),
             i4: String::new(),
             i5: String::new(),
+            header_protection_key: String::new(),
+            content_padding_addition: String::new(),
+            rekey_after_time: String::new(),
+            rekey_timeout: String::new(),
+            reject_after_time: String::new(),
+            keepalive_timeout: String::new(),
+            max_handshake_attempts: String::new(),
+            random_trailers: false,
+            disable_cookies: false,
             firewall_enabled: false,
             dns_lockdown: false,
             dns_lockdown_target: String::new(),

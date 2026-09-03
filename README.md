@@ -25,7 +25,7 @@ Four transports + an optional bundled resolver, all sharing one admin UI, user a
 
 | Area | What's included |
 |---|---|
-| **AmneziaWG 2.0 (Gaming)** | Full obfuscation set: `Jc / Jmin / Jmax`, `S1‑S4`, `H1‑H4` (with non-overlapping ranges), `I1‑I5` (with CPS tag-grammar validation: `<b 0xHEX>`, `<r N>`, `<rc N>`, `<rd N>`, `<t>`, `<c>`). Per-peer `AdvancedSecurity` opt-in (on / off / auto-detect from H1 magic header). The Docker image builds **amneziawg-go v3.1.20260828 + amneziawg-tools v3.1.20260812**; AWG 3's extra device knobs (`HeaderProtectionKey`, `ContentPaddingAddition`, the `Rekey*`/`RejectAfterTime`/`KeepaliveTimeout`/`MaxHandshakeAttempts` timings, `RandomTrailers`, `DisableCookies`) are accepted by those binaries but are not generated or exposed here yet — every key listed above is unchanged in AWG 3, and unset AWG 3 knobs are treated as off, so existing peer configs are untouched. |
+| **AmneziaWG 2.0 (Gaming)** | Full obfuscation set: `Jc / Jmin / Jmax`, `S1‑S4`, `H1‑H4` (with non-overlapping ranges), `I1‑I5` (with CPS tag-grammar validation: `<b 0xHEX>`, `<r N>`, `<rc N>`, `<rd N>`, `<t>`, `<c>`). Per-peer `AdvancedSecurity` opt-in (on / off / auto-detect from H1 magic header). **AmneziaWG 3** (built into the image as amneziawg-go v3.1.20260828 + amneziawg-tools v3.1.20260812): header protection (server-generated key, never displayed; enforces the S1–S4 ≥ 12 nonce floor upstream requires), `ContentPaddingAddition`, the `RekeyAfterTime` / `RekeyTimeout` / `RejectAfterTime` / `KeepaliveTimeout` / `MaxHandshakeAttempts` timers (single value or `N-M` range), `RandomTrailers` and `DisableCookies` — all off by default, and an unset knob emits no config line, so an upgraded deployment's wire format is unchanged until you turn one on. Header protection and random trailers are mutually exclusive with the DPI-imitation proxy and the admin API refuses the combination from either side — see [AmneziaWG 3](#amneziawg-3). |
 | **Xray VLESS+Reality+Vision (Browsing)** | Bundled Xray-core v26.3.27 ELF (vendored, gzipped, SHA-verified, ~13 MB compressed). Vision flow hardcoded. Per-client UUID **and** per-client `shortId` (revocable individually). TLS 1.3 dest probe with SAN-match enforcement (rejects burned-IP / private-CN destinations before save). Tokio-supervised subprocess: SIGHUP reload, SIGTERM+10s grace shutdown, capped exponential backoff on crash. Free-form `additional_config` JSON deep-merged into the inbound. |
 | **Telegram MTProxy** | Bundled [telemt](https://github.com/telemt/telemt) v3.5.5 ELF (vendored, gzipped, SHA-verified, ~6 MB compressed). Fake-TLS / SNI fronting (`secret=ee<…>` link variant), per-user 32-hex secrets, optional `dd`-prefix and classic modes, traffic masking. Tokio-supervised subprocess; users live durably in the awg-easy-rs DB and reconcile into telemt's `127.0.0.1:9091` HTTP control plane after every spawn so a telemt state-file wipe doesn't lose the operator's roster. `tg://proxy?…` share links rendered server-side, QR via `qr.rs`. |
 | **MasterDnsVPN (DNS-tunnel)** | Bundled [MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN) v2026.06.13 ELF (vendored, gzipped, SHA-verified, ~2 MB compressed). Encryption: XOR / ChaCha20 / AES-128/192/256-GCM (selectable). SOCKS5 or fixed-TCP forwarding. Per-client bookkeeping (display name, custom resolver list, local SOCKS5 port, expiry) — but every client uses the same singleton encryption key (a property of the underlying protocol). Share format: downloadable `client_config.toml` + `client_resolvers.txt`, plus a `mdnsvpn://b64?<base64>` single-string variant for `mdnsvpn -json_base64`. **Requires** the operator to own a domain and create an `NS` delegation to this server. |
@@ -165,6 +165,7 @@ Stored in SQLite, editable via the admin panel:
 - `privateKeyRetention` — `never` (default, keys issued once and never stored) or `plaintext` (stored, re-displayable). Switching to `never` erases the keys already held.
 - `activityRetentionDays` — days of in-memory per-peer activity history to keep (0-365, default 30; `0` disables collection and purges). The only part of the feature that is persisted, and deliberately so — see below.
 - AmneziaWG params (Jc/Jmin/Jmax, S1-S4, H1-H4, I1-I5)
+- AmneziaWG 3 device knobs (header protection, content padding, five timers, random trailers, disable cookies) — see [AmneziaWG 3](#amneziawg-3)
 - Per-client `AdvancedSecurity` (on / off / auto)
 - Per-client firewall rules
 - Free-form `additional_config` append for AmneziaWG `[Interface]` (server + per-peer)
@@ -172,6 +173,59 @@ Stored in SQLite, editable via the admin panel:
 - Xray Reality inbound (port, dest, server names, fingerprint, additional_config) and per-peer expiry / additional config
 - MTProxy inbound (port, public host/port, TLS-front domain, mask toggle, mode flags, use_middle_proxy, default ad_tag, additional_config) and per-user secret + ad_tag override + enabled state
 - DNS bundle (master switch, listen port, upstream resolvers, DNSSEC/no-log/no-filter requirements, optional Tor SOCKS routing with exit-country selectors and pluggable-transport choice)
+
+---
+
+## AmneziaWG 3
+
+The bundled `amneziawg-go` / `amneziawg-tools` are 3.x, which adds nine
+`[Interface]` keys on top of the 2.x junk-and-magic-header set. All of them are
+**off by default, and an unset knob emits no config line at all** — upgrading
+does not change a single byte of your rendered configs until you turn one on.
+Everything below is set once on the interface (admin UI → Interface →
+*AmneziaWG 3*) and is rendered into both the server config and every peer
+config, because the values either have to match on both ends or are the
+operator's intent for the tunnel as a whole. There is no per-peer override.
+
+| Knob | What it does | Notes |
+|---|---|---|
+| **Header protection** | Encrypts the message header with a shared key, using the S1–S4 padding as the cipher nonce — the low-entropy header fields stop being a fingerprint. | The key is generated server-side and **never displayed**; it is stored AES-256-GCM-encrypted like the device private key, and reaches peers only inside their generated config. Requires **every** one of S1–S4 to be ≥ 12 (the nonce size); the API rejects the combination rather than letting the interface fail to come up. Re-enabling an already-enabled key does not rotate it. |
+| **Random trailers** | Appends a random-length trailer to every packet, so packet sizes stop being a fingerprint. | |
+| **Disable cookies** | Stops the server emitting cookie replies, removing that message type from the wire. | Also removes WireGuard's under-load DoS mitigation. |
+| **Content padding** | Extra random padding on data packets. | Number or `N-M` range. |
+| **Rekey after / Rekey timeout / Reject after / Keepalive timeout / Max handshake attempts** | Override WireGuard's built-in timers. | Number or `N-M` range; blank keeps the protocol default. |
+
+Ranges are validated as `N` or `N-M`, each side 0–65535 with `M >= N`, because
+`amneziawg-tools` parses them with `strtoul` into a `uint16_t` and **truncates
+silently** — `70000` would otherwise reach the wire as `4464`.
+
+### Not compatible with the DPI-imitation proxy
+
+**Header protection** and **random trailers** cannot be combined with the
+[DPI-imitation proxy](#features). This is structural, not policy:
+
+- the proxy *rewrites* the S1–S4 padding to imitate QUIC/DNS/STUN/SIP, and that
+  padding is the header cipher's nonce — the peer would derive a different
+  keystream and drop every packet (the header the proxy classifies on is
+  ciphertext under that key too);
+- the proxy recognises AmneziaWG handshakes by their **exact** length
+  (`S + 148` for an initiation, and so on), so a random trailer makes every
+  handshake look like an unauthenticated probe and get answered as one.
+
+The admin API refuses the combination from both directions, the proxy
+supervisor refuses to start against an interface that has either set, and the
+config renderer drops them (with a warning) if a database ever arrives in that
+state some other way. The other seven knobs are unaffected: content padding
+only grows data packets, which the proxy classifies by a minimum size, and the
+timers and cookie switch don't change packet shape at all.
+
+### If your `awg` is older than 3.x
+
+The admin UI shows a capability badge read from `awg --version`. On a
+pre-3.x install these keys would abort interface bring-up as unknown
+directives, so the section is labelled accordingly — the Docker image always
+ships 3.x, but a bare-metal install uses whatever `amneziawg-tools` the distro
+package provides.
 
 ---
 

@@ -1155,6 +1155,230 @@ async fn admin_interface_accepts_full_tag_grammar() {
     assert_eq!(status, StatusCode::OK);
 }
 
+// ---------------------------------------------------------------------------
+// AmneziaWG 3 device knobs
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[serial(db)]
+async fn admin_interface_awg3_defaults_are_all_off() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    let (status, resp) = get_req(&app, "/api/admin/interface", &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    // A fresh deployment must be indistinguishable on the wire from one
+    // running the previous release: nothing enabled, nothing set.
+    assert_eq!(resp["headerProtection"], json!(false));
+    assert_eq!(resp["randomTrailers"], json!(false));
+    assert_eq!(resp["disableCookies"], json!(false));
+    for k in [
+        "contentPaddingAddition",
+        "rekeyAfterTime",
+        "rekeyTimeout",
+        "rejectAfterTime",
+        "keepaliveTimeout",
+        "maxHandshakeAttempts",
+    ] {
+        assert_eq!(resp[k], json!(""), "{k} should default to unset");
+    }
+    // The key itself is never exposed, only whether one is set.
+    assert!(resp.get("headerProtectionKey").is_none());
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn admin_interface_rejects_ranges_the_tools_would_truncate() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    // amneziawg-tools parses these with strtoul into a uint16_t and
+    // truncates silently, so 70000 would reach the wire as 4464.
+    for bad in [json!("70000"), json!("0-70000"), json!("30-22"), json!("12abc")] {
+        let body = json!({ "contentPaddingAddition": bad });
+        let (status, resp) = post(&app, "/api/admin/interface", &cookie, &body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad} should be refused");
+        assert!(resp["error"]
+            .as_str()
+            .unwrap()
+            .contains("ContentPaddingAddition"));
+    }
+
+    // The legal forms still go through.
+    for ok in [json!("0"), json!("65535"), json!("10-40"), json!("")] {
+        let body = json!({ "rekeyTimeout": ok });
+        let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+        assert_eq!(status, StatusCode::OK, "{ok} should be accepted");
+    }
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn admin_interface_header_protection_requires_twelve_byte_paddings() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    // S3/S4 are unset in a seeded row, which the device reads as 0 — below
+    // the 12-byte cipher nonce. amneziawg-go would refuse the device, so
+    // the API refuses the request.
+    let body = json!({ "headerProtection": true });
+    let (status, resp) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let err = resp["error"].as_str().unwrap();
+    assert!(err.contains("S3"), "error should name the offending padding: {err}");
+
+    // Raising them in the same request is enough — validation reads the
+    // merged view, not just what is already stored.
+    let body = json!({ "s1": 128, "s2": 56, "s3": 20, "s4": 20, "headerProtection": true });
+    let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, resp) = get_req(&app, "/api/admin/interface", &cookie).await;
+    assert_eq!(resp["headerProtection"], json!(true));
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn admin_interface_header_protection_key_round_trips_and_clears() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    let body = json!({ "s3": 20, "s4": 20, "headerProtection": true });
+    let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Server-generated key: 32 bytes of base64, and it lands in the peer
+    // configs (both ends must hold the same value or nothing decrypts).
+    let iface = awg_easy_rs::db::get_interface().unwrap();
+    let key = iface.header_protection_key.clone();
+    assert_eq!(key.len(), 44, "32 bytes of base64");
+    awg_easy_rs::wg::awg3::validate_header_protection_key(&key).unwrap();
+
+    // Toggling it on again must not silently rotate the key — that would
+    // break every peer config already handed out.
+    let body = json!({ "headerProtection": true });
+    let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        awg_easy_rs::db::get_interface().unwrap().header_protection_key,
+        key,
+        "re-enabling an already-enabled key must be a no-op"
+    );
+
+    // An explicit key wins over the toggle.
+    let explicit = awg_easy_rs::wg::awg3::generate_header_protection_key();
+    let body = json!({ "headerProtectionKey": explicit });
+    let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        awg_easy_rs::db::get_interface().unwrap().header_protection_key,
+        explicit
+    );
+
+    // And a garbage key is refused rather than stored and rendered.
+    let body = json!({ "headerProtectionKey": "not-base64!!" });
+    let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Turning it off clears the key.
+    let body = json!({ "headerProtection": false });
+    let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(awg_easy_rs::db::get_interface()
+        .unwrap()
+        .header_protection_key
+        .is_empty());
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn admin_interface_awg3_booleans_and_ranges_persist() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    let body = json!({
+        "randomTrailers": true,
+        "disableCookies": true,
+        "contentPaddingAddition": "10-40",
+        "rekeyAfterTime": "90",
+        "maxHandshakeAttempts": "18",
+    });
+    let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, resp) = get_req(&app, "/api/admin/interface", &cookie).await;
+    assert_eq!(resp["randomTrailers"], json!(true));
+    assert_eq!(resp["disableCookies"], json!(true));
+    assert_eq!(resp["contentPaddingAddition"], json!("10-40"));
+    assert_eq!(resp["rekeyAfterTime"], json!("90"));
+    assert_eq!(resp["maxHandshakeAttempts"], json!("18"));
+
+    // A checkbox posting the string "on" must not land as a truthy string
+    // that reads back false.
+    let body = json!({ "randomTrailers": "off" });
+    let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, resp) = get_req(&app, "/api/admin/interface", &cookie).await;
+    assert_eq!(resp["randomTrailers"], json!(false));
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn admin_interface_refuses_shape_changing_awg3_knobs_while_the_proxy_is_on() {
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    // Header protection uses the S1-S4 padding as its cipher nonce, and the
+    // DPI proxy rewrites exactly those bytes; random trailers break the
+    // proxy's exact-length handshake classification. Both must bounce with
+    // an explanation rather than producing a tunnel that passes no traffic.
+    let mut on = awg_easy_rs::db::UpdateMap::new();
+    on.insert("enabled".into(), "1".into());
+    awg_easy_rs::db::update_proxy_settings(&on).unwrap();
+
+    let body = json!({ "s3": 20, "s4": 20, "headerProtection": true });
+    let (status, resp) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(resp["error"].as_str().unwrap().contains("header protection"));
+
+    let body = json!({ "randomTrailers": true });
+    let (status, resp) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(resp["error"].as_str().unwrap().contains("random trailers"));
+
+    // The knobs that don't change datagram shape stay available.
+    let body = json!({ "contentPaddingAddition": "10-40", "disableCookies": true });
+    let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // And the UI is told why, so it can disable the two controls instead of
+    // letting the operator discover it by failing to save.
+    let (_, resp) = get_req(&app, "/api/admin/interface", &cookie).await;
+    assert!(resp["awg3ProxyLock"].as_str().unwrap().contains("proxy"));
+
+    // With the proxy off again they are accepted.
+    let mut off = awg_easy_rs::db::UpdateMap::new();
+    off.insert("enabled".into(), "0".into());
+    awg_easy_rs::db::update_proxy_settings(&off).unwrap();
+    let body = json!({ "randomTrailers": true });
+    let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, resp) = get_req(&app, "/api/admin/interface", &cookie).await;
+    assert!(resp["awg3ProxyLock"].is_null());
+}
+
 #[tokio::test]
 #[serial(db)]
 async fn admin_interface_validates_s3_bound() {

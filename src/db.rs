@@ -84,6 +84,10 @@ pub type UpdateMap = HashMap<String, String>;
 /// by `crate::secretfile`; see that module.
 const ENCRYPTED_COLUMNS: &[(&str, &str)] = &[
     ("interfaces_table", "private_key"),
+    // AmneziaWG 3 header-protection key. Same standing as the device
+    // private key: it is a symmetric key both ends hold, and anyone with
+    // it can strip the header obfuscation off captured traffic.
+    ("interfaces_table", "header_protection_key"),
     ("clients_table", "private_key"),
     ("clients_table", "pre_shared_key"),
     ("xray_inbound_table", "private_key"),
@@ -199,6 +203,31 @@ pub struct Interface {
     pub i3: String,
     pub i4: String,
     pub i5: String,
+    // ---- AmneziaWG 3 device knobs (all inert when empty / false) ----
+    /// Base64 32-byte key enabling AWG 3 header protection: the message
+    /// header is encrypted with the S1–S4 padding as the nonce. **Server-
+    /// side** in upstream's taxonomy — both ends must carry the same value,
+    /// so it is rendered into peer configs too. Empty disables it.
+    ///
+    /// Requires every one of S1–S4 to be at least 12 (the cipher's nonce
+    /// size); amneziawg-go refuses the device otherwise.
+    pub header_protection_key: String,
+    /// Extra random padding added to *data* packets, as `n` or `lo-hi`
+    /// (u16). Client-side, but upstream recommends setting it on both ends.
+    pub content_padding_addition: String,
+    /// WireGuard timer overrides, each `n` or `lo-hi` seconds (u16), except
+    /// `max_handshake_attempts` which is a count. Empty leaves the protocol
+    /// default in place.
+    pub rekey_after_time: String,
+    pub rekey_timeout: String,
+    pub reject_after_time: String,
+    pub keepalive_timeout: String,
+    pub max_handshake_attempts: String,
+    /// Append a random-length trailer to every packet.
+    pub random_trailers: bool,
+    /// Suppress cookie replies entirely (removes the S3/H3 message type
+    /// from the wire).
+    pub disable_cookies: bool,
     pub firewall_enabled: bool,
     /// DNS-leak-prevention master switch. When true, all UDP/TCP :53 and
     /// :853 traffic from peers is DNAT-redirected to `dns_lockdown_target`
@@ -907,6 +936,39 @@ impl Interface {
             i3: row.get("i3")?,
             i4: row.get("i4")?,
             i5: row.get("i5")?,
+            // AWG 3 columns arrived after these rows did; `.ok().flatten()`
+            // keeps a pre-migration DB readable in the window before
+            // apply_migrations() ALTERs them in, exactly like the DNS
+            // lockdown trio below.
+            header_protection_key: row
+                .get::<_, Option<String>>("header_protection_key")
+                .ok()
+                .flatten()
+                .map(|v| dec(&v))
+                .transpose()?
+                .unwrap_or_default(),
+            content_padding_addition: row
+                .get("content_padding_addition")
+                .unwrap_or_default(),
+            rekey_after_time: row.get("rekey_after_time").unwrap_or_default(),
+            rekey_timeout: row.get("rekey_timeout").unwrap_or_default(),
+            reject_after_time: row.get("reject_after_time").unwrap_or_default(),
+            keepalive_timeout: row.get("keepalive_timeout").unwrap_or_default(),
+            max_handshake_attempts: row
+                .get("max_handshake_attempts")
+                .unwrap_or_default(),
+            random_trailers: row
+                .get::<_, Option<i64>>("random_trailers")
+                .ok()
+                .flatten()
+                .map(int_to_bool)
+                .unwrap_or(false),
+            disable_cookies: row
+                .get::<_, Option<i64>>("disable_cookies")
+                .ok()
+                .flatten()
+                .map(int_to_bool)
+                .unwrap_or(false),
             firewall_enabled: int_to_bool(row.get::<_, i64>("firewall_enabled")?),
             // Older DBs (pre DNS-lockdown) may not have these columns yet;
             // default to a disabled / empty configuration so behavior is
@@ -1335,6 +1397,18 @@ CREATE TABLE IF NOT EXISTS interfaces_table (
     i3                TEXT NOT NULL DEFAULT '',
     i4                TEXT NOT NULL DEFAULT '',
     i5                TEXT NOT NULL DEFAULT '',
+    -- AmneziaWG 3 device knobs. All default to "unset", which renders no
+    -- config line at all, so an upgraded deployment's wire format is
+    -- byte-identical until an operator turns one on.
+    header_protection_key    TEXT NOT NULL DEFAULT '',
+    content_padding_addition TEXT NOT NULL DEFAULT '',
+    rekey_after_time         TEXT NOT NULL DEFAULT '',
+    rekey_timeout            TEXT NOT NULL DEFAULT '',
+    reject_after_time        TEXT NOT NULL DEFAULT '',
+    keepalive_timeout        TEXT NOT NULL DEFAULT '',
+    max_handshake_attempts   TEXT NOT NULL DEFAULT '',
+    random_trailers          INTEGER NOT NULL DEFAULT 0,
+    disable_cookies          INTEGER NOT NULL DEFAULT 0,
     firewall_enabled  INTEGER NOT NULL DEFAULT 0,
     -- DNS-leak prevention. dns_lockdown turns on the DNAT redirect of all
     -- peer :53/:853 traffic to dns_lockdown_target; dns_block_external adds
@@ -1846,6 +1920,29 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
             "DB migration: added user_configs_table.default_additional_config"
         );
     }
+    // AmneziaWG 3 device knobs. Same column-at-a-time shape as the DNS
+    // trio below: every one defaults to "unset", so an upgraded DB keeps
+    // rendering exactly the config it rendered before until an operator
+    // turns one on.
+    for (col, ddl) in [
+        ("header_protection_key", "TEXT NOT NULL DEFAULT ''"),
+        ("content_padding_addition", "TEXT NOT NULL DEFAULT ''"),
+        ("rekey_after_time", "TEXT NOT NULL DEFAULT ''"),
+        ("rekey_timeout", "TEXT NOT NULL DEFAULT ''"),
+        ("reject_after_time", "TEXT NOT NULL DEFAULT ''"),
+        ("keepalive_timeout", "TEXT NOT NULL DEFAULT ''"),
+        ("max_handshake_attempts", "TEXT NOT NULL DEFAULT ''"),
+        ("random_trailers", "INTEGER NOT NULL DEFAULT 0"),
+        ("disable_cookies", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        if !column_exists(conn, "interfaces_table", col)? {
+            conn.execute_batch(&format!(
+                "ALTER TABLE interfaces_table ADD COLUMN {col} {ddl}"
+            ))?;
+            tracing::info!("DB migration: added interfaces_table.{col} (AmneziaWG 3)");
+        }
+    }
+
     // DNS-leak-prevention columns. Three separate ALTERs — SQLite ALTER
     // doesn't support multiple ADD COLUMN in one statement, and column-by-
     // column existence checks let an upgrade that crashed mid-way through
@@ -2594,6 +2691,10 @@ const VALID_INTERFACE_COLUMNS: &[&str] = &[
     "name", "device", "port", "private_key", "public_key", "ipv4_cidr", "ipv6_cidr",
     "mtu", "j_c", "j_min", "j_max", "s1", "s2", "s3", "s4",
     "h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5",
+    "header_protection_key", "content_padding_addition",
+    "rekey_after_time", "rekey_timeout", "reject_after_time",
+    "keepalive_timeout", "max_handshake_attempts",
+    "random_trailers", "disable_cookies",
     "firewall_enabled",
     "dns_lockdown", "dns_lockdown_target", "dns_block_external",
     "additional_config", "enabled",
@@ -3846,6 +3947,8 @@ mod migration_tests {
             ("clients_table", "additional_config"),
             ("interfaces_table", "additional_config"),
             ("interfaces_table", "dns_lockdown"),
+            ("interfaces_table", "header_protection_key"),
+            ("interfaces_table", "random_trailers"),
             ("user_configs_table", "default_additional_config"),
         ] {
             assert!(
@@ -3859,6 +3962,71 @@ mod migration_tests {
         apply_migrations(&conn).expect("second apply");
         apply_migrations(&conn).expect("third apply");
         assert!(column_exists(&conn, "clients_table", "advanced_security").unwrap());
+    }
+
+    #[test]
+    fn awg3_columns_are_added_to_a_pre_awg3_interfaces_table() {
+        // The upgrade path that matters: a DB written by the previous
+        // release has none of these columns, and every one must arrive with
+        // a default that renders no config line — otherwise upgrading would
+        // silently change the wire format of a running deployment.
+        let conn = Connection::open_in_memory().expect("open in-memory");
+        create_tables(&conn).expect("create_tables");
+
+        let awg3_cols = [
+            "header_protection_key",
+            "content_padding_addition",
+            "rekey_after_time",
+            "rekey_timeout",
+            "reject_after_time",
+            "keepalive_timeout",
+            "max_handshake_attempts",
+            "random_trailers",
+            "disable_cookies",
+        ];
+        for col in awg3_cols {
+            conn.execute_batch(&format!(
+                "ALTER TABLE interfaces_table DROP COLUMN {col};"
+            ))
+            .unwrap_or_else(|e| panic!("drop {col}: {e}"));
+            assert!(!column_exists(&conn, "interfaces_table", col).unwrap());
+        }
+
+        apply_migrations(&conn).expect("apply_migrations re-adds the AWG 3 columns");
+        for col in awg3_cols {
+            assert!(
+                column_exists(&conn, "interfaces_table", col).unwrap(),
+                "expected interfaces_table.{col} after migration"
+            );
+        }
+
+        // Defaults must be "unset", read back through the same row mapper
+        // the rest of the code uses.
+        conn.execute_batch(
+            "INSERT OR REPLACE INTO interfaces_table \
+             (name, device, port, private_key, public_key, ipv4_cidr, ipv6_cidr) \
+             VALUES ('awg0', 'eth0', 51820, '', 'PUB', '10.8.0.0/24', 'fdcc::/112')",
+        )
+        .expect("seed interface row");
+        let iface = conn
+            .query_row(
+                "SELECT * FROM interfaces_table WHERE name = 'awg0'",
+                [],
+                Interface::from_row,
+            )
+            .expect("read back migrated row");
+        assert!(iface.header_protection_key.is_empty());
+        assert!(iface.content_padding_addition.is_empty());
+        assert!(iface.rekey_after_time.is_empty());
+        assert!(iface.rekey_timeout.is_empty());
+        assert!(iface.reject_after_time.is_empty());
+        assert!(iface.keepalive_timeout.is_empty());
+        assert!(iface.max_handshake_attempts.is_empty());
+        assert!(!iface.random_trailers);
+        assert!(!iface.disable_cookies);
+
+        // Idempotent, like every other migration here.
+        apply_migrations(&conn).expect("second apply");
     }
 
     #[test]

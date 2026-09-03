@@ -179,6 +179,134 @@ fn validate_awg_params(map: &serde_json::Map<String, Value>) -> Result<(), (Stat
     Ok(())
 }
 
+
+/// Why the two shape-changing AmneziaWG 3 knobs are unavailable right now,
+/// or `None` when they are free to use.
+///
+/// Reads the *stored* proxy switch rather than whether the proxy task
+/// happens to be running, so the answer doesn't flicker while the
+/// supervisor is starting or backing off after a crash.
+fn awg3_proxy_lock_reason() -> Option<String> {
+    let settings = db::get_proxy_settings().ok()?;
+    if !settings.enabled {
+        return None;
+    }
+    Some(
+        "the DPI-imitation proxy is enabled: header protection and random \
+         trailers change the datagram shape it parses, so they cannot be \
+         used together with it"
+            .to_string(),
+    )
+}
+
+/// Validate the AmneziaWG 3 half of an interface update.
+///
+/// Split from [`validate_awg_params`] because it needs the *merged* view —
+/// several rules span fields the request may not have sent (header
+/// protection depends on S1–S4, the proxy interlock on a different table),
+/// so it reads the stored row for anything absent from the body.
+fn validate_awg3_params(
+    map: &serde_json::Map<String, Value>,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    use crate::wg::awg3;
+
+    let touches_awg3 = [
+        "headerProtection",
+        "headerProtectionKey",
+        "contentPaddingAddition",
+        "rekeyAfterTime",
+        "rekeyTimeout",
+        "rejectAfterTime",
+        "keepaliveTimeout",
+        "maxHandshakeAttempts",
+        "randomTrailers",
+        "disableCookies",
+    ]
+    .iter()
+    .any(|k| map.contains_key(*k));
+    if !touches_awg3 {
+        return Ok(());
+    }
+
+    for (json_key, config_key) in [
+        ("contentPaddingAddition", "ContentPaddingAddition"),
+        ("rekeyAfterTime", "RekeyAfterTime"),
+        ("rekeyTimeout", "RekeyTimeout"),
+        ("rejectAfterTime", "RejectAfterTime"),
+        ("keepaliveTimeout", "KeepaliveTimeout"),
+        ("maxHandshakeAttempts", "MaxHandshakeAttempts"),
+    ] {
+        if let Some(v) = map.get(json_key).and_then(value_to_string) {
+            if let Err(e) = awg3::validate_range(config_key, &v) {
+                return Err(api_err(StatusCode::BAD_REQUEST, &format!("{e}")));
+            }
+        }
+    }
+    if let Some(v) = map.get("headerProtectionKey").and_then(|v| v.as_str()) {
+        if let Err(e) = awg3::validate_header_protection_key(v) {
+            return Err(api_err(StatusCode::BAD_REQUEST, &format!("{e}")));
+        }
+    }
+
+    // Everything below needs the merged (request over stored) view.
+    let stored = db::get_interface().map_err(map_err)?;
+    let want_header_protection = match map.get("headerProtectionKey").and_then(|v| v.as_str()) {
+        Some(k) => !k.trim().is_empty(),
+        None => match map.get("headerProtection").and_then(json_bool) {
+            Some(b) => b,
+            None => !stored.header_protection_key.is_empty(),
+        },
+    };
+    let want_random_trailers = map
+        .get("randomTrailers")
+        .and_then(json_bool)
+        .unwrap_or(stored.random_trailers);
+
+    if want_header_protection {
+        let s1 = get_i64(map, "s1").unwrap_or(stored.s1);
+        let s2 = get_i64(map, "s2").unwrap_or(stored.s2);
+        let s3 = get_i64(map, "s3").or(stored.s3);
+        let s4 = get_i64(map, "s4").or(stored.s4);
+        if let Err(e) = awg3::check_header_protection_paddings(s1, s2, s3, s4) {
+            return Err(api_err(StatusCode::BAD_REQUEST, &format!("{e}")));
+        }
+    }
+
+    // The interlock, checked from this side too: the proxy's own supervisor
+    // refuses to start against a conflicting interface, but an operator who
+    // sets the knob here would otherwise only find out when the proxy went
+    // quiet.
+    if (want_header_protection || want_random_trailers) && awg3_proxy_lock_reason().is_some() {
+        let conflict = awg3::proxy_conflict(
+            if want_header_protection { "set" } else { "" },
+            want_random_trailers,
+        )
+        .unwrap_or("incompatible with the DPI-imitation proxy");
+        return Err(api_err(
+            StatusCode::CONFLICT,
+            &format!("{conflict}. Turn the proxy off first, or leave this unset."),
+        ));
+    }
+
+    Ok(())
+}
+
+/// Coerce a JSON value the UI might send for a checkbox into a bool.
+/// Accepts a real bool, `"true"`/`"false"`, and 0/1 — the admin form posts
+/// all three shapes depending on the control.
+fn json_bool(v: &Value) -> Option<bool> {
+    match v {
+        Value::Bool(b) => Some(*b),
+        Value::Number(n) => n.as_i64().map(|i| i != 0),
+        Value::String(s) => match s.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "on" | "yes" => Some(true),
+            "false" | "0" | "off" | "no" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Enforce admin role (role >= 1)
 // ---------------------------------------------------------------------------
@@ -628,6 +756,29 @@ pub async fn get_interface(
         "i4": iface.i4,
         "i5": iface.i5,
         "additionalConfig": iface.additional_config,
+        // AmneziaWG 3 device knobs. The header-protection *key* is never
+        // returned: it is a symmetric secret with the same standing as the
+        // device private key (which this endpoint also withholds), and the
+        // UI only needs to know whether it is set. Peers get their copy in
+        // the generated config, so nothing needs it back out of here.
+        "headerProtection": !iface.header_protection_key.is_empty(),
+        "contentPaddingAddition": iface.content_padding_addition,
+        "rekeyAfterTime": iface.rekey_after_time,
+        "rekeyTimeout": iface.rekey_timeout,
+        "rejectAfterTime": iface.reject_after_time,
+        "keepaliveTimeout": iface.keepalive_timeout,
+        "maxHandshakeAttempts": iface.max_handshake_attempts,
+        "randomTrailers": iface.random_trailers,
+        "disableCookies": iface.disable_cookies,
+        // Whether the installed `awg` speaks AWG 3 at all. `null` means the
+        // probe couldn't tell (no awg on PATH, unrecognised banner) — the
+        // UI shows the section without a confirmation rather than hiding a
+        // feature that may well work.
+        "awg3Supported": crate::wg::awg3::tools_support_awg3(),
+        // Set when the DPI-imitation proxy is on, naming the AWG 3 knobs it
+        // cannot carry, so the UI can disable those two controls with the
+        // reason instead of letting the operator discover it via a 400.
+        "awg3ProxyLock": awg3_proxy_lock_reason(),
         "firewallEnabled": iface.firewall_enabled,
         // DNS-leak prevention. Three independent fields so the UI can
         // expose the master switch separately from the redirect target
@@ -662,6 +813,7 @@ pub async fn update_interface(
     // Validate AWG params
     if let Value::Object(ref map) = body {
         validate_awg_params(map)?;
+        validate_awg3_params(map)?;
     }
 
     let mut fields = db::UpdateMap::new();
@@ -689,12 +841,53 @@ pub async fn update_interface(
             ("i5", "i5"),
             ("additionalConfig", "additional_config"),
             ("device", "device"),
+            // AWG 3 range-valued knobs; validated above, stored verbatim.
+            ("contentPaddingAddition", "content_padding_addition"),
+            ("rekeyAfterTime", "rekey_after_time"),
+            ("rekeyTimeout", "rekey_timeout"),
+            ("rejectAfterTime", "reject_after_time"),
+            ("keepaliveTimeout", "keepalive_timeout"),
+            ("maxHandshakeAttempts", "max_handshake_attempts"),
         ];
         for (json_key, db_key) in &mappings {
             if let Some(val) = map.get(*json_key) {
                 if let Some(s) = value_to_string(val) {
                     fields.insert(db_key.to_string(), s);
                 }
+            }
+        }
+        // AWG 3 booleans. Normalised to 0/1 through json_bool so a
+        // checkbox posting "on" can't land in the DB as the string "on"
+        // and read back as false.
+        for (json_key, db_key) in [
+            ("randomTrailers", "random_trailers"),
+            ("disableCookies", "disable_cookies"),
+        ] {
+            if let Some(b) = map.get(json_key).and_then(json_bool) {
+                fields.insert(db_key.to_string(), i64::from(b).to_string());
+            }
+        }
+        // Header-protection key. Two ways in, because they answer different
+        // questions: `headerProtectionKey` sets an exact value (matching an
+        // existing deployment, or rotating to one you generated elsewhere),
+        // while the `headerProtection` toggle asks the server to mint a
+        // fresh key — or clear it. An explicit key wins if both are sent.
+        //
+        // Generating server-side rather than in the browser keeps the key
+        // out of the request log and off the operator's clipboard; peers
+        // receive it in their generated config either way.
+        if let Some(explicit) = map.get("headerProtectionKey").and_then(|v| v.as_str()) {
+            fields.insert("header_protection_key".into(), explicit.trim().to_string());
+        } else if let Some(enable) = map.get("headerProtection").and_then(json_bool) {
+            let stored = db::get_interface().map_err(map_err)?;
+            let already_set = !stored.header_protection_key.is_empty();
+            if enable && !already_set {
+                fields.insert(
+                    "header_protection_key".into(),
+                    crate::wg::awg3::generate_header_protection_key(),
+                );
+            } else if !enable && already_set {
+                fields.insert("header_protection_key".into(), String::new());
             }
         }
         // Special: firewall_enabled boolean
@@ -762,6 +955,32 @@ pub async fn update_interface(
                 // DNS lockdown is also off, rebuild_rules() already
                 // called remove_filtering. Nothing more to do.
                 let _ = iface;
+            }
+
+            // The DPI proxy's start/stop decision now reads AmneziaWG 3
+            // fields (see proxy::supervisor::should_remain_disabled), and
+            // its packet transform reads S1-S4/H1-H4. Re-reconcile when any
+            // of those moved so the running proxy matches the row that was
+            // just written instead of the one it started with.
+            let proxy_relevant = [
+                "headerProtection",
+                "headerProtectionKey",
+                "randomTrailers",
+                "s1",
+                "s2",
+                "s3",
+                "s4",
+                "h1",
+                "h2",
+                "h3",
+                "h4",
+            ]
+            .iter()
+            .any(|k| map.contains_key(*k));
+            if proxy_relevant {
+                if let Err(e) = crate::proxy::supervisor::ensure_running().await {
+                    tracing::warn!("proxy reconcile after interface update failed: {e:#}");
+                }
             }
         }
     }

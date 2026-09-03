@@ -136,38 +136,82 @@ impl HelperConfig {
 /// Run the helper until the process is killed. Blocking; intended to be the
 /// whole of `main` for the `--privileged-helper` subcommand.
 pub fn serve(cfg: HelperConfig) -> Result<()> {
-    if let Some(parent) = cfg.socket_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create socket dir {}", parent.display()))?;
-    }
-    // A stale socket from an unclean shutdown makes bind() fail with EADDRINUSE
-    // even though nothing is listening.
-    if cfg.socket_path.exists() {
-        std::fs::remove_file(&cfg.socket_path).ok();
-    }
+    let parent = cfg
+        .socket_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(&parent)
+        .with_context(|| format!("create socket dir {}", parent.display()))?;
 
-    // Narrow the umask across bind(). `UnixListener::bind` creates the socket
-    // with the process umask applied, and only then can it be chmod'ed — so a
-    // default 0022 umask leaves a window where the socket exists mode 0755 and
-    // any local user can connect and drive the tunnel. Setting the umask first
-    // closes the window instead of racing it. (Same bug class the DB snapshot
-    // path documents: chmod-after-create is not good enough for a secret.)
-    let prev_umask = unsafe { libc::umask(0o177) };
-    let bound = UnixListener::bind(&cfg.socket_path);
-    unsafe { libc::umask(prev_umask) };
-    let listener = bound.with_context(|| format!("bind {}", cfg.socket_path.display()))?;
-
-    // Default to 0600 (root only) and widen to 0660 only when a group was
-    // named. Getting this wrong in the permissive direction would hand every
-    // local account the ability to reconfigure the tunnel, so the tight mode
-    // is the one that needs no argument.
-    let mode = if cfg.allow_gid.is_some() { 0o660 } else { 0o600 };
-    std::fs::set_permissions(&cfg.socket_path, std::fs::Permissions::from_mode(mode))
-        .context("chmod helper socket")?;
-    if let Some(gid) = cfg.allow_gid {
-        chown_gid(&cfg.socket_path, gid)
-            .with_context(|| format!("chown helper socket to gid {gid}"))?;
-    }
+    // Publish the socket by rename, not by binding the final path directly.
+    //
+    // `UnixListener::bind` creates the socket with the process umask applied
+    // and only *then* can it be chmod'ed — under a default 0022 that leaves a
+    // window where the published path exists mode 0755 and any local account
+    // can connect and drive the tunnel. (Same bug class the DB snapshot path
+    // documents: chmod-after-create is not good enough for a secret.)
+    //
+    // The obvious fix — narrow the umask across bind() and restore it after —
+    // is wrong in a multithreaded process, and cost a CI failure to learn:
+    // umask(2) is *process* state, so the narrowed value applies to every
+    // other thread creating a file or directory during the window, and two
+    // threads doing save/restore concurrently leave the process pinned at the
+    // narrow value permanently. The visible damage is a directory created as
+    // `drw-------` — no execute bit — after which every open() inside it
+    // fails EACCES. Root never notices (it bypasses the directory permission
+    // check), so this reproduces only for an unprivileged user.
+    //
+    // Binding an unpredictable temporary name in the same directory, fixing
+    // its mode and owner while nothing can find it, then `rename(2)`-ing it
+    // into place touches no process-global state at all: the published path
+    // only ever exists with the final mode, and rename is atomic. The
+    // listening socket is bound to the inode, so it keeps serving across the
+    // rename. A stale socket at the destination is replaced by the same
+    // rename, which is also why there's no unlink-first race here.
+    let mut nonce = [0u8; 16];
+    crate::rng::fill(&mut nonce);
+    let tmp_name = format!(
+        ".{}.{}.tmp",
+        cfg.socket_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "helper.sock".into()),
+        nonce.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    );
+    let tmp_path = parent.join(tmp_name);
+    let listener = UnixListener::bind(&tmp_path)
+        .with_context(|| format!("bind {}", tmp_path.display()))?;
+    // From here on any early return must not leave the temp socket behind.
+    let publish = |cfg: &HelperConfig, tmp: &Path| -> Result<u32> {
+        // Default to 0600 (root only) and widen to 0660 only when a group was
+        // named. Getting this wrong in the permissive direction would hand
+        // every local account the ability to reconfigure the tunnel, so the
+        // tight mode is the one that needs no argument.
+        let mode = if cfg.allow_gid.is_some() { 0o660 } else { 0o600 };
+        std::fs::set_permissions(tmp, std::fs::Permissions::from_mode(mode))
+            .context("chmod helper socket")?;
+        if let Some(gid) = cfg.allow_gid {
+            chown_gid(tmp, gid)
+                .with_context(|| format!("chown helper socket to gid {gid}"))?;
+        }
+        std::fs::rename(tmp, &cfg.socket_path).with_context(|| {
+            format!(
+                "publish helper socket {} -> {}",
+                tmp.display(),
+                cfg.socket_path.display()
+            )
+        })?;
+        Ok(mode)
+    };
+    let mode = match publish(&cfg, &tmp_path) {
+        Ok(m) => m,
+        Err(e) => {
+            std::fs::remove_file(&tmp_path).ok();
+            return Err(e);
+        }
+    };
 
     tracing::info!(
         "privileged helper listening on {} (interface {}, mode {:o})",
@@ -419,6 +463,71 @@ mod tests {
             allow_gid: None,
         };
         assert_eq!(cfg.conf_path(), Path::new("/etc/wireguard/awg0.conf"));
+    }
+
+    /// `serve()` must not touch the process umask — not even transiently.
+    ///
+    /// The earlier implementation narrowed it across `bind()` and restored
+    /// it after. That is process state, so concurrent helpers (and any
+    /// unrelated thread creating a file during the window) inherited the
+    /// narrowed value, and two overlapping save/restore pairs pinned the
+    /// process at `0o177` for good. The damage shows up as a directory
+    /// created `drw-------` and every open() inside it failing EACCES —
+    /// invisible as root, fatal for an ordinary user, which is exactly how
+    /// it reached main and only broke in CI. This asserts both halves: the
+    /// umask survives concurrent starts, and each socket still lands 0600.
+    #[test]
+    #[serial_test::serial(process_umask)]
+    fn concurrent_serve_does_not_leak_the_narrowed_umask() {
+        let before = unsafe { libc::umask(0o022) };
+        unsafe { libc::umask(0o022) };
+
+        let base = std::env::temp_dir().join(format!("awg-umask-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+
+        let mut sockets = Vec::new();
+        for i in 0..6 {
+            let socket = base.join(format!("h{i}.sock"));
+            sockets.push(socket.clone());
+            let cfg = HelperConfig {
+                socket_path: socket,
+                interface: "awg0".into(),
+                conf_dir: base.join(format!("wg{i}")),
+                allow_gid: None,
+            };
+            std::thread::spawn(move || {
+                let _ = serve(cfg);
+            });
+        }
+        for s in &sockets {
+            for _ in 0..300 {
+                if s.exists() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(s.exists(), "helper socket {} never appeared", s.display());
+        }
+
+        let after = unsafe { libc::umask(0o022) };
+        unsafe { libc::umask(before) };
+
+        let modes: Vec<u32> = sockets
+            .iter()
+            .map(|s| std::fs::metadata(s).unwrap().permissions().mode() & 0o777)
+            .collect();
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert_eq!(
+            after, 0o022,
+            "serve() disturbed the process umask (got {after:#o}); every later \
+             mkdir in this process loses the execute bit"
+        );
+        assert!(
+            modes.iter().all(|m| *m == 0o600),
+            "published sockets must be owner-only, got {modes:?}"
+        );
     }
 
     #[test]

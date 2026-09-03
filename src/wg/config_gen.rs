@@ -38,6 +38,30 @@ fn expand(template: &str, device: &str, port: &str, v4: &str, v6: &str) -> Strin
         .replace("{{ipv6Cidr}}", &sanitize_for_shell(v6))
 }
 
+/// Render the AmneziaWG 3 `[Interface]` lines for this device.
+///
+/// Shared by the server and client config paths so the two ends can never
+/// disagree about a value that has to match (`HeaderProtectionKey`) or that
+/// upstream recommends setting on both (`ContentPaddingAddition`). Emits
+/// nothing at all when no AWG 3 knob is set, which is the default — an
+/// upgraded deployment renders byte-identical configs until an operator
+/// turns one on.
+fn awg3_lines(iface: &db::Interface) -> Vec<String> {
+    crate::wg::awg3::config_lines(
+        &iface.header_protection_key,
+        &[
+            ("ContentPaddingAddition", &iface.content_padding_addition),
+            ("RekeyAfterTime", &iface.rekey_after_time),
+            ("RekeyTimeout", &iface.rekey_timeout),
+            ("RejectAfterTime", &iface.reject_after_time),
+            ("KeepaliveTimeout", &iface.keepalive_timeout),
+            ("MaxHandshakeAttempts", &iface.max_handshake_attempts),
+        ],
+        iface.random_trailers,
+        iface.disable_cookies,
+    )
+}
+
 /// Generate server [Interface] section.
 pub fn generate_server_interface(iface: &db::Interface, hooks: &db::Hooks) -> Result<String> {
     let port = iface.port.to_string();
@@ -67,6 +91,7 @@ pub fn generate_server_interface(iface: &db::Interface, hooks: &db::Hooks) -> Re
     if !iface.i3.is_empty() { awg.push(format!("I3 = {}", iface.i3)); }
     if !iface.i4.is_empty() { awg.push(format!("I4 = {}", iface.i4)); }
     if !iface.i5.is_empty() { awg.push(format!("I5 = {}", iface.i5)); }
+    awg.extend(awg3_lines(iface));
 
     // Free-form append (mirrors amnezia-client's additionalServerConfig).
     // Lives at the bottom of the [Interface] block, just before [Peer]s
@@ -218,6 +243,13 @@ pub fn generate_client_config(
     if let Some(ref s) = client.i3 { if !s.is_empty() { awg.push(format!("I3 = {}", s)); } }
     if let Some(ref s) = client.i4 { if !s.is_empty() { awg.push(format!("I4 = {}", s)); } }
     if let Some(ref s) = client.i5 { if !s.is_empty() { awg.push(format!("I5 = {}", s)); } }
+    // AWG 3 device knobs are rendered from the interface for the client too.
+    // `HeaderProtectionKey` has to match on both ends or nothing decrypts;
+    // `ContentPaddingAddition` is documented as best set on both; and the
+    // timers are the operator's intent for the tunnel as a whole, so a peer
+    // that silently kept protocol defaults would drift from the server's
+    // rekey schedule. There is no per-client override for any of them.
+    awg.extend(awg3_lines(iface));
     // J1/J2/J3/Itime intentionally not emitted — see note in
     // generate_server_interface() above.
 
@@ -295,6 +327,15 @@ mod tests {
             h3: "400-500".into(), h4: "600-700".into(),
             i1: String::new(), i2: String::new(), i3: String::new(),
             i4: String::new(), i5: String::new(),
+            header_protection_key: String::new(),
+            content_padding_addition: String::new(),
+            rekey_after_time: String::new(),
+            rekey_timeout: String::new(),
+            reject_after_time: String::new(),
+            keepalive_timeout: String::new(),
+            max_handshake_attempts: String::new(),
+            random_trailers: false,
+            disable_cookies: false,
             firewall_enabled: false,
             dns_lockdown: false,
             dns_lockdown_target: String::new(),
@@ -386,6 +427,119 @@ mod tests {
         let postdown_idx = cfg.find("PostDown =").unwrap();
         let table_idx = cfg.find("Table = off").unwrap();
         assert!(table_idx > postdown_idx);
+    }
+
+    // ---- AmneziaWG 3 -----------------------------------------------------
+
+    /// Set every AWG 3 knob on a fixture, with S1-S4 legal for header
+    /// protection.
+    fn awg3_iface() -> db::Interface {
+        let mut i = iface_fixture();
+        i.s3 = Some(20);
+        i.s4 = Some(20);
+        i.header_protection_key = "aGVhZGVyLXByb3RlY3Rpb24ta2V5LTMyLWJ5dGVzISE=".into();
+        i.content_padding_addition = "10-40".into();
+        i.rekey_after_time = "90".into();
+        i.rekey_timeout = "5".into();
+        i.reject_after_time = "180".into();
+        i.keepalive_timeout = "25".into();
+        i.max_handshake_attempts = "18".into();
+        i.random_trailers = true;
+        i.disable_cookies = true;
+        i
+    }
+
+    #[test]
+    fn awg3_emits_nothing_when_unset() {
+        // The default fixture has no AWG 3 field set — the whole feature has
+        // to be invisible in the rendered config, or every existing
+        // deployment's wire format changes on upgrade.
+        let conf =
+            generate_server_interface(&iface_fixture(), &hooks_fixture()).unwrap();
+        for key in [
+            "HeaderProtectionKey",
+            "ContentPaddingAddition",
+            "RekeyAfterTime",
+            "RekeyTimeout",
+            "RejectAfterTime",
+            "KeepaliveTimeout",
+            "MaxHandshakeAttempts",
+            "RandomTrailers",
+            "DisableCookies",
+        ] {
+            assert!(!conf.contains(key), "{key} leaked into a default config:\n{conf}");
+        }
+        let client = generate_client_config(
+            &iface_fixture(),
+            &user_config_fixture(),
+            &client_fixture(),
+        )
+        .unwrap();
+        assert!(!client.contains("HeaderProtectionKey"));
+        assert!(!client.contains("RandomTrailers"));
+    }
+
+    #[test]
+    fn awg3_server_config_renders_every_set_knob() {
+        let conf = generate_server_interface(&awg3_iface(), &hooks_fixture()).unwrap();
+        for line in [
+            "HeaderProtectionKey = aGVhZGVyLXByb3RlY3Rpb24ta2V5LTMyLWJ5dGVzISE=",
+            "ContentPaddingAddition = 10-40",
+            "RekeyAfterTime = 90",
+            "RekeyTimeout = 5",
+            "RejectAfterTime = 180",
+            "KeepaliveTimeout = 25",
+            "MaxHandshakeAttempts = 18",
+            "RandomTrailers = on",
+            "DisableCookies = on",
+        ] {
+            assert!(conf.contains(line), "missing {line:?} in:\n{conf}");
+        }
+        // AWG 3 lines belong in [Interface], before the hooks and the
+        // free-form append — not stranded after a [Peer] header.
+        let hpk = conf.find("HeaderProtectionKey").unwrap();
+        assert!(hpk > conf.find("[Interface]").unwrap());
+        assert!(hpk < conf.find("PreUp").unwrap());
+    }
+
+    #[test]
+    fn awg3_client_config_carries_the_same_device_values() {
+        // HeaderProtectionKey has to match on both ends or nothing
+        // decrypts, so a client config that omitted it would hand the
+        // operator a peer that silently never connects.
+        let conf = generate_client_config(
+            &awg3_iface(),
+            &user_config_fixture(),
+            &client_fixture(),
+        )
+        .unwrap();
+        for line in [
+            "HeaderProtectionKey = aGVhZGVyLXByb3RlY3Rpb24ta2V5LTMyLWJ5dGVzISE=",
+            "ContentPaddingAddition = 10-40",
+            "RekeyAfterTime = 90",
+            "RandomTrailers = on",
+            "DisableCookies = on",
+        ] {
+            assert!(conf.contains(line), "missing {line:?} in:\n{conf}");
+        }
+        // Still inside the client's own [Interface], not the [Peer] block
+        // that describes the server.
+        let hpk = conf.find("HeaderProtectionKey").unwrap();
+        assert!(hpk < conf.find("[Peer]").unwrap(), "AWG 3 lines must precede [Peer]");
+    }
+
+    #[test]
+    fn awg3_off_switches_render_no_line_at_all() {
+        // `RandomTrailers = off` is the device default. Emitting it would
+        // change nothing on AWG 3 and abort interface bring-up on AWG 2,
+        // so an off switch has to be silent rather than explicit.
+        let mut i = awg3_iface();
+        i.random_trailers = false;
+        i.disable_cookies = false;
+        let conf = generate_server_interface(&i, &hooks_fixture()).unwrap();
+        assert!(!conf.contains("RandomTrailers"));
+        assert!(!conf.contains("DisableCookies"));
+        assert!(conf.contains("HeaderProtectionKey"), "other knobs still render");
     }
 
     #[test]

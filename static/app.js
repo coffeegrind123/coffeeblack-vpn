@@ -1470,6 +1470,90 @@ async function showAdminTab(tab, e) {
             </div>
           </div>
 
+          <div class="card" style="margin-top:18px">
+            <div class="card-head">
+              <div>
+                <div class="card-title">AmneziaWG 3 <span class="opt">${
+                  iface.awg3Supported === true ? '<span class="pill pill--ok">supported</span>'
+                  : iface.awg3Supported === false ? '<span class="pill pill--err">awg is pre-3.x</span>'
+                  : '<span class="pill">version unknown</span>'
+                }</span></div>
+                <div class="card-sub">Optional AWG 3 device knobs, all off by default — leave a field empty and no config line is written. Timers and padding take a single number or an <span class="mono">N-M</span> range (0-65535).${
+                  iface.awg3Supported === false
+                    ? ' <strong>The installed awg predates AWG 3 and will refuse to bring the interface up if you set any of these.</strong>'
+                    : ''
+                }</div>
+              </div>
+            </div>
+            <div class="card-body">
+              ${iface.awg3ProxyLock ? `<div class="notice notice--warn" style="margin-bottom:14px">
+                <svg><use href="#i-alert"/></svg>
+                <div>${esc(iface.awg3ProxyLock)}</div>
+              </div>` : ''}
+              <div class="stack">
+                <div class="field field--inline">
+                  <label class="toggle ${iface.headerProtection ? 'is-on' : ''}">
+                    <input type="checkbox" id="adm-if-hpk" ${iface.headerProtection ? 'checked' : ''} ${iface.awg3ProxyLock ? 'disabled' : ''}>
+                    <span class="toggle-track"></span>
+                  </label>
+                  <div>
+                    <label class="field-label" for="adm-if-hpk" title="Encrypt the message header with a shared key (AWG 3)">Header protection</label>
+                    <p class="field-help">Encrypts the message header with a shared key, using the S1-S4 padding as the nonce. The server generates the key and writes it into every peer config — it is never shown here. Requires all of S1-S4 to be at least 12.</p>
+                  </div>
+                </div>
+                <div class="field field--inline">
+                  <label class="toggle ${iface.randomTrailers ? 'is-on' : ''}">
+                    <input type="checkbox" id="adm-if-rndtrail" ${iface.randomTrailers ? 'checked' : ''} ${iface.awg3ProxyLock ? 'disabled' : ''}>
+                    <span class="toggle-track"></span>
+                  </label>
+                  <div>
+                    <label class="field-label" for="adm-if-rndtrail" title="Append a random-length trailer to every packet (AWG 3)">Random trailers</label>
+                    <p class="field-help">Appends a random-length trailer to every packet, so packet sizes stop being a fingerprint.</p>
+                  </div>
+                </div>
+                <div class="field field--inline">
+                  <label class="toggle ${iface.disableCookies ? 'is-on' : ''}">
+                    <input type="checkbox" id="adm-if-nocookie" ${iface.disableCookies ? 'checked' : ''}>
+                    <span class="toggle-track"></span>
+                  </label>
+                  <div>
+                    <label class="field-label" for="adm-if-nocookie" title="Stop emitting cookie-reply messages (AWG 3)">Disable cookies</label>
+                    <p class="field-help">Stops the server emitting cookie replies. Removes one message type from the wire — and with it WireGuard's under-load DoS mitigation.</p>
+                  </div>
+                </div>
+              </div>
+              <div class="section-rule">Padding &amp; timers <span style="margin-left:6px;font-weight:400;font-family:var(--font-mono);text-transform:none;letter-spacing:0;color:var(--fg-faint)">number or N-M range, blank = protocol default</span></div>
+              <div class="split-4">
+                <div class="field">
+                  <label class="field-label" for="adm-if-cpa" title="Extra random padding added to data packets (0-65535, or a range)">Content padding <span class="opt">bytes</span></label>
+                  <input type="text" id="adm-if-cpa" class="mono-input" value="${esc(iface.contentPaddingAddition || '')}" placeholder="—">
+                </div>
+                <div class="field">
+                  <label class="field-label" for="adm-if-rekeyafter" title="Seconds after which a peer starts a new handshake">Rekey after <span class="opt">s</span></label>
+                  <input type="text" id="adm-if-rekeyafter" class="mono-input" value="${esc(iface.rekeyAfterTime || '')}" placeholder="—">
+                </div>
+                <div class="field">
+                  <label class="field-label" for="adm-if-rekeytimeout" title="Seconds before an unanswered handshake is retried">Rekey timeout <span class="opt">s</span></label>
+                  <input type="text" id="adm-if-rekeytimeout" class="mono-input" value="${esc(iface.rekeyTimeout || '')}" placeholder="—">
+                </div>
+                <div class="field">
+                  <label class="field-label" for="adm-if-rejectafter" title="Seconds after which a session is refused and a handshake is forced">Reject after <span class="opt">s</span></label>
+                  <input type="text" id="adm-if-rejectafter" class="mono-input" value="${esc(iface.rejectAfterTime || '')}" placeholder="—">
+                </div>
+              </div>
+              <div class="split">
+                <div class="field">
+                  <label class="field-label" for="adm-if-katimeout" title="Seconds of silence before a keepalive is sent">Keepalive timeout <span class="opt">s</span></label>
+                  <input type="text" id="adm-if-katimeout" class="mono-input" value="${esc(iface.keepaliveTimeout || '')}" placeholder="—">
+                </div>
+                <div class="field">
+                  <label class="field-label" for="adm-if-maxhs" title="How many times a handshake is retried before giving up">Max handshake attempts</label>
+                  <input type="text" id="adm-if-maxhs" class="mono-input" value="${esc(iface.maxHandshakeAttempts || '')}" placeholder="—">
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="card">
             <div class="card-head">
               <div>
@@ -2113,6 +2197,30 @@ async function saveAdminInterface(e) {
   const s4 = parseInt($('adm-if-s4').value) || 0;
   if ($('adm-if-s3').value && (s3 < 0 || s3 > 1216)) { showToast('S3 must be 0-1216', 'error'); return; }
   if ($('adm-if-s4').value && (s4 < 0 || s4 > 32)) { showToast('S4 must be 0-32', 'error'); return; }
+  // AWG 3 ranges: same grammar the server enforces (`N` or `N-M`, each
+  // side 0-65535, M >= N). Checked here too so a typo doesn't cost a round
+  // trip — the server is still the authority.
+  for (const [id, label] of [['adm-if-cpa', 'Content padding'], ['adm-if-rekeyafter', 'Rekey after'],
+                             ['adm-if-rekeytimeout', 'Rekey timeout'], ['adm-if-rejectafter', 'Reject after'],
+                             ['adm-if-katimeout', 'Keepalive timeout'], ['adm-if-maxhs', 'Max handshake attempts']]) {
+    const v = ($(id).value || '').trim();
+    if (!v) continue;
+    const m = v.match(/^(\d+)(?:-(\d+))?$/);
+    const lo = m && parseInt(m[1]);
+    const hi = m && parseInt(m[2] === undefined ? m[1] : m[2]);
+    if (!m || lo > 65535 || hi > 65535 || hi < lo) {
+      showToast(label + ' must be a number or N-M range, 0-65535, with M >= N', 'error');
+      return;
+    }
+  }
+  if ($('adm-if-hpk').checked && !$('adm-if-hpk').disabled) {
+    const sVals = [['S1', s1], ['S2', s2], ['S3', $('adm-if-s3').value ? s3 : null], ['S4', $('adm-if-s4').value ? s4 : null]];
+    const small = sVals.filter(([, v]) => v === null || v < 12).map(([n]) => n);
+    if (small.length) {
+      showToast('Header protection needs S1-S4 all >= 12 (too small or unset: ' + small.join(', ') + ')', 'error');
+      return;
+    }
+  }
   // Validate H1-H4 non-overlap
   const h = [$('adm-if-h1').value, $('adm-if-h2').value, $('adm-if-h3').value, $('adm-if-h4').value];
   function parseRange(v) { const m = v.match(/^(\d+)(?:-(\d+))?$/); return m ? [parseInt(m[1]), parseInt(m[2] || m[1])] : null; }
@@ -2149,7 +2257,21 @@ async function saveAdminInterface(e) {
       i3: $('adm-if-i3').value,
       i4: $('adm-if-i4').value,
       i5: $('adm-if-i5').value,
-      additionalConfig: $('adm-if-extra').value
+      additionalConfig: $('adm-if-extra').value,
+      // AmneziaWG 3. The header-protection key itself never round-trips
+      // through the browser: the checkbox asks the server to mint or clear
+      // one. The two shape-changing knobs are disabled while the DPI proxy
+      // is on, and a disabled checkbox reads false — so send what the
+      // server already has instead of silently turning it off.
+      headerProtection: $('adm-if-hpk').disabled ? undefined : $('adm-if-hpk').checked,
+      randomTrailers: $('adm-if-rndtrail').disabled ? undefined : $('adm-if-rndtrail').checked,
+      disableCookies: $('adm-if-nocookie').checked,
+      contentPaddingAddition: $('adm-if-cpa').value.trim(),
+      rekeyAfterTime: $('adm-if-rekeyafter').value.trim(),
+      rekeyTimeout: $('adm-if-rekeytimeout').value.trim(),
+      rejectAfterTime: $('adm-if-rejectafter').value.trim(),
+      keepaliveTimeout: $('adm-if-katimeout').value.trim(),
+      maxHandshakeAttempts: $('adm-if-maxhs').value.trim()
     });
     showToast('Saved', 'success');
   } catch(e) { showToast(e.message, 'error'); }

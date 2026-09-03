@@ -2,6 +2,7 @@
 //!
 //! Pure AmneziaWG — binary is always `awg`/`awg-quick`.
 
+pub mod awg3;
 pub mod cli;
 pub mod config_gen;
 pub mod kernel;
@@ -118,6 +119,32 @@ pub fn save_config() -> Result<()> {
     Ok(())
 }
 
+/// Drop the two AmneziaWG 3 knobs that the DPI-imitation proxy cannot carry.
+///
+/// The admin API refuses to enable either one while the proxy is on (and
+/// vice versa), so reaching this with a conflict set means the DB was
+/// changed some other way — a hand-edited row, a restored snapshot from a
+/// proxy-less deployment. Rendering it anyway would produce a tunnel that
+/// looks configured and passes no traffic, so drop them here as well and
+/// say so loudly. Like the `Jc`/`I1–I5` suppression above this only
+/// touches the rendered copy; the stored row is untouched and comes back
+/// the moment the proxy is turned off.
+///
+/// See `wg::awg3::proxy_conflict` for why each is incompatible.
+fn suppress_awg3_conflicts(gen_iface: &mut crate::db::Interface) {
+    if let Some(reason) = crate::wg::awg3::proxy_conflict(
+        &gen_iface.header_protection_key,
+        gen_iface.random_trailers,
+    ) {
+        tracing::warn!(
+            "dropping an AmneziaWG 3 setting from the rendered config while the \
+             DPI-imitation proxy is active: {reason}"
+        );
+        gen_iface.header_protection_key.clear();
+        gen_iface.random_trailers = false;
+    }
+}
+
 /// Render the full server `.conf` (interface block plus every enabled peer).
 ///
 /// Split out of [`save_config`] so the same text can either be written here or
@@ -144,6 +171,7 @@ pub fn render_server_config() -> Result<String> {
         gen_iface.i3.clear();
         gen_iface.i4.clear();
         gen_iface.i5.clear();
+        suppress_awg3_conflicts(&mut gen_iface);
     }
 
     let mut config = config_gen::generate_server_interface(&gen_iface, &hooks)?;
@@ -218,6 +246,7 @@ pub fn build_client_config(client_id: i64, private_key_override: Option<&str>) -
         gen_client.i3 = None;
         gen_client.i4 = None;
         gen_client.i5 = None;
+        suppress_awg3_conflicts(&mut gen_iface);
     }
     config_gen::generate_client_config(&gen_iface, &user_config, &gen_client)
 }
