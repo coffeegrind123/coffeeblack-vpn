@@ -2,7 +2,7 @@
 # build.rs reads this file to validate that the vendored blob matches the
 # expected version, and prints the version into the binary at compile time.
 
-XRAY_VERSION=v26.3.27
+XRAY_VERSION = v26.3.27
 
 # SHA-256 of the *uncompressed* xray ELF — the runtime extractor uses
 # this to skip re-extraction when the on-disk file already matches.
@@ -12,4 +12,4 @@ XRAY_VERSION=v26.3.27
 # x86_64 only. arm64 was dropped along with the rest of arm64 support
 # (see vendor/README.md "DNS bundle" section for the rationale).
 
-XRAY_AMD64_SHA256=8255dd939c34cf966cc91517b6324dd3c8d0bcf49ffac8beca049a38c46845ed
+XRAY_AMD64_SHA256 = 8255dd939c34cf966cc91517b6324dd3c8d0bcf49ffac8beca049a38c46845ed

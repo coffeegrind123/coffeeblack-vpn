@@ -1513,7 +1513,7 @@ mod tests {
         // (flags & 0xF800 == 0x0000) fails, preventing a false DNS match.
         let mut pkt = vec![0xC3u8, 0x00, 0x80, 0x00, 0x01];
         pkt.push(21); // DCID len > 20
-        pkt.extend(std::iter::repeat_n(0xAA, 21)); // DCID
+        pkt.extend(std::iter::repeat(0xAA).take(21)); // DCID
         pkt.push(0); // SCID len
         assert_eq!(detect_protocol(&pkt), None);
     }
@@ -1526,7 +1526,7 @@ mod tests {
         pkt.push(4); // DCID len
         pkt.extend_from_slice(&[1, 2, 3, 4]); // DCID
         pkt.push(21); // SCID len > 20
-        pkt.extend(std::iter::repeat_n(0xBB, 21)); // SCID
+        pkt.extend(std::iter::repeat(0xBB).take(21)); // SCID
         assert_eq!(detect_protocol(&pkt), None);
     }
 
@@ -1693,7 +1693,7 @@ mod tests {
             0x00, 0x01, 0x01, 0x20, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
         q.push(64); // label length > 63 is invalid (RFC 1035 §2.3.4)
-        q.extend(std::iter::repeat_n(b'a', 64));
+        q.extend(std::iter::repeat(b'a').take(64));
         q.push(0x00);
         q.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
         assert!(parse_dns_query_echo(&q).is_none());

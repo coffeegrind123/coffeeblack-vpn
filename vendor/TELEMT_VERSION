@@ -5,7 +5,7 @@
 # x86_64 only — same target story as the rest of the vendor tree
 # (see vendor/README.md for the rationale).
 
-TELEMT_VERSION = 3.4.24
+TELEMT_VERSION = 3.5.5
 
 # SHA-256 of the *uncompressed* telemt ELF — the runtime extractor uses
 # this to skip re-extraction when the on-disk file already matches.
@@ -13,4 +13,4 @@ TELEMT_VERSION = 3.4.24
 # release page publishes alongside; that's recorded in vendor/README.md
 # under "Telemt provenance".)
 
-TELEMT_AMD64_SHA256 = 37b1eefd8bf11d5ca4e0a2c45ef15ec09b2d7f9bc2ab1285435c3794e735f8de
+TELEMT_AMD64_SHA256 = a284ffe3df5d2fd23f96ba52aebc4e08529dda92add9fecedffd58cf8c85731e

@@ -26,8 +26,9 @@
 #   - bash, curl, gzip, sha256sum, file, tar, awk
 #   - rustup with the x86_64-unknown-linux-musl target installed:
 #       rustup target add x86_64-unknown-linux-musl
-#   - musl-tools (Debian/Ubuntu) or musl-dev (Alpine):
+#   - a musl-capable linker. On glibc hosts that means musl-tools:
 #       apt-get install -y musl-tools
+#     On Alpine the system cc already targets musl — nothing to install.
 #   - docker, for the tor + Go pluggable-transport builds
 #     (xray + dnscrypt-proxy + telemt are pre-built downloads).
 #
@@ -228,9 +229,9 @@ build_release_binary() {
     local out_path="$REPO_ROOT/target/$target/release/awg-easy-rs"
 
     # Same RUSTFLAGS the Dockerfile uses. Documented there in detail —
-    # short version: +crt-static + musl linker + static relocations →
-    # truly static, no PT_INTERP, runs on any libc x86_64 host.
-    local rustflags="-C target-feature=+crt-static -C linker=musl-gcc -C relocation-model=static"
+    # short version: +crt-static + static relocations → truly static, no
+    # PT_INTERP, runs on any libc x86_64 host.
+    local rustflags="-C target-feature=+crt-static -C relocation-model=static"
 
     if ! command -v cargo >/dev/null 2>&1; then
         die "cargo not on PATH — install rustup, then \`rustup target add $target\`"
@@ -239,8 +240,19 @@ build_release_binary() {
         warn "$target not installed; running rustup add"
         rustup target add "$target" || die "failed to install $target target"
     fi
-    if ! command -v musl-gcc >/dev/null 2>&1; then
-        die "musl-gcc not on PATH — install \`musl-tools\` (Debian/Ubuntu) or \`musl-dev\` (Alpine)"
+    # Linker selection. On a glibc host (Debian/Ubuntu/Fedora) the system
+    # cc cannot produce a musl binary, so musl-tools' `musl-gcc` wrapper is
+    # required and must be named explicitly. On Alpine the system cc IS the
+    # musl compiler and there is no `musl-gcc` at all — `apk add musl-dev`
+    # does not create one — so asking for it fails the link outright. Pick
+    # by what the host actually has rather than by package name.
+    if command -v musl-gcc >/dev/null 2>&1; then
+        rustflags="$rustflags -C linker=musl-gcc"
+    elif cc -dumpmachine 2>/dev/null | grep -q musl; then
+        log "musl-gcc absent; using the system cc ($(cc -dumpmachine)), which already targets musl"
+    else
+        die "no musl-capable linker — install \`musl-tools\` (Debian/Ubuntu/Fedora). \
+On Alpine the system cc already targets musl and no extra package is needed."
     fi
 
     log "cargo build --release --target $target"

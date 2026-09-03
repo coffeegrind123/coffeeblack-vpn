@@ -68,8 +68,12 @@ pub struct UserPayload {
     /// change.
     #[serde(default)]
     pub secret: Option<String>,
-    /// Per-user ad_tag override.
-    #[serde(default)]
+    /// Per-user ad_tag override. Telemt names this field `user_ad_tag`
+    /// on the wire — in responses *and* in POST/PATCH request bodies.
+    /// It ignores unknown keys silently (a body with `ad_tag` returns
+    /// 2xx with `user_ad_tag: null`), so the rename is load-bearing:
+    /// verified against telemt 3.4.24 and 3.5.5.
+    #[serde(default, rename = "user_ad_tag")]
     pub ad_tag: Option<String>,
     /// `tg://proxy?...` links pre-rendered by telemt. We pass them
     /// through to the admin UI as-is.
@@ -82,7 +86,8 @@ pub struct UserPayload {
 pub struct CreateUser<'a> {
     pub username: &'a str,
     pub secret: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Serialized as `user_ad_tag` — see [`UserPayload::ad_tag`].
+    #[serde(rename = "user_ad_tag", skip_serializing_if = "Option::is_none")]
     pub ad_tag: Option<&'a str>,
 }
 
@@ -92,7 +97,8 @@ pub struct CreateUser<'a> {
 pub struct PatchUser<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Serialized as `user_ad_tag` — see [`UserPayload::ad_tag`].
+    #[serde(rename = "user_ad_tag", skip_serializing_if = "Option::is_none")]
     pub ad_tag: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
@@ -446,7 +452,8 @@ mod tests {
             ad_tag: Some("aaaabbbbccccddddeeeeffff00001111"),
         })
         .unwrap();
-        assert!(body.contains("\"ad_tag\":\"aaaabbbbccccddddeeeeffff00001111\""));
+        // `user_ad_tag`, not `ad_tag` — telemt drops the latter silently.
+        assert!(body.contains("\"user_ad_tag\":\"aaaabbbbccccddddeeeeffff00001111\""));
     }
 
     #[test]
@@ -480,6 +487,67 @@ mod tests {
         assert_eq!(unwrap_envelope(v.clone()), v);
         let v2 = serde_json::json!({"username": "bob"});
         assert_eq!(unwrap_envelope(v2.clone()), v2);
+    }
+
+    // Telemt calls the per-user ad-tag override `user_ad_tag` on the wire,
+    // in both directions, and silently ignores request keys it doesn't
+    // know — so a body keyed `ad_tag` is answered 2xx with the tag
+    // unset. These pin the name that was measured against telemt 3.4.24
+    // and 3.5.5; a rename regression would otherwise be invisible (the
+    // reconciler would just re-PATCH forever).
+    #[test]
+    fn create_user_serializes_ad_tag_as_user_ad_tag() {
+        let req = CreateUser {
+            username: "alice",
+            secret: "0123456789abcdef0123456789abcdef",
+            ad_tag: Some("ffffffffffffffffffffffffffffffff"),
+        };
+        let v: Value = serde_json::to_value(&req).unwrap();
+        assert_eq!(
+            v.get("user_ad_tag").and_then(|t| t.as_str()),
+            Some("ffffffffffffffffffffffffffffffff")
+        );
+        assert!(v.get("ad_tag").is_none(), "telemt would drop `ad_tag`");
+
+        // Omitted tag stays omitted (telemt treats absent as "unchanged").
+        let bare = CreateUser {
+            username: "bob",
+            secret: "0123456789abcdef0123456789abcdef",
+            ad_tag: None,
+        };
+        let v: Value = serde_json::to_value(&bare).unwrap();
+        assert!(v.get("user_ad_tag").is_none());
+    }
+
+    #[test]
+    fn patch_user_serializes_ad_tag_as_user_ad_tag() {
+        let patch = PatchUser {
+            secret: None,
+            ad_tag: Some(""),
+            enabled: Some(false),
+        };
+        let v: Value = serde_json::to_value(&patch).unwrap();
+        assert_eq!(v.get("user_ad_tag").and_then(|t| t.as_str()), Some(""));
+        assert!(v.get("ad_tag").is_none());
+        assert_eq!(v.get("enabled").and_then(|e| e.as_bool()), Some(false));
+        assert!(v.get("secret").is_none());
+    }
+
+    #[test]
+    fn user_payload_reads_user_ad_tag() {
+        // Shape taken verbatim from a live telemt 3.5.5 GET /v1/users row.
+        let raw = serde_json::json!({
+            "username": "alice",
+            "enabled": true,
+            "user_ad_tag": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "total_octets": 0,
+            "links": {"classic": [], "secure": [], "tls": []},
+        });
+        let u: UserPayload = serde_json::from_value(raw).unwrap();
+        assert_eq!(u.username, "alice");
+        assert_eq!(u.ad_tag.as_deref(), Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+        assert!(u.secret.is_none());
+        assert!(u.links.is_some());
     }
 
     #[test]

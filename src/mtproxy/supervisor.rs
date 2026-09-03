@@ -472,10 +472,13 @@ pub async fn reconcile_users_now() -> Result<()> {
                 // updates flow through the explicit rotate-secret admin
                 // API instead.
                 //
-                // ad_tag is exposed as `user_ad_tag` in GET responses
-                // (POST takes `ad_tag`; the response uses the more
-                // descriptive name). PATCH the override when our DB
-                // value differs from telemt's.
+                // ad_tag is named `user_ad_tag` everywhere in telemt's
+                // API — responses *and* POST/PATCH bodies (measured on
+                // 3.4.24 and 3.5.5; a body keyed `ad_tag` is accepted
+                // with 2xx and silently dropped, which made this PATCH
+                // fire on every reconcile pass and never converge).
+                // `client::{CreateUser,PatchUser}` carry the rename.
+                // PATCH the override when our DB value differs.
                 let live_ad_tag = live.get("user_ad_tag").and_then(|v| v.as_str());
                 let want_ad_tag = u.ad_tag.as_deref();
                 if live_ad_tag != want_ad_tag {

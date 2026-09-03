@@ -22,17 +22,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
-      # Dependency policy gate — runs first (needs no toolchain or vendor
-      # blobs) so a supply-chain problem fails the run in seconds rather than
-      # after the multi-minute build. Enforces deny.toml: RUSTSEC advisories,
-      # yanked crates, the license allowlist, the duplicate-version allowlist,
-      # and crates.io-only sources. The action pins and caches cargo-deny.
-      - name: Dependency policy (cargo-deny)
-        uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check advisories bans licenses sources
+      - uses: actions/checkout@v7
 
       # Rustup ships with the runner; we just need the musl target +
       # musl-tools (provides the musl-gcc linker our RUSTFLAGS asks
@@ -47,11 +37,42 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq musl-tools
 
+      # Dependency policy gate — first thing after the toolchain, before the
+      # multi-minute vendor materialisation and build, so a supply-chain
+      # problem fails the run in ~a minute. Enforces deny.toml: RUSTSEC
+      # advisories, yanked crates, the license allowlist, the duplicate-version
+      # allowlist, and crates.io-only sources.
+      #
+      # Deliberately NOT EmbarkStudios/cargo-deny-action: that action runs in
+      # an Alpine container whose rustup cannot install the musl-host build of
+      # the toolchain rust-toolchain.toml pins, so every run since 2026-07-18
+      # died on `override toolchain '<ver>-x86_64-unknown-linux-musl' is not
+      # installed` — before clippy or the tests, which is why lint drift
+      # reached main unnoticed. Running the release binary directly on the
+      # runner sidesteps the container entirely, and pinning the version +
+      # SHA-256 matches how every other third-party binary here is vendored.
+      - name: Dependency policy (cargo-deny)
+        env:
+          DENY_VERSION: "0.20.2"
+          DENY_SHA256: "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
+        run: |
+          set -euo pipefail
+          # Staged in RUNNER_TEMP so nothing lands in the checkout — the
+          # release job later archives from a clean working tree.
+          tarball="${RUNNER_TEMP}/cargo-deny-${DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          curl -sSfL -o "$tarball" \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/${DENY_VERSION}/cargo-deny-${DENY_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          echo "${DENY_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" --strip-components=1 -C "${RUNNER_TEMP}" \
+            "cargo-deny-${DENY_VERSION}-x86_64-unknown-linux-musl/cargo-deny"
+          "${RUNNER_TEMP}/cargo-deny" --version
+          "${RUNNER_TEMP}/cargo-deny" check advisories bans licenses sources
+
       # Cache the cargo registry / git index / build outputs. Keyed on
       # the lockfile + pin files so a vendor bump or dependency change
       # invalidates the cache cleanly. Saves ~3 min on repeat runs.
       - name: Cache cargo registry + target
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -68,10 +89,10 @@ jobs:
       # Cache key includes the union of every pin file's content, so
       # bumping any binary version invalidates the cache exactly once.
       - name: Cache vendor binary blobs
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: vendor/*.gz
-          key: vendor-${{ runner.os }}-${{ hashFiles('vendor/XRAY_VERSION', 'vendor/DNS_BUNDLE_VERSION', 'vendor/TELEMT_VERSION') }}
+          key: vendor-${{ runner.os }}-${{ hashFiles('vendor/*_VERSION') }}
 
       # Materialise the vendored binary blobs first (xray/telemt/mdnsvpn/
       # dnscrypt/tor/PTs). The quality gate and tests below must run with the

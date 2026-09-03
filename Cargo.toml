@@ -113,7 +113,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 
 [dev-dependencies]
-serial_test = { version = "3", features = ["async"] }
+# 4.x, not 3.x: serial_test 3 pins scc 2, and scc < 3.8.4 carries
+# RUSTSEC-2026-0205 (Array::insert double-free on a panicking comparator).
+# deny.toml keeps `ignore = []`, so the fix is the bump, not a silence.
+serial_test = { version = "4", features = ["async"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 

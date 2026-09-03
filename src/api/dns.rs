@@ -56,6 +56,10 @@ pub async fn get_bundle(
         "torPlugin": b.tor_plugin,
         "additionalConfig": b.additional_config,
         "isBundled": crate::dns::is_bundled(),
+        // When isBundled is false this says which half is missing —
+        // an unpinned binary vs a vendor blob that was never
+        // materialised. Empty string when the bundle is present.
+        "bundleIncompleteReason": crate::dns::bundle_incomplete_reason(),
         "embeddedVersions": versions_payload(),
     })))
 }

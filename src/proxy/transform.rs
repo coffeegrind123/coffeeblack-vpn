@@ -1499,7 +1499,7 @@ mod tests {
 
         let mut pkt = vec![0xFF; pad_size];
         pkt.extend_from_slice(&header.to_le_bytes());
-        pkt.extend(std::iter::repeat_n(0xAB, body_len));
+        pkt.extend(std::iter::repeat(0xAB).take(body_len));
         (pkt, pad_size, header)
     }
 

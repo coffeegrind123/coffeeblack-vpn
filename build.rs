@@ -169,6 +169,7 @@ fn process_dns_bundle(
                 println!("cargo:rustc-env=AWG_EASY_DNS_{}_VERSION=", bin.env_prefix);
                 println!("cargo:rustc-env=AWG_EASY_DNS_{}_SHA256=", bin.env_prefix);
             }
+            println!("cargo:rustc-env=AWG_EASY_DNS_BUNDLE_INCOMPLETE=DNS_BUNDLE_VERSION missing");
             return;
         }
     };
@@ -190,6 +191,10 @@ fn process_dns_bundle(
             println!("cargo:rustc-env=AWG_EASY_DNS_{}_VERSION=", bin.env_prefix);
             println!("cargo:rustc-env=AWG_EASY_DNS_{}_SHA256=", bin.env_prefix);
         }
+        println!(
+            "cargo:rustc-env=AWG_EASY_DNS_BUNDLE_INCOMPLETE=unsupported target \
+{target_os}-{target_arch}"
+        );
         return;
     };
 
@@ -240,6 +245,14 @@ fn process_dns_bundle(
             println!("cargo:rustc-env=AWG_EASY_DNS_{}_VERSION={ver}", bin.env_prefix);
             println!("cargo:rustc-env=AWG_EASY_DNS_{}_SHA256={sha}", bin.env_prefix);
         }
+        // The pins alone don't decide `dns_bundled` — the blobs have to be
+        // on disk too, and they're CI artifacts (vendor/*.gz is untracked).
+        // Surface *why* the bundle is off so the DNS bundle API (and the
+        // tests) can tell a deliberate no-bundle build from a broken pin.
+        println!(
+            "cargo:rustc-env=AWG_EASY_DNS_BUNDLE_INCOMPLETE={}",
+            missing.join(", ")
+        );
         return;
     }
 
@@ -263,6 +276,7 @@ fn process_dns_bundle(
         println!("cargo:rustc-env=AWG_EASY_DNS_{}_VERSION={ver}", bin.env_prefix);
         println!("cargo:rustc-env=AWG_EASY_DNS_{}_SHA256={sha}", bin.env_prefix);
     }
+    println!("cargo:rustc-env=AWG_EASY_DNS_BUNDLE_INCOMPLETE=");
     println!("cargo:rustc-cfg=dns_bundled");
 }
 

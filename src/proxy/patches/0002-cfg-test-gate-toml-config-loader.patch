@@ -1,0 +1,38 @@
+--- config.rs
++++ config.rs
+@@ -436,7 +436,16 @@
+     }
+ }
+ 
+-/// Load configuration from a TOML file at the given path.
++// The TOML load/parse/validate path is test-only scaffolding retained from the
++// upstream port: at runtime the proxy's `ProxyConfig` is assembled from the
++// SQLite DB, never from a file (see `proxy/supervisor.rs`). Gating this trio
++// behind `#[cfg(test)]` keeps the ported config tests compiling while removing
++// the entire `toml` dependency tree (~8 crates: toml/toml_edit/toml_datetime/
++// serde_spanned/winnow/indexmap/hashbrown) from the release binary — `toml` is
++// now a dev-dependency only.
++
++/// Load configuration from a TOML file at the given path. Test-only.
++#[cfg(test)]
+ pub fn load_config(path: &Path) -> Result<ProxyConfig, ProxyError> {
+     let contents = std::fs::read_to_string(path)
+         .map_err(|e| ProxyError::Config(format!("failed to read {}: {}", path.display(), e)))?;
+@@ -446,7 +455,8 @@
+     Ok(config)
+ }
+ 
+-/// Parse configuration from a TOML string.
++/// Parse configuration from a TOML string. Test-only.
++#[cfg(test)]
+ pub fn parse_config(toml_str: &str) -> Result<ProxyConfig, ProxyError> {
+     let config: ProxyConfig =
+         toml::from_str(toml_str).map_err(|e| ProxyError::Config(format!("invalid TOML: {e}")))?;
+@@ -454,6 +464,7 @@
+     Ok(config)
+ }
+ 
++#[cfg(test)]
+ fn validate(config: &ProxyConfig) -> Result<(), ProxyError> {
+     config
+         .listen

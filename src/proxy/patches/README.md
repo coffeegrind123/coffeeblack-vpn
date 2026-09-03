@@ -1,10 +1,10 @@
-# Local security patches for the vendored proxy
+# Local patches for the vendored proxy
 
 These patches are applied by `scripts/vendor-proxy.sh` **after** the upstream
 mirror is fetched and the `crate:: → crate::proxy::` transform is run — so the
 vendored `.rs` files under `src/proxy/` stay a byte-diffable mirror of upstream,
-while our hardening survives every `sync`/upgrade instead of being silently
-reverted.
+while our hardening (and the couple of build-shape divergences below) survives
+every `sync`/upgrade instead of being silently reverted.
 
 Format: unified diff with `p0` paths (bare filename, e.g. `--- transform.rs`),
 applied with `patch -p0` inside the staging dir.
@@ -23,6 +23,18 @@ applied with `patch -p0` inside the staging dir.
 
   Both are cover bytes in the rewritten `[0..S]` prefix only — they never
   touch the encrypted region, and the tunnel is unaffected.
+
+- **`0002-cfg-test-gate-toml-config-loader.patch`** — puts `#[cfg(test)]`
+  on `config.rs`'s `load_config` / `parse_config` / `validate`. Upstream
+  is a standalone daemon that reads a TOML file; here the `ProxyConfig`
+  is assembled from SQLite by `proxy/supervisor.rs` and the file path is
+  never taken, so gating the trio keeps the ported config tests
+  compiling while dropping `toml` and its ~8-crate tree
+  (toml/toml_edit/toml_datetime/serde_spanned/winnow/indexmap/hashbrown)
+  out of the release binary — `toml` is a dev-dependency only. Not a
+  security fix, but the same reasoning applies: as a patch it survives
+  every `sync`, whereas a hand-edit would be reverted on the next
+  upgrade and silently re-inflate the binary.
 
 ## Adding / refreshing a patch
 

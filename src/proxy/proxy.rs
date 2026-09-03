@@ -370,14 +370,12 @@ impl Proxy {
             "proxy initialized"
         );
 
-        let probe_budget = Arc::new(GlobalProbeBudget::new(config.probe_reply_bytes_per_sec));
-
         Ok(Self {
+            probe_budget: Arc::new(GlobalProbeBudget::new(config.probe_reply_bytes_per_sec)),
             config,
             frontend,
             sessions,
             metrics,
-            probe_budget,
             fixed_protocol,
             client_protocols: Arc::new(DashMap::new()),
             awg_params: awg_params.map(Arc::new),
@@ -405,13 +403,12 @@ impl Proxy {
         protocol: Protocol,
         awg_params: Option<AwgParams>,
     ) -> Self {
-        let probe_budget = Arc::new(GlobalProbeBudget::new(config.probe_reply_bytes_per_sec));
         Self {
+            probe_budget: Arc::new(GlobalProbeBudget::new(config.probe_reply_bytes_per_sec)),
             config,
             frontend,
             sessions,
             metrics,
-            probe_budget,
             fixed_protocol: Some(protocol),
             client_protocols: Arc::new(DashMap::new()),
             awg_params: awg_params.map(Arc::new),
@@ -432,11 +429,17 @@ impl Proxy {
 
     async fn send_quic_responses(&self, responses: Vec<QuicResponse>) {
         for response in responses {
-            // Aggregate ceiling on unauthenticated reply bytes. `continue`,
-            // not `break`: one batch carries responses for many destinations,
-            // so stopping at the first that does not fit would suppress
-            // unrelated destinations that still had budget. A dropped QUIC
-            // datagram is indistinguishable from packet loss to a real peer.
+            // Charged per datagram, not per handshake: one QUIC Initial can
+            // produce several responses carrying a ServerHello and a
+            // certificate chain, making this the largest unauthenticated reply
+            // the proxy emits. Dropping one is safe -- a gap in a handshake is
+            // indistinguishable from packet loss, which every real QUIC
+            // endpoint already tolerates.
+            //
+            // `continue`, not `break`: `handle_timeouts` batches responses for
+            // *many* connections into one Vec (quic_handshake.rs:220), so
+            // stopping at the first datagram that does not fit would suppress
+            // unrelated destinations that still had budget for smaller ones.
             if !self.probe_budget.try_consume(response.payload.len()) {
                 debug!(
                     destination = %response.destination,
@@ -987,9 +990,9 @@ impl Proxy {
                 debug!(%client_addr, method = %method, "SIP response rate limited");
                 continue;
             }
-            // Charge every datagram, not every request: the Invited arm returns
-            // both 100 Trying and 180 Ringing, so a per-request charge would let
-            // SIP emit at twice the accounted rate.
+            // Charge every datagram, not every request: the Invited arm
+            // returns both 100 Trying and 180 Ringing, so a per-request charge
+            // would let SIP emit at twice the accounted rate.
             if !self.probe_budget.try_consume(pkt.len()) {
                 debug!(%client_addr, method = %method, "SIP response suppressed by the global byte budget");
                 continue;
@@ -1028,12 +1031,9 @@ impl Proxy {
             let frontend = Arc::clone(&self.frontend);
             let dialogs = Arc::clone(&self.sip_dialogs);
             let metrics = metrics_ref.as_ref().map(Arc::clone);
+            let probe_budget = Arc::clone(&self.probe_budget);
             let mut shutdown_rx = self.shutdown_tx.subscribe();
             let sip_deferred_handles = Arc::clone(&self.sip_deferred_handles);
-            // Deferred datagrams are emitted from this detached task long after
-            // the request was charged, so they must draw on the same aggregate
-            // budget or the timers become an uncounted amplification path.
-            let probe_budget = Arc::clone(&self.probe_budget);
             let generation = self.sip_deferred_generation.fetch_add(1, Ordering::Relaxed);
             let expected_call_id = match fresh_call_id {
                 Some(call_id) => call_id,
@@ -1063,10 +1063,13 @@ impl Proxy {
                         }
                         let pkt = responder::generate_sip_ringing(&d);
                         let len = pkt.len();
-                        // Charged after the stage check, for the real length: a
-                        // dialog that already moved on sends nothing, and
-                        // charging then would let INVITE/CANCEL pairs that never
-                        // produce a datagram drain the ceiling.
+                        // Deferred datagrams are emitted from a detached task long
+                        // after the request was charged, so they must draw on the
+                        // same budget or the timers become an uncounted egress
+                        // path. Charged here rather than before the stage check: a
+                        // dialog that has already moved on sends nothing, and
+                        // charging for it would let an attacker drain the ceiling
+                        // with INVITE/CANCEL pairs that never produce a datagram.
                         if !probe_budget.try_consume(len) {
                             debug!(%client_addr, "deferred SIP 180 Ringing suppressed by the global byte budget");
                             return None;
@@ -1120,8 +1123,9 @@ impl Proxy {
                         }
                         let pkt = responder::generate_sip_ok(&d);
                         let len = pkt.len();
-                        // Same budget as the 180 Ringing timer above, for the
-                        // real length rather than the 512-byte maximum.
+                        // Charged after the stage check, and for the real length
+                        // rather than the 512-byte maximum -- see the 180 Ringing
+                        // timer above.
                         if !probe_budget.try_consume(len) {
                             debug!(%client_addr, "deferred SIP 200 OK suppressed by the global byte budget");
                             return None;
@@ -1213,8 +1217,8 @@ impl Proxy {
                 }
                 _ = wait_for_shutdown(&mut shutdown_rx) => return,
             };
-            // The forwarded answer is attacker-influenced in size — this is the
-            // amplification path — so it is charged like any other
+            // The forwarded answer is attacker-influenced in size -- this is
+            // the amplification path -- so it is charged like any other
             // unauthenticated reply.
             if !probe_budget.try_consume(response.len()) {
                 debug!(%client_addr, "forwarded DNS response suppressed by the global byte budget");
@@ -2223,8 +2227,8 @@ mod tests {
             pkt[5] = 8;
         }
         // bytes 6..14: DCID (arbitrary non-zero)
-        for byte in pkt.iter_mut().take(std::cmp::min(14, s4)).skip(6) {
-            *byte = 0xAB;
+        for i in 6..std::cmp::min(14, s4) {
+            pkt[i] = 0xAB;
         }
         if s4 > 14 {
             pkt[14] = 0;
@@ -2232,7 +2236,7 @@ mod tests {
         // Append H4 header (LE u32) then body to meet TransportData minimum size.
         pkt.extend_from_slice(&h4_value.to_le_bytes());
         // Body: needs at least WG_TRANSPORT_DATA_MIN_SIZE (32) bytes after s4.
-        pkt.extend(std::iter::repeat_n(0xBBu8, 32));
+        pkt.extend(std::iter::repeat(0xBBu8).take(32));
         pkt
     }
 
@@ -2264,7 +2268,7 @@ mod tests {
         pos += 2;
         pkt[pos..pos + 2].copy_from_slice(&[0x00, 0x01]); // QCLASS IN
         pkt.extend_from_slice(&params.h4.min.to_le_bytes());
-        pkt.extend(std::iter::repeat_n(0xBBu8, 32));
+        pkt.extend(std::iter::repeat(0xBBu8).take(32));
         pkt
     }
 
@@ -2350,6 +2354,163 @@ mod tests {
         assert_eq!(echo.txid, [0x12, 0x34], "TXID captured");
         assert_eq!(echo.qname, qname.to_vec(), "QNAME captured");
         assert_eq!(echo.qtype, [0x00, 0x01], "QTYPE captured");
+    }
+
+    /// The per-client limiter is keyed by source address, so an attacker who
+    /// spoofs the source never hits it twice. This asserts the aggregate byte
+    /// ceiling actually binds *on the send path*.
+    ///
+    /// It counts datagrams that really arrive at a socket rather than the
+    /// budget's own counters: `try_consume` increments those whether or not
+    /// the caller honours its answer, so asserting on them passes even if the
+    /// gate is deleted. Verified by mutation — replacing the gate with
+    /// `let _ = ...try_consume(..)` must make this test fail.
+    #[tokio::test]
+    async fn global_byte_budget_binds_on_the_send_path() {
+        const PROBES: usize = 200;
+        const BUDGET: u32 = 512;
+
+        let victim = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let victim_addr = victim.local_addr().unwrap();
+
+        let config = ProxyConfig {
+            listen: "127.0.0.1:0".into(),
+            backend: "127.0.0.1:1".into(),
+            // Deliberately generous: anything suppressed below was suppressed
+            // by the global ceiling, not by the per-client bucket.
+            rate_limit_per_sec: 100_000,
+            probe_reply_bytes_per_sec: BUDGET,
+            imitate_protocol: "dns".into(),
+            quic_handshake_enabled: false,
+            dns_forward_enabled: false,
+            ..Default::default()
+        };
+
+        let proxy = Proxy::bind(config, None).await.unwrap();
+
+        for i in 0..PROBES {
+            proxy
+                .handle_client_packet(&dns_query([(i >> 8) as u8, i as u8]), victim_addr)
+                .await;
+        }
+
+        // Drain whatever actually arrived.
+        let mut received = 0usize;
+        let mut buf = [0u8; 2048];
+        while tokio::time::timeout(Duration::from_millis(50), victim.recv_from(&mut buf))
+            .await
+            .is_ok()
+        {
+            received += 1;
+        }
+
+        // A DNS SERVFAIL echo here is ~29 bytes, so a 512-byte ceiling admits
+        // roughly 17. Two seconds' worth is the flakiness allowance.
+        assert!(
+            received > 0,
+            "the ceiling must throttle, not silence: nothing was delivered"
+        );
+        assert!(
+            received < PROBES / 2,
+            "budget did not bind on the send path: {received} of {PROBES} probes were answered"
+        );
+    }
+
+    /// The QUIC handshake responder emits a `Vec` of datagrams per Initial —
+    /// ServerHello plus a certificate chain — which makes it the largest
+    /// unauthenticated reply the proxy produces. It was missed in the first
+    /// pass of this ceiling and reported in review; this pins it.
+    #[tokio::test]
+    async fn global_byte_budget_binds_on_the_quic_handshake_path() {
+        const BUDGET: u32 = 512;
+
+        let victim = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let victim_addr = victim.local_addr().unwrap();
+
+        let config = ProxyConfig {
+            listen: "127.0.0.1:0".into(),
+            backend: "127.0.0.1:1".into(),
+            rate_limit_per_sec: 100_000,
+            probe_reply_bytes_per_sec: BUDGET,
+            imitate_protocol: "quic".into(),
+            ..Default::default()
+        };
+        let proxy = Proxy::bind(config, None).await.unwrap();
+
+        // Ten 200-byte datagrams = 2000 bytes against a 512-byte ceiling.
+        let responses: Vec<QuicResponse> = (0..10)
+            .map(|_| QuicResponse {
+                destination: victim_addr,
+                payload: bytes::Bytes::from(vec![0u8; 200]),
+            })
+            .collect();
+        proxy.send_quic_responses(responses).await;
+
+        let mut received = 0usize;
+        let mut buf = [0u8; 2048];
+        while tokio::time::timeout(Duration::from_millis(50), victim.recv_from(&mut buf))
+            .await
+            .is_ok()
+        {
+            received += 1;
+        }
+
+        // 512 / 200 = 2 whole datagrams.
+        assert!(
+            received <= 4,
+            "QUIC handshake egress must be bounded by the ceiling, got {received} datagrams"
+        );
+        assert!(
+            received < 10,
+            "budget did not bind on the QUIC path: all 10 datagrams were sent"
+        );
+    }
+
+    /// `handle_timeouts` batches responses for many connections into one Vec
+    /// (`quic_handshake.rs:220`), so one oversized datagram must not cancel
+    /// the rest: `send_quic_responses` skips and keeps going rather than
+    /// stopping at the first refusal. Reported in review against an earlier
+    /// `break`.
+    #[tokio::test]
+    async fn quic_budget_skips_one_oversized_datagram_without_dropping_the_batch() {
+        let victim = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let victim_addr = victim.local_addr().unwrap();
+
+        let config = ProxyConfig {
+            listen: "127.0.0.1:0".into(),
+            backend: "127.0.0.1:1".into(),
+            rate_limit_per_sec: 100_000,
+            probe_reply_bytes_per_sec: 400,
+            imitate_protocol: "quic".into(),
+            ..Default::default()
+        };
+        let proxy = Proxy::bind(config, None).await.unwrap();
+
+        // One datagram larger than the entire allowance, then three that fit.
+        // With `break`, all three are lost; with `continue`, all three arrive.
+        let mut responses = vec![QuicResponse {
+            destination: victim_addr,
+            payload: bytes::Bytes::from(vec![0u8; 500]),
+        }];
+        responses.extend((0..3).map(|_| QuicResponse {
+            destination: victim_addr,
+            payload: bytes::Bytes::from(vec![0u8; 100]),
+        }));
+        proxy.send_quic_responses(responses).await;
+
+        let mut received = 0usize;
+        let mut buf = [0u8; 2048];
+        while tokio::time::timeout(Duration::from_millis(50), victim.recv_from(&mut buf))
+            .await
+            .is_ok()
+        {
+            received += 1;
+        }
+
+        assert_eq!(
+            received, 3,
+            "the three affordable datagrams must survive one oversized peer in the batch"
+        );
     }
 
     /// Minimal well-formed DNS query: 12-byte header (given TXID, RD=1,
@@ -2922,6 +3083,81 @@ Content-Length: 0\r\n\r\n";
         assert!(
             duplicate.is_err(),
             "deferred timer must not emit a second 180 after retransmit"
+        );
+    }
+
+    /// A deferred SIP timer that fires after its dialog has moved on sends
+    /// nothing, so it must not spend the global ceiling either. Charging before
+    /// the stage check let an attacker drain camouflage for everyone with
+    /// INVITE/retransmit pairs that never produce a datagram -- a phantom
+    /// charge, reported in review.
+    ///
+    /// Asserting on `bytes_admitted` is correct *here*, unlike in the send-path
+    /// tests: the question is precisely whether allowance was consumed, not
+    /// whether bytes reached the wire.
+    #[tokio::test]
+    async fn deferred_sip_timer_does_not_charge_the_budget_when_it_sends_nothing() {
+        let backend = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let backend_addr = backend.local_addr().unwrap();
+
+        let proxy = Proxy::bind(sip_test_config(backend_addr), None)
+            .await
+            .unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let client_addr = client.local_addr().unwrap();
+        let metrics_ref = proxy.metrics.get_or_create(client_addr);
+
+        // Built by joining rather than with a line-continuation literal: this
+        // file is CRLF, and a bare CR inside a `\`-continued string is a parse
+        // error.
+        let invite = [
+            "INVITE sip:olivia@profi.ru SIP/2.0",
+            "Via: SIP/2.0/UDP 172.23.4.143:59672;branch=z9hG4bKee43689b8812e305;rport",
+            "From: Frank545 <sip:frank545@profi.ru>;tag=a3c46b4581b775e4",
+            "To: Olivia <sip:olivia@profi.ru>",
+            "Call-ID: phantom-charge-call@192.168.224.194",
+            "CSeq: 95929 INVITE",
+            "Content-Length: 0",
+            "",
+            "",
+        ]
+        .join("\r\n");
+        let invite = invite.as_bytes();
+
+        // First INVITE arms the deferred 180/200 timers.
+        proxy
+            .handle_sip_probe(invite, client_addr, &metrics_ref, true)
+            .await;
+        let mut buf = [0u8; 1024];
+        tokio::time::timeout(Duration::from_millis(200), client.recv_from(&mut buf))
+            .await
+            .expect("fresh INVITE should receive 100 Trying")
+            .unwrap();
+
+        // Retransmit drives the dialog past Invited, so both deferred timers
+        // will find it ineligible and send nothing.
+        proxy
+            .handle_sip_probe(invite, client_addr, &metrics_ref, true)
+            .await;
+        for _ in 0..2 {
+            tokio::time::timeout(Duration::from_millis(200), client.recv_from(&mut buf))
+                .await
+                .expect("retransmit should receive immediate responses")
+                .unwrap();
+        }
+
+        let before = proxy.probe_budget.bytes_admitted.load(Ordering::Relaxed);
+        // Window covers the 200 ms deferred 180 Ringing and stops short of the
+        // 800 ms deferred 200 OK. That second timer accepts `Invited | Ringing`,
+        // so after a retransmit it is still eligible and *does* legitimately
+        // send -- including it here would measure a real datagram, not a
+        // phantom charge.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let after = proxy.probe_budget.bytes_admitted.load(Ordering::Relaxed);
+
+        assert_eq!(
+            before, after,
+            "deferred timers that send nothing must not consume the global ceiling"
         );
     }
 
@@ -3776,229 +4012,5 @@ Content-Length: 0\r\n\r\n";
         assert!(text.contains("Call-ID: new-call@192.168.224.194"));
         assert!(!text.contains("old-call@192.168.224.194"));
         assert!(!proxy.sip_dialogs.contains_key(&client_addr));
-    }
-
-    // --- Global probe-reply byte budget (upstream v0.1.8) -------------------
-
-    /// The per-client limiter is keyed by source address, so an attacker who
-    /// spoofs the source never hits it twice. This asserts the aggregate byte
-    /// ceiling actually binds *on the send path*.
-    ///
-    /// It counts datagrams that really arrive at a socket rather than the
-    /// budget's own counters: `try_consume` increments those whether or not
-    /// the caller honours its answer, so asserting on them passes even if the
-    /// gate is deleted. Verified by mutation — replacing the gate with
-    /// `let _ = ...try_consume(..)` must make this test fail.
-    #[tokio::test]
-    async fn global_byte_budget_binds_on_the_send_path() {
-        const PROBES: usize = 200;
-        const BUDGET: u32 = 512;
-
-        let victim = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let victim_addr = victim.local_addr().unwrap();
-
-        let config = ProxyConfig {
-            listen: "127.0.0.1:0".into(),
-            backend: "127.0.0.1:1".into(),
-            // Deliberately generous: anything suppressed below was suppressed
-            // by the global ceiling, not by the per-client bucket.
-            rate_limit_per_sec: 100_000,
-            probe_reply_bytes_per_sec: BUDGET,
-            imitate_protocol: "dns".into(),
-            quic_handshake_enabled: false,
-            dns_forward_enabled: false,
-            ..Default::default()
-        };
-
-        let proxy = Proxy::bind(config, None).await.unwrap();
-
-        for i in 0..PROBES {
-            proxy
-                .handle_client_packet(&dns_query([(i >> 8) as u8, i as u8]), victim_addr)
-                .await;
-        }
-
-        // Drain whatever actually arrived.
-        let mut received = 0usize;
-        let mut buf = [0u8; 2048];
-        while tokio::time::timeout(Duration::from_millis(50), victim.recv_from(&mut buf))
-            .await
-            .is_ok()
-        {
-            received += 1;
-        }
-
-        // A DNS SERVFAIL echo here is ~29 bytes, so a 512-byte ceiling admits
-        // roughly 17.
-        assert!(
-            received > 0,
-            "the ceiling must throttle, not silence: nothing was delivered"
-        );
-        assert!(
-            received < PROBES / 2,
-            "budget did not bind on the send path: {received} of {PROBES} probes were answered"
-        );
-    }
-
-    /// The QUIC handshake responder emits a `Vec` of datagrams per Initial —
-    /// ServerHello plus a certificate chain — which makes it the largest
-    /// unauthenticated reply the proxy produces. Pins that it is charged.
-    #[tokio::test]
-    async fn global_byte_budget_binds_on_the_quic_handshake_path() {
-        const BUDGET: u32 = 512;
-
-        let victim = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let victim_addr = victim.local_addr().unwrap();
-
-        let config = ProxyConfig {
-            listen: "127.0.0.1:0".into(),
-            backend: "127.0.0.1:1".into(),
-            rate_limit_per_sec: 100_000,
-            probe_reply_bytes_per_sec: BUDGET,
-            imitate_protocol: "quic".into(),
-            ..Default::default()
-        };
-        let proxy = Proxy::bind(config, None).await.unwrap();
-
-        // Ten 200-byte datagrams = 2000 bytes against a 512-byte ceiling.
-        let responses: Vec<QuicResponse> = (0..10)
-            .map(|_| QuicResponse {
-                destination: victim_addr,
-                payload: bytes::Bytes::from(vec![0u8; 200]),
-            })
-            .collect();
-        proxy.send_quic_responses(responses).await;
-
-        let mut received = 0usize;
-        let mut buf = [0u8; 2048];
-        while tokio::time::timeout(Duration::from_millis(50), victim.recv_from(&mut buf))
-            .await
-            .is_ok()
-        {
-            received += 1;
-        }
-
-        // 512 / 200 = 2 whole datagrams.
-        assert!(
-            received <= 4,
-            "QUIC handshake egress must be bounded by the ceiling, got {received} datagrams"
-        );
-        assert!(
-            received < 10,
-            "budget did not bind on the QUIC path: all 10 datagrams were sent"
-        );
-    }
-
-    /// `handle_timeouts` batches responses for many connections into one Vec,
-    /// so one oversized datagram must not cancel the rest: `send_quic_responses`
-    /// skips and keeps going (`continue`, not `break`).
-    #[tokio::test]
-    async fn quic_budget_skips_one_oversized_datagram_without_dropping_the_batch() {
-        let victim = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let victim_addr = victim.local_addr().unwrap();
-
-        let config = ProxyConfig {
-            listen: "127.0.0.1:0".into(),
-            backend: "127.0.0.1:1".into(),
-            rate_limit_per_sec: 100_000,
-            probe_reply_bytes_per_sec: 400,
-            imitate_protocol: "quic".into(),
-            ..Default::default()
-        };
-        let proxy = Proxy::bind(config, None).await.unwrap();
-
-        // One datagram larger than the entire allowance, then three that fit.
-        // With `break`, all three are lost; with `continue`, all three arrive.
-        let mut responses = vec![QuicResponse {
-            destination: victim_addr,
-            payload: bytes::Bytes::from(vec![0u8; 500]),
-        }];
-        responses.extend((0..3).map(|_| QuicResponse {
-            destination: victim_addr,
-            payload: bytes::Bytes::from(vec![0u8; 100]),
-        }));
-        proxy.send_quic_responses(responses).await;
-
-        let mut received = 0usize;
-        let mut buf = [0u8; 2048];
-        while tokio::time::timeout(Duration::from_millis(50), victim.recv_from(&mut buf))
-            .await
-            .is_ok()
-        {
-            received += 1;
-        }
-
-        assert_eq!(
-            received, 3,
-            "the three affordable datagrams must survive one oversized peer in the batch"
-        );
-    }
-
-    /// A deferred SIP timer that fires after its dialog has moved on sends
-    /// nothing, so it must not spend the global ceiling either. Charging before
-    /// the stage check let an attacker drain camouflage for everyone with
-    /// INVITE/retransmit pairs that never produce a datagram.
-    ///
-    /// Asserting on `bytes_admitted` is correct *here*, unlike the send-path
-    /// tests: the question is precisely whether allowance was consumed.
-    #[tokio::test]
-    async fn deferred_sip_timer_does_not_charge_the_budget_when_it_sends_nothing() {
-        let backend = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let backend_addr = backend.local_addr().unwrap();
-
-        let proxy = Proxy::bind(sip_test_config(backend_addr), None)
-            .await
-            .unwrap();
-        let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let client_addr = client.local_addr().unwrap();
-        let metrics_ref = proxy.metrics.get_or_create(client_addr);
-
-        let invite = [
-            "INVITE sip:olivia@profi.ru SIP/2.0",
-            "Via: SIP/2.0/UDP 172.23.4.143:59672;branch=z9hG4bKee43689b8812e305;rport",
-            "From: Frank545 <sip:frank545@profi.ru>;tag=a3c46b4581b775e4",
-            "To: Olivia <sip:olivia@profi.ru>",
-            "Call-ID: phantom-charge-call@192.168.224.194",
-            "CSeq: 95929 INVITE",
-            "Content-Length: 0",
-            "",
-            "",
-        ]
-        .join("\r\n");
-        let invite = invite.as_bytes();
-
-        // First INVITE arms the deferred 180/200 timers.
-        proxy
-            .handle_sip_probe(invite, client_addr, &metrics_ref, true)
-            .await;
-        let mut buf = [0u8; 1024];
-        tokio::time::timeout(Duration::from_millis(200), client.recv_from(&mut buf))
-            .await
-            .expect("fresh INVITE should receive 100 Trying")
-            .unwrap();
-
-        // Retransmit drives the dialog past Invited, so both deferred timers
-        // will find it ineligible and send nothing.
-        proxy
-            .handle_sip_probe(invite, client_addr, &metrics_ref, true)
-            .await;
-        for _ in 0..2 {
-            tokio::time::timeout(Duration::from_millis(200), client.recv_from(&mut buf))
-                .await
-                .expect("retransmit should receive immediate responses")
-                .unwrap();
-        }
-
-        let before = proxy.probe_budget.bytes_admitted.load(Ordering::Relaxed);
-        // Window covers the 200 ms deferred 180 Ringing and stops short of the
-        // 800 ms deferred 200 OK (that second timer accepts `Invited | Ringing`,
-        // so after a retransmit it legitimately sends).
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let after = proxy.probe_budget.bytes_admitted.load(Ordering::Relaxed);
-
-        assert_eq!(
-            before, after,
-            "deferred timers that send nothing must not consume the global ceiling"
-        );
     }
 }

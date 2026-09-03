@@ -25,8 +25,8 @@
 # Upstream: https://github.com/DNSCrypt/dnscrypt-proxy/releases
 # Asset name: dnscrypt-proxy-linux_x86_64-<ver>.tar.gz
 # ---------------------------------------------------------------------------
-DNSCRYPT_PROXY_VERSION = 2.1.17
-DNSCRYPT_PROXY_AMD64_SHA256 = b58f8f309a98c6783fbf96e82f00706ea52a9ad1c9f648997ecd0ccf3090b833
+DNSCRYPT_PROXY_VERSION = 2.1.18
+DNSCRYPT_PROXY_AMD64_SHA256 = f3544f66de84ec84bec7cf7895ca4b01489579770002dffe2d6b76ed117ebd06
 
 # ---------------------------------------------------------------------------
 # tor — SOCKS proxy, only spawned when the operator opts in. Static-musl
@@ -46,7 +46,7 @@ TOR_AMD64_SHA256 = 43cbce6eb89f9412a1bdcfb4b624395c16229a6725e62ca866fd0412f94c2
 # Upstream: https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/-/releases
 # ---------------------------------------------------------------------------
 LYREBIRD_VERSION = 0.8.1
-LYREBIRD_AMD64_SHA256 = 0776d1052a8a30e800b68740628ab867d5bf733fa53af968660996eb783f1ba4
+LYREBIRD_AMD64_SHA256 = 468ea0c74385320769440e9788766437cc0b99bf15a7b009db58e0fc1f9170db
 
 # ---------------------------------------------------------------------------
 # snowflake — WebRTC-based pluggable transport (Go, static). Bundles
@@ -61,5 +61,5 @@ SNOWFLAKE_AMD64_SHA256 = 401969220fb15616106df72d1e3f0d41ea2440c917fa70aceaddcae
 # in censored networks that allow HTTPS but DPI-block direct tor.
 # Upstream: https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel/-/releases
 # ---------------------------------------------------------------------------
-WEBTUNNEL_VERSION = v0.0.5
-WEBTUNNEL_AMD64_SHA256 = d338765ab7c15bd6c2f12caebb7b16cf5af3bb894eb94d28ecf5ef47fc5895ad
+WEBTUNNEL_VERSION = v0.0.6
+WEBTUNNEL_AMD64_SHA256 = e3bd4e33e6f32434da72db837a4865b35cc2ee6123ee89e805b09cb66e814631

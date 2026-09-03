@@ -531,6 +531,12 @@ exec sleep infinity
 update_go_pt() {
     local pin_key_prefix="$1" git_url="$2" git_tag="$3"
     local build_subpath="$4" out_binary="$5" blob_name="$6"
+    # The string written to <PREFIX>_VERSION. Defaults to the git tag,
+    # which is right for snowflake/webtunnel (tags are `vX.Y.Z`), but
+    # lyrebird tags are `lyrebird-X.Y.Z` while the pin holds the bare
+    # version — without this the pin flip-flopped between the two forms
+    # every time build.sh had to rebuild the blob.
+    local pin_version="${7:-$git_tag}"
     require_docker
 
     log "building $blob_name $git_tag from source (Go, static, CGO_ENABLED=0)"
@@ -573,7 +579,7 @@ exec sleep infinity
 
     local sha
     sha="$(package_blob "$WORK_DIR/${out_binary}" "$blob_name")"
-    pin_update "$DNS_PIN" "${pin_key_prefix}_VERSION" "$git_tag"
+    pin_update "$DNS_PIN" "${pin_key_prefix}_VERSION" "$pin_version"
     pin_update "$DNS_PIN" "${pin_key_prefix}_AMD64_SHA256" "$sha"
     verify_pin_matches_blob "$blob_name" "$sha"
 }
@@ -585,7 +591,8 @@ update_lyrebird() {
         "lyrebird-${version#lyrebird-}" \
         "./cmd/lyrebird" \
         "lyrebird" \
-        "lyrebird"
+        "lyrebird" \
+        "${version#lyrebird-}"
 }
 
 update_snowflake() {

@@ -154,37 +154,63 @@ silently launching a wrong binary.
 
 ### Provenance (current pinned versions)
 
-Curated 2026-05-10:
+`vendor/DNS_BUNDLE_VERSION` is the authoritative record of what is pinned
+(version string + SHA-256 of the *uncompressed* ELF, both checked by
+`build.rs` at compile time and by `src/dns/runtime.rs` on every extract).
+This section records the part the pin file cannot: **how each blob is
+obtained and what the trust model is**. `vendor/update.sh <binary>
+<version>` is the executable form of every recipe below — prefer it over
+doing any of this by hand.
 
-- **`dnscrypt-proxy` 2.1.15** — `dnscrypt-proxy-linux_x86_64-2.1.15.tar.gz`
+Versions below were current as of the 2026-09-03 curation pass
+(dnscrypt-proxy and webtunnel bumped then; tor, lyrebird and snowflake
+re-checked and already at their newest upstream release).
+
+- **`dnscrypt-proxy` 2.1.18** — `dnscrypt-proxy-linux_x86_64-2.1.18.tar.gz`
   downloaded over HTTPS from
-  <https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.15/dnscrypt-proxy-linux_x86_64-2.1.15.tar.gz>.
-  Signature verification (minisign) was attempted but the public key
-  published in the README is stale relative to the 2.1.15 signing key
-  (sig key id `79833371EA15D7E4`). Trust model: HTTPS chain-of-trust to
-  `objects.githubusercontent.com`. **For future bumps, locate the
-  current minisign public key from the dnscrypt-proxy maintainers and
-  verify before vendoring.**
-  Decompressed-ELF SHA-256: `0dca3463c7f596e36f1819f4c8b669c451c735415f04fb7e2cf4a0958e4f7119`.
+  <https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/2.1.18/dnscrypt-proxy-linux_x86_64-2.1.18.tar.gz>
+  (tarball SHA-256 `c8c8acb35b0f6619bfe8e4eed0c192672f8fd1964f467a42881905814e261c3e`).
+  Minisign verification is still **not** part of the chain: the public key
+  published in the project README remains stale relative to the release
+  signing key, and `update.sh` prints a warning rather than pretending
+  otherwise. Trust model: HTTPS chain-of-trust to
+  `objects.githubusercontent.com`. **For future bumps, locate the current
+  minisign public key from the dnscrypt-proxy maintainers and verify
+  before vendoring.**
 
-- **`tor` 0.4.9.8** — built from source in an Alpine Docker container
-  with `apk add openssl-libs-static libevent-static zlib-static`, then
+- **`tor` 0.4.9.11** — built from source inside an `alpine:3.20` Docker
+  container (`apk add openssl-libs-static libevent-static zlib-static`),
+  from `https://dist.torproject.org/tor-<ver>.tar.gz` with its published
+  `.sha256sum` verified in-container, then
   `./configure --enable-static-tor --enable-static-openssl
   --enable-static-libevent --enable-static-zlib --disable-asciidoc
   --disable-html-manual --disable-manpage --disable-systemd
   --disable-lzma --disable-zstd && make && strip src/app/tor`.
-  Result: 8.8 MB static-PIE ELF, no shared-library deps (verified via
-  `file` + smoke-test on a Debian glibc host). SHA-256:
-  `03aa2c413ed30845cc7b5dd358148ce3ef51878a834b455d775a2d0d720e6ad9`.
-- **`lyrebird` 0.8.1** — built from source at git tag `lyrebird-0.8.1`
-  via `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -extldflags=-static' ./cmd/lyrebird`
-  (Go 1.23.4). SHA-256: `0776d1052a8a30e800b68740628ab867d5bf733fa53af968660996eb783f1ba4`.
-- **`snowflake` v2.13.1** — built from source at git tag `v2.13.1` via
-  `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -extldflags=-static' ./client`
-  (Go 1.24.4). SHA-256: `b3261406b38f065726b271475401e180738471c0f10a65faf94b83816c01332e`.
-- **`webtunnel` v0.0.4** — built from source at git tag `v0.0.4` via
-  `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -extldflags=-static' ./main/client`
-  (Go 1.19.8). SHA-256: `0d684db99a1ca955d6cd6262686f8832e92180563e115b4f23ad31cc8fb3c954`.
+  The result is checked with `file(1)` (must be static / static-PIE, no
+  interpreter) and smoke-tested with `--version` before it is packaged —
+  a partial static link that still exits 0 has shipped garbage before.
+
+- **`lyrebird` 0.8.1**, **`snowflake` v2.14.1**, **`webtunnel` v0.0.6** —
+  built from source in a `golang:1.24-alpine` container at the upstream
+  git tag (`lyrebird-0.8.1`, `v2.14.1`, `v0.0.6`) from
+  `gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/<name>`,
+  via `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -extldflags=-static'`
+  against `./cmd/lyrebird`, `./client` and `./main/client` respectively.
+  Same static + smoke checks as tor. Trust model: HTTPS to
+  `gitlab.torproject.org` plus the tag name — these projects publish no
+  detached signatures for source tags, so pinning the built ELF's SHA-256
+  in `DNS_BUNDLE_VERSION` is what makes a rebuild auditable.
+
+  > **A Go PT's SHA is only reproducible against a fixed Go toolchain.**
+  > `-trimpath` removes path noise, but a different Go minor version emits
+  > a different binary. lyrebird's pin was carried over from a Go 1.23.4
+  > build and did **not** reproduce under the `golang:1.24-alpine` image
+  > `update.sh` now uses — the 2026-09-03 rebuild produced
+  > `468ea0c7…` where the file recorded `0776d105…`, at the same upstream
+  > tag. The pin now holds the value this repo's own pipeline reproduces.
+  > When bumping the container's Go version, expect all three PT SHAs to
+  > move even if no PT was upgraded, and re-materialise them in one pass
+  > (`scripts/build.sh --vendor-only`) so the pin file stays truthful.
 
 ### Default posture
 
@@ -214,7 +240,7 @@ unmodified binary as part of awg-easy-rs.
 
 ## `telemt-linux-amd64.gz` (`telemt_bundled` cfg)
 
-Pinned [telemt/telemt](https://github.com/telemt/telemt) **v3.4.11** ELF,
+Pinned [telemt/telemt](https://github.com/telemt/telemt) **v3.5.5** ELF,
 gzip-compressed (level 9). telemt is a Rust + Tokio implementation of
 Telegram's MTProto proxy with full Fake-TLS / SNI fronting (the
 `ee`-prefix link variant), per-user secrets, replay protection, and
@@ -223,16 +249,25 @@ build time, runtime extraction with SHA verification.
 
 ### Provenance
 
-Downloaded from the [3.4.11 release](https://github.com/telemt/telemt/releases/tag/3.4.11)
-on 2026-05-10:
+Downloaded from the [3.5.5 release](https://github.com/telemt/telemt/releases/tag/3.5.5)
+on 2026-09-03:
 
-- `telemt-x86_64-linux-musl.tar.gz` — SHA256 `513e1f951bc88320dffe40c1aec8eefe83f6d2c82c152cbf9e35a5a57a757ede` (verified against the upstream `telemt-x86_64-linux-musl.tar.gz.sha256`)
+- `telemt-x86_64-linux-musl.tar.gz` — SHA256 `6be65484bb1b319798919b746e72d611d32e92aa07347c390fffc5127ff6615f` (verified against the upstream `telemt-x86_64-linux-musl.tar.gz.sha256`)
 
 The single `telemt` ELF inside is `static-pie linked` (per `file(1)`), so
 it runs unchanged on glibc, musl, or any other libc x86_64 host. It was
 extracted from the tarball and re-compressed with `gzip -9`.
 Decompressed-ELF SHA-256 (used by the runtime extractor to detect
-cache-staleness): `9b003bc0ae0cd92e38635d5542a2fbfc14b6e5015904bcbf495a7462b10bbbbd` — recorded in `TELEMT_VERSION`.
+cache-staleness): `a284ffe3df5d2fd23f96ba52aebc4e08529dda92add9fecedffd58cf8c85731e` — recorded in `TELEMT_VERSION`.
+
+The 3.4 → 3.5 bump was checked against the control plane awg-easy-rs
+actually drives, not just the changelog: the generated `config.toml` was
+loaded by the 3.5.5 binary and every endpoint in `src/mtproxy/client.rs`
+(`/v1/health`, user create/read/patch/delete, `rotate-secret`,
+`reset-quota`, `/v1/stats/*`) exercised against it. Contract unchanged.
+That run is also what caught the long-standing `ad_tag` vs `user_ad_tag`
+request-field bug — telemt answers 2xx and drops keys it does not know,
+so the mismatch had been silent since the module was written.
 
 ### Licensing
 
@@ -265,7 +300,7 @@ disagree.
 ## `mdnsvpn-linux-amd64.gz` (`mdnsvpn_bundled` cfg)
 
 Pinned [masterking32/MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN)
-release `v2026.05.10.180256-27c7e11` server ELF, gzip-compressed (level 9).
+release `v2026.06.13.234407-7de2476` server ELF, gzip-compressed (level 9).
 MasterDnsVPN is a Go DNS-tunnel VPN: clients fragment + encrypt TCP/SOCKS5
 traffic into DNS queries through public resolvers, the server listens on UDP/53
 for tunnel envelopes (via NS-delegated subdomain) and re-emits the inner TCP
@@ -274,16 +309,16 @@ through a real socks5/forwarder. Embedded the same way as Xray + telemt —
 
 ### Provenance
 
-Downloaded from the [v2026.05.10.180256-27c7e11 release](https://github.com/masterking32/MasterDnsVPN/releases/tag/v2026.05.10.180256-27c7e11)
-on 2026-05-10:
+Downloaded from the [v2026.06.13.234407-7de2476 release](https://github.com/masterking32/MasterDnsVPN/releases/tag/v2026.06.13.234407-7de2476)
+(latest upstream release as of the 2026-09-03 pass):
 
-- `MasterDnsVPN_Server_Linux_AMD64.tar.gz` — SHA256 `3c6233ec14d072556e4c2bfd9212dd06901c0fa0df007f2bca59b84007fe8537` (verified against the upstream `SHA256SUMS.txt`)
+- `MasterDnsVPN_Server_Linux_AMD64.tar.gz` — SHA256 `597bdc510b896a3b4ac89865ee7cefa73191025c64093f5e0f85c76a70430de9` (verified against the upstream `SHA256SUMS.txt`)
 
 The Go ELF inside is `statically linked` (per `file(1)`), so it runs unchanged
 on any libc x86_64 host. After extraction it was `strip`-ed (debug info shaves
 ~2.1 MB off the upstream 6.6 MB build) and re-compressed with `gzip -9`.
 Decompressed-ELF SHA-256 (used by the runtime extractor to detect cache
-staleness): `c596b64374155a61689c5739b7c77fcf918ff7f6cb588016ac2912eba2f8fd80` —
+staleness): `aebb7eb879c742135327b147f66e267e1587c47c9043de9a41811fe3eec8c126` —
 recorded in `MDNSVPN_VERSION`.
 
 ### Default posture

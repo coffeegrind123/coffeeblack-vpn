@@ -181,6 +181,13 @@ impl DataHandler {
 
                 // Inconsistent: a second "last", a fragment past the seen
                 // last, or a "last" that is not the highest index.
+                //
+                // Left as three explicit disjuncts, one per case named
+                // above, rather than the factored form clippy suggests
+                // (`(!biggest_updated || p_seen_last) && (biggest_updated
+                // || last_fragment)`) — the factored version is equivalent
+                // but no longer readable against upstream's reject rules.
+                #[allow(clippy::nonminimal_bool)]
                 if (last_fragment && p_seen_last)
                     || (biggest_updated && p_seen_last)
                     || (!biggest_updated && last_fragment)

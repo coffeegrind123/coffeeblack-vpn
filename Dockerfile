@@ -4,7 +4,7 @@
 # floating `:alpine` tag can silently change the toolchain (or be repointed by
 # a registry compromise) between builds. Refresh the digests deliberately when
 # bumping the toolchain (`docker buildx imagetools inspect rust:1-alpine`).
-FROM rust:1-alpine@sha256:3c38f3f82c2f3d73da3b38e18d279393a04cb43ddded0e35088a8c3324d40900 AS builder
+FROM rust:1-alpine@sha256:a10e64dd139b7387337c7fbe8aca31b959b57b2fd4c8ae20a02cf1d6ea424dce AS builder
 WORKDIR /build
 
 # Install build dependencies
@@ -23,11 +23,9 @@ COPY vendor/ ./vendor/
 
 # Build release binary as a fully static (interpreter-free) musl ELF.
 #
-# The three RUSTFLAGS below collaborate:
+# The two RUSTFLAGS below collaborate:
 #   +crt-static          — link the C runtime into the binary so no
 #                          .so files are needed at exec time.
-#   linker=musl-gcc      — use musl's wrapper around the system gcc.
-#                          Available in rust:alpine via `apk add musl-dev`.
 #   relocation-model=static
 #                        — disable PIE so the kernel doesn't look for
 #                          a PT_INTERP entry. Without this the binary
@@ -38,7 +36,17 @@ COPY vendor/ ./vendor/
 # Result: `file` reports "statically linked" (no interpreter line) and
 # the binary runs unchanged on glibc, musl, or any other libc x86_64
 # Linux distro — verified by docker cp into debian:stable-slim.
-ENV RUSTFLAGS="-C target-feature=+crt-static -C linker=musl-gcc -C relocation-model=static"
+#
+# No `-C linker=musl-gcc` here, deliberately. `musl-gcc` is the Debian
+# musl-tools wrapper around a glibc gcc; on Alpine the system compiler
+# already targets musl and is installed as `/usr/bin/cc` — there is no
+# `musl-gcc` in rust:*-alpine with or without `apk add musl-dev`
+# (checked against both the previous and current base digests). Asking
+# for it failed the builder stage outright with `linker \`musl-gcc\`
+# not found`; rustc's default `cc` is the right linker in this image.
+# The CI/bare-metal path is the one that needs musl-tools, because
+# there the host gcc is glibc-targeting.
+ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static"
 # `--locked` freezes the build to the committed Cargo.lock: if anything would
 # change the lock (a yanked crate, a would-be minor bump), the build fails
 # instead of silently resolving to different versions than were tested. Matches
@@ -48,14 +56,18 @@ RUN cargo build --release --locked --target x86_64-unknown-linux-musl && \
     cp target/x86_64-unknown-linux-musl/release/awg-easy-rs /build/awg-easy-rs
 
 # Stage 2: Build amneziawg-go (needs Go >= 1.24)
-FROM golang:1-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS awg-go-builder
+FROM golang:1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS awg-go-builder
 WORKDIR /build
 RUN apk add --no-cache git make
 # Pin to a release tag AND assert the resolved commit SHA. `--branch <tag>`
 # alone is not enough — a tag is mutable and could be repointed upstream; the
 # SHA assertion is the actual supply-chain integrity check. Bump both together.
-ARG AWG_GO_TAG=v0.2.19
-ARG AWG_GO_SHA=1cc94272ca8e9e223a5fe76382f5880f09d3c12d
+# AWG 3.x: adds opt-in header protection, content padding and configurable
+# timings on top of the 2.x junk/magic-header set. Every key we generate
+# (Jc/Jmin/Jmax, S1-S4, H1-H4, I1-I5) is still accepted unchanged, and the
+# new knobs default to off when unset, so existing peer configs keep working.
+ARG AWG_GO_TAG=v3.1.20260828
+ARG AWG_GO_SHA=b5928efb6ca19f0153958460c3d141f04abc5c2e
 RUN git clone --depth 1 --branch "$AWG_GO_TAG" https://github.com/amnezia-vpn/amneziawg-go.git && \
     cd amneziawg-go && \
     got="$(git rev-parse HEAD)" && \
@@ -70,8 +82,12 @@ RUN apk add --no-cache git build-base linux-headers
 
 # Build amneziawg-tools (awg and awg-quick). Pinned to a release tag + asserted
 # commit SHA (see the amneziawg-go stage for the rationale).
-ARG AWG_TOOLS_TAG=v1.0.20260618-2
-ARG AWG_TOOLS_SHA=61e741780e8465a67a7d7fb6cffe14a8a15d624a
+# Kept in lockstep with the amneziawg-go tag above — tools 3.x is what
+# parses the AWG 3 keys and prints them in `awg show`. The `dump` peer
+# lines (which src/wg/cli.rs parses) are unchanged; only the interface
+# line grew columns, and that line is skipped.
+ARG AWG_TOOLS_TAG=v3.1.20260812
+ARG AWG_TOOLS_SHA=ee0f0a9aa34ff0a0da4b3433b9512781cfe02843
 RUN git clone --depth 1 --branch "$AWG_TOOLS_TAG" https://github.com/amnezia-vpn/amneziawg-tools.git && \
     cd amneziawg-tools && \
     got="$(git rev-parse HEAD)" && \

@@ -67,6 +67,20 @@ pub const fn is_bundled() -> bool {
     cfg!(dns_bundled)
 }
 
+/// Why the DNS bundle is absent, as build.rs saw it — e.g.
+/// `"LYREBIRD (vendor blob …/lyrebird-linux-amd64.gz missing)"`. Empty
+/// exactly when [`is_bundled`] is true.
+///
+/// The pins in `vendor/DNS_BUNDLE_VERSION` are only half the gate: the
+/// `.gz` blobs are CI artifacts and aren't in git, so a fully-pinned
+/// tree still builds unbundled until `scripts/build.sh` materialises
+/// them. Without this, "bundle off" and "pin file broken" look
+/// identical from inside the binary.
+#[inline]
+pub const fn bundle_incomplete_reason() -> &'static str {
+    env!("AWG_EASY_DNS_BUNDLE_INCOMPLETE")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,14 +124,29 @@ mod tests {
 
     #[test]
     fn is_bundled_matches_per_binary_pin_state() {
-        // is_bundled() should agree with the version-pin state. When
-        // any binary is unpinned, the cfg can't be set; when all are
-        // pinned, it must be set.
+        // `dns_bundled` needs both halves: every binary pinned *and* its
+        // blob on disk. The blobs are CI artifacts (vendor/*.gz is
+        // untracked, materialised by scripts/build.sh), so a pinned-but
+        // -blobless tree — the normal state of a fresh clone — must come
+        // out unbundled. build.rs reports which half is missing.
         let any_blank = embedded_versions().iter().any(|(_, v, _)| v.is_empty());
-        if any_blank {
-            assert!(!is_bundled(), "is_bundled() true with at least one unpinned binary");
+        let incomplete = bundle_incomplete_reason();
+        if any_blank || !incomplete.is_empty() {
+            assert!(
+                !is_bundled(),
+                "is_bundled() true though the build reported: {incomplete}"
+            );
         } else {
-            assert!(is_bundled(), "is_bundled() false despite all binaries pinned");
+            assert!(is_bundled(), "is_bundled() false despite a complete bundle");
         }
+    }
+
+    #[test]
+    fn incomplete_reason_is_blank_exactly_when_bundled() {
+        assert_eq!(
+            bundle_incomplete_reason().is_empty(),
+            is_bundled(),
+            "the reason string and the cfg must not disagree"
+        );
     }
 }

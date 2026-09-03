@@ -7,6 +7,12 @@
 # rustup auto-installs this toolchain when any cargo/rustc command runs inside
 # the repo. The Dockerfile's `rust:1-alpine` builder is pinned by digest and
 # will fetch this exact version if it differs.
+#
+# Note for CI: any step that runs inside its own container (rather than on the
+# runner) has to be able to install this exact toolchain for ITS host triple.
+# The cargo-deny GitHub action could not — its Alpine image has no musl-host
+# build of the pin — and that failure silently disabled the clippy and test
+# gates for weeks. The workflow now runs cargo-deny as a plain runner step.
 [toolchain]
-channel = "1.95.0"
+channel = "1.98.1"
 profile = "minimal"

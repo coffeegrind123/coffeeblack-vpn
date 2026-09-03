@@ -32,6 +32,8 @@
 #![allow(clippy::doc_lazy_continuation)] // upstream rustdoc list formatting
 #![allow(clippy::unnecessary_map_or)] // predates Option::is_none_or MSRV bump
 #![allow(clippy::manual_is_multiple_of)] // predates u32::is_multiple_of
+#![allow(clippy::manual_repeat_n)] // upstream test helpers predate iter::repeat_n
+#![allow(clippy::needless_range_loop)] // upstream test packet builders index by offset
 
 pub mod backend;
 pub mod config;

@@ -35,13 +35,8 @@ async fn spawn_resolver(listen_port: u16, target_port: u16) {
     let target: std::net::SocketAddr = ([127, 0, 0, 1], target_port).into();
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65_535];
-        loop {
-            match sock.recv_from(&mut buf).await {
-                Ok((n, _from)) => {
-                    let _ = sock.send_to(&buf[..n], target).await;
-                }
-                Err(_) => break,
-            }
+        while let Ok((n, _from)) = sock.recv_from(&mut buf).await {
+            let _ = sock.send_to(&buf[..n], target).await;
         }
     });
 }
@@ -51,13 +46,8 @@ async fn spawn_fake_wg(port: u16) {
     let sock = UdpSocket::bind(("127.0.0.1", port)).await.unwrap();
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65_535];
-        loop {
-            match sock.recv_from(&mut buf).await {
-                Ok((n, from)) => {
-                    let _ = sock.send_to(&buf[..n], from).await;
-                }
-                Err(_) => break,
-            }
+        while let Ok((n, from)) = sock.recv_from(&mut buf).await {
+            let _ = sock.send_to(&buf[..n], from).await;
         }
     });
 }
