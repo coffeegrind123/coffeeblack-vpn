@@ -570,6 +570,22 @@ pub async fn update_hooks(
         }
     }
 
+    // Hooks are shell commands awg-quick runs as root. In privileged-helper
+    // mode the whole point is that this process cannot cause root execution,
+    // so storing a non-empty hook would re-open the hole the split closes.
+    // The helper rejects them too; refusing here gives the operator a real
+    // error instead of a later sync failure.
+    if crate::privhelper::is_enabled()
+        && fields.values().any(|v| !v.trim().is_empty())
+    {
+        return Err(api_err(
+            StatusCode::CONFLICT,
+            "Hooks are unavailable while the privileged helper is in use: \
+             awg-quick executes them as root, which would defeat the privilege \
+             separation. Clear the hook or run without --privileged-helper.",
+        ));
+    }
+
     if !fields.is_empty() {
         db::update_hooks(&fields).map_err(map_err)?;
         // Re-save config to apply new hooks

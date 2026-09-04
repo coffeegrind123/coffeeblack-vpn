@@ -51,6 +51,27 @@ pub fn is_valid_expiry(s: &str) -> bool {
     PrimitiveDateTime::parse(s, hm).is_ok() || PrimitiveDateTime::parse(s, hms).is_ok()
 }
 
+/// Parse a stored client-expiry timestamp, accepting exactly the shapes
+/// [`is_valid_expiry`] admits.
+///
+/// Validation and enforcement have to agree. They did not: `is_valid_expiry`
+/// accepted the two HTML `datetime-local` shapes the UI emits, while every
+/// enforcement site parsed with `parse_rfc3339`, which rejects them — so an
+/// expiry entered as `YYYY-MM-DDTHH:MM` was stored happily and then silently
+/// never fired, leaving the client enabled forever. The naive shapes carry no
+/// offset and are interpreted as UTC, matching how they are rendered.
+pub fn parse_expiry(s: &str) -> Option<OffsetDateTime> {
+    if let Ok(dt) = OffsetDateTime::parse(s, &Rfc3339) {
+        return Some(dt);
+    }
+    let hms = format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]");
+    let hm = format_description!("[year]-[month]-[day]T[hour]:[minute]");
+    PrimitiveDateTime::parse(s, hms)
+        .or_else(|_| PrimitiveDateTime::parse(s, hm))
+        .ok()
+        .map(|naive| naive.assume_utc())
+}
+
 /// Convert a Unix timestamp (seconds) to an instant, `None` if out of range.
 /// Used to render `awg show … dump`'s latest-handshake epoch column.
 pub fn from_unix(ts: i64) -> Option<OffsetDateTime> {
@@ -152,5 +173,44 @@ mod tests {
     fn from_unix_matches_expected() {
         let dt = from_unix(1_718_454_896).unwrap();
         assert_eq!(dt.unix_timestamp(), 1_718_454_896);
+    }
+}
+
+#[cfg(test)]
+mod expiry_parse_tests {
+    use super::{is_valid_expiry, parse_expiry};
+
+    /// Validation and enforcement must accept exactly the same set. When they
+    /// disagreed, an expiry the API accepted was one the enforcement path
+    /// could not read, so the client silently never expired.
+    #[test]
+    fn every_accepted_expiry_shape_also_parses() {
+        for s in [
+            "2027-01-02T03:04:05Z",
+            "2027-01-02T03:04:05+00:00",
+            "2027-01-02T03:04:05",
+            "2027-01-02T03:04",
+        ] {
+            assert!(is_valid_expiry(s), "is_valid_expiry rejected {s:?}");
+            assert!(
+                parse_expiry(s).is_some(),
+                "parse_expiry could not read the accepted value {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_what_validation_rejects() {
+        for s in ["", "not-a-date", "2027-13-02T03:04", "03:04"] {
+            assert!(!is_valid_expiry(s), "is_valid_expiry accepted {s:?}");
+            assert!(parse_expiry(s).is_none(), "parse_expiry accepted {s:?}");
+        }
+    }
+
+    #[test]
+    fn naive_shapes_are_interpreted_as_utc() {
+        let naive = parse_expiry("2027-01-02T03:04:05").unwrap();
+        let explicit = parse_expiry("2027-01-02T03:04:05Z").unwrap();
+        assert_eq!(naive, explicit);
     }
 }

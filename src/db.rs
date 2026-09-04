@@ -71,9 +71,11 @@ pub type UpdateMap = HashMap<String, String>;
 /// yield?" has an auditable answer rather than one assembled by grepping.
 ///
 /// **Not** included, deliberately:
-/// - `users_table.password` and `general_table.metrics_password` are already
-///   password hashes (argon2id / SHA-256). Encrypting a hash protects nothing
-///   that the hash does not already protect.
+/// - `users_table.password` is already an argon2id hash. Encrypting a strong
+///   password hash protects nothing that the hash does not already protect.
+///   (`general_table.metrics_password` used to be excluded for the same
+///   reason, but it is a single unsalted SHA-256 rather than argon2id, so the
+///   argument does not carry and it is now encrypted.)
 /// - `one_time_links_table.one_time_link` is looked up *by value*, so it
 ///   cannot be randomly encrypted. It is stored as a SHA-256 digest instead —
 ///   strictly better, since the server never needs the token back.
@@ -97,6 +99,25 @@ const ENCRYPTED_COLUMNS: &[(&str, &str)] = &[
     ("mdnsvpn_inbound_table", "encryption_key"),
     ("general_table", "session_password"),
     ("users_table", "totp_key"),
+    // The recoverable copy of a one-time-link token. The `one_time_link`
+    // column holds only a SHA-256 digest (used for lookup); this column is
+    // what lets the UI re-display an active link, so it is a live bearer
+    // credential and belongs in the registry. It was already encrypted at its
+    // insert site, but its absence here meant the startup back-fill never
+    // upgraded rows written before a key was configured.
+    ("one_time_links_table", "token_enc"),
+    // SOCKS5 credentials for the MasterDnsVPN tunnel. Live authentication
+    // secrets: rendered into the server config and into every per-client
+    // share bundle. They sat beside `encryption_key` on the same rows, which
+    // *is* encrypted, so a stolen database gave up these and nothing else.
+    ("mdnsvpn_inbound_table", "socks5_pass"),
+    ("mdnsvpn_clients_table", "socks5_pass"),
+    // The metrics bearer token's digest. The exclusion note below used to
+    // cover this on the grounds that a hash needs no encryption — true of the
+    // argon2id account password, but this one is a single unsalted SHA-256
+    // (`auth::sha256`), which is cheap to crack offline from a stolen DB.
+    // Encrypting it costs nothing on the request path and removes that.
+    ("general_table", "metrics_password"),
 ];
 
 fn is_encrypted_column(table: &str, column: &str) -> bool {
@@ -1138,7 +1159,7 @@ impl General {
             session_timeout: row.get("session_timeout")?,
             metrics_prometheus: int_to_bool(row.get::<_, i64>("metrics_prometheus")?),
             metrics_json: int_to_bool(row.get::<_, i64>("metrics_json")?),
-            metrics_password: row.get("metrics_password")?,
+            metrics_password: dec_opt(row.get("metrics_password")?)?,
             // Tolerate the pre-migration shape (see Client::from_row): fall
             // back to the same 90-day default the DDL declares.
             activity_retention_days: row
@@ -1321,7 +1342,7 @@ impl MdnsvpnInbound {
             use_external_socks5: int_to_bool(row.get::<_, i64>("use_external_socks5")?),
             socks5_auth: int_to_bool(row.get::<_, i64>("socks5_auth")?),
             socks5_user: row.get("socks5_user")?,
-            socks5_pass: row.get("socks5_pass")?,
+            socks5_pass: dec(&row.get::<_, String>("socks5_pass")?)?,
             additional_config: row.get("additional_config")?,
             enabled: int_to_bool(row.get::<_, i64>("enabled")?),
             created_at: row.get("created_at")?,
@@ -1340,7 +1361,7 @@ impl MdnsvpnClient {
             resolvers: row.get("resolvers")?,
             listen_port: row.get("listen_port")?,
             socks5_user: row.get("socks5_user")?,
-            socks5_pass: row.get("socks5_pass")?,
+            socks5_pass: dec(&row.get::<_, String>("socks5_pass")?)?,
             expires_at: row.get::<_, Option<String>>("expires_at")?,
             additional_config_toml: row.get::<_, Option<String>>("additional_config_toml")?,
             enabled: int_to_bool(row.get::<_, i64>("enabled")?),
@@ -1825,7 +1846,7 @@ CREATE TABLE IF NOT EXISTS mdnsvpn_clients_table (
 // from the AWG interface diverts into `wg-clients`, hits per-peer
 // accept rules or the final `drop`, and only returns to forward (and
 // thus the accept policy) for explicitly-allowed flows.
-const POST_UP_TEMPLATE: &str = concat!(
+pub(crate) const POST_UP_TEMPLATE: &str = concat!(
     "nft add table inet awg-easy-rs;",
     " nft 'add chain inet awg-easy-rs forward { type filter hook forward priority filter; policy accept; }';",
     " nft 'add chain inet awg-easy-rs nat-postrouting { type nat hook postrouting priority srcnat; }';",
@@ -1841,7 +1862,7 @@ const POST_UP_TEMPLATE: &str = concat!(
 // the `wg-clients` chain. The `2>/dev/null || true` keeps awg-quick
 // from aborting interface bring-down if the table is already gone
 // (e.g. after a host reboot where state is lost but PostDown still runs).
-const POST_DOWN_TEMPLATE: &str =
+pub(crate) const POST_DOWN_TEMPLATE: &str =
     "nft delete table inet awg-easy-rs 2>/dev/null || true";
 
 // ---------------------------------------------------------------------------
@@ -2373,6 +2394,23 @@ pub fn init_db() -> Result<()> {
         return init_in_memory_db();
     }
 
+    // Pre-create the file 0600 so it is never briefly world-readable. SQLite
+    // honours an existing file's mode, whereas letting `Connection::open`
+    // create it applies the process umask (commonly 0644) and the chmod below
+    // only closes the window afterwards. Same hazard `privhelper::wg_sync` and
+    // `snapshot_to` already avoid; best-effort, since a filesystem without
+    // Unix modes must still work.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        if !std::path::Path::new(&CONFIG.db_path).exists() {
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&CONFIG.db_path);
+        }
+    }
     let c = Connection::open(&CONFIG.db_path).context("Failed to open SQLite database")?;
     // The DB holds service private keys, MTProxy secrets, the MasterDnsVPN
     // encryption key, and password/TOTP material. Restrict it to the owner so
@@ -2403,9 +2441,14 @@ pub fn init_db() -> Result<()> {
 /// before the server starts serving. Schema migrations then run against the
 /// restored data (idempotent), and seeding fills a genuinely empty database.
 ///
-/// A snapshot that is missing, empty, or unreadable is not fatal: we log and
-/// fall through to a fresh seeded database. This mirrors the operator's
-/// premise — the data plane must come up from RAM regardless of disk health.
+/// A snapshot that is *absent* is not fatal: that is a genuine first boot, so
+/// we seed a fresh database. A snapshot that is *present but will not restore*
+/// is fatal, and deliberately so — seeding fresh there would bring the service
+/// up as an unclaimed first-run install (the setup wizard needs no
+/// authentication) and the snapshot task would then overwrite the operator's
+/// only durable copy with the empty database. The "come up regardless of disk
+/// health" premise does not reach that case: with no restored roster there is
+/// no data plane to keep alive, only an open front door.
 fn init_in_memory_db() -> Result<()> {
     let mut c = Connection::open_in_memory().context("open in-memory SQLite database")?;
 
@@ -2416,11 +2459,26 @@ fn init_in_memory_db() -> Result<()> {
                 true
             }
             Err(e) => {
-                tracing::warn!(
-                    "Snapshot {path} exists but could not be restored ({e:#}); \
-                     starting from a fresh database"
-                );
-                false
+                // Fail closed. Seeding a fresh database here would bring the
+                // service up as an *unclaimed first-run install*: setup_step
+                // returns to 1 with zero users, and `POST /api/setup/2` needs
+                // no authentication, so whoever reaches the panel first
+                // becomes the administrator. The periodic snapshot task would
+                // then write that empty database over the operator's only
+                // durable copy, destroying the roster as well.
+                //
+                // The "come up regardless of disk health" premise does not
+                // apply: a snapshot that exists but will not restore means
+                // there is no roster to serve, so there is no data plane to
+                // keep alive — only an open front door.
+                return Err(e).with_context(|| {
+                    format!(
+                        "snapshot {path} exists but could not be restored. Refusing to \
+                         start: continuing would serve an unauthenticated first-run \
+                         setup wizard and overwrite the snapshot with an empty database. \
+                         Move the file aside to start fresh deliberately."
+                    )
+                });
             }
         },
         _ => false,
@@ -3358,6 +3416,35 @@ pub fn get_one_time_link(token: &str) -> Result<OneTimeLink> {
         )
     })
     .context("One-time link not found")
+}
+
+/// Atomically consume the one-time link matching `token`, returning it only to
+/// the caller that actually claimed it.
+///
+/// Single-use has to be one statement. Looking the row up and deleting it
+/// afterwards left a window in which two concurrent requests both passed the
+/// lookup and both received the peer configuration — which embeds the private
+/// key — so the endpoint's whole reason for existing did not hold under a
+/// race. `DELETE … RETURNING` makes the claim and the read the same operation:
+/// exactly one caller can observe a given row.
+pub fn claim_one_time_link(token: &str) -> Result<OneTimeLink> {
+    let c = conn();
+    // Digest first, then the pre-hash shape for links issued by an older
+    // version — same two-step lookup the previous read path used, so a link
+    // already in a user's hands keeps working across an upgrade.
+    for candidate in [crate::auth::sha256(token), token.to_string()] {
+        let row = c
+            .query_row(
+                "DELETE FROM one_time_links_table WHERE one_time_link = ?1 RETURNING *",
+                params![candidate],
+                OneTimeLink::from_row,
+            )
+            .optional()?;
+        if let Some(link) = row {
+            return Ok(link);
+        }
+    }
+    Err(anyhow!("One-time link not found"))
 }
 
 pub fn delete_one_time_link(client_id: i64) -> Result<()> {

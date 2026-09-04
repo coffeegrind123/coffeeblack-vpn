@@ -315,9 +315,12 @@ pub async fn supervisor_status(
 
 #[cfg(not(mdnsvpn_bundled))]
 pub async fn supervisor_status(
-    State(_state): State<AppState>,
-    _jar: CookieJar,
+    State(state): State<AppState>,
+    jar: CookieJar,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Guard the stub too — the route is mounted regardless of cfg, so leaving
+    // the guard inside the bundled arm answered it unauthenticated.
+    let _admin = require_admin(&jar, &state)?;
     Ok(Json(json!({
         "state": "disabled",
         "reason": "MasterDnsVPN support not bundled in this build",
@@ -340,9 +343,10 @@ pub async fn restart(
 
 #[cfg(not(mdnsvpn_bundled))]
 pub async fn restart(
-    State(_state): State<AppState>,
-    _jar: CookieJar,
+    State(state): State<AppState>,
+    jar: CookieJar,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let _admin = require_admin(&jar, &state)?;
     Err(api_err(
         StatusCode::NOT_IMPLEMENTED,
         "MasterDnsVPN support not bundled in this build",

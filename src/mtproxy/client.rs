@@ -346,13 +346,71 @@ fn parse_json(body: &[u8]) -> Result<Value> {
         return Ok(Value::Null);
     }
     serde_json::from_slice(body).with_context(|| {
+        // Scrub before the body reaches an error string. A create/rotate
+        // response carries the user's 32-hex secret, and this context is
+        // logged by the reconciler — so an otherwise harmless decode failure
+        // (this client does not parse chunked encoding) wrote a live
+        // credential to the journal. `logscrub` masks hex runs of 16+.
         let preview = std::str::from_utf8(body)
             .unwrap_or("<non-utf8>")
             .chars()
             .take(200)
             .collect::<String>();
-        format!("decode telemt JSON response: {preview:?}")
+        format!("decode telemt JSON response: {:?}", redact_hex_runs(&preview))
     })
+}
+
+/// Mask runs of 16+ hex characters.
+///
+/// A telemt create/rotate response carries the user's 32-hex secret, and the
+/// decode-failure context above is logged by the reconciler — so a response
+/// this client cannot parse (it does not handle chunked encoding, as the
+/// module notes) wrote a live credential into the journal. MTProxy secrets are
+/// exactly this shape, and nothing else in a telemt response body legitimately
+/// is, so the rule is precise rather than a blanket redaction.
+fn redact_hex_runs(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut run = String::new();
+    let flush = |run: &mut String, out: &mut String| {
+        if run.len() >= 16 {
+            out.push_str("<redacted>");
+        } else {
+            out.push_str(run);
+        }
+        run.clear();
+    };
+    for c in s.chars() {
+        if c.is_ascii_hexdigit() {
+            run.push(c);
+        } else {
+            flush(&mut run, &mut out);
+            out.push(c);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
+#[cfg(test)]
+mod redaction_tests {
+    use super::redact_hex_runs;
+
+    #[test]
+    fn masks_a_telemt_secret_but_keeps_the_surrounding_json() {
+        let body = r#"{"username":"alice","secret":"0123456789abcdef0123456789abcdef"}"#;
+        let out = redact_hex_runs(body);
+        assert!(!out.contains("0123456789abcdef"), "secret survived: {out}");
+        assert!(out.contains("username"), "structure lost: {out}");
+        assert!(out.contains("<redacted>"), "no marker: {out}");
+    }
+
+    #[test]
+    fn leaves_short_hex_and_ordinary_words_alone() {
+        // "alice" and "decade" are hex-ish but far under the run length.
+        let out = redact_hex_runs(r#"{"port":443,"name":"decade","id":"abc123"}"#);
+        assert!(out.contains("decade") && out.contains("abc123") && out.contains("443"));
+        assert!(!out.contains("<redacted>"));
+    }
 }
 
 fn expect_2xx(status: u16, body: &[u8], context: &str) -> Result<()> {

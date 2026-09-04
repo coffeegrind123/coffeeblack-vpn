@@ -58,8 +58,16 @@ pub const ALLOWED_PLUGINS: &[&str] = &["", "obfs4", "snowflake", "webtunnel"];
 pub fn plugin_binary_name(plugin: &str) -> Option<&'static str> {
     match plugin {
         "obfs4" => Some("lyrebird"),
-        "snowflake" => Some("snowflake-client"),
-        "webtunnel" => Some("webtunnel-client"),
+        // These must be the names `dns::runtime::BUNDLED` extracts into
+        // `<dns_dir>/bin/`, not the upstream project's conventional binary
+        // names. Tor's own docs say `snowflake-client` / `webtunnel-client`,
+        // and that is what these used to return — but the extractor writes
+        // `snowflake` and `webtunnel` (dns/runtime.rs:77,84), so the torrc
+        // pointed `ClientTransportPlugin ... exec` at paths that never exist
+        // and tor refused to start. `obfs4` worked only because `lyrebird`
+        // happens to match on both sides.
+        "snowflake" => Some("snowflake"),
+        "webtunnel" => Some("webtunnel"),
         _ => None,
     }
 }
@@ -361,13 +369,13 @@ mod tests {
     }
 
     #[test]
-    fn webtunnel_plugin_uses_webtunnel_client_binary() {
+    fn webtunnel_plugin_uses_the_binary_the_extractor_writes() {
         let mut b = fixture();
         b.tor_plugin = "webtunnel".into();
         let body = generate(&b, &bin_dir()).unwrap();
         assert!(body.contains(
-            "ClientTransportPlugin webtunnel exec /var/lib/awg-easy-rs/dns/bin/webtunnel-client"
-        ));
+            "ClientTransportPlugin webtunnel exec /var/lib/awg-easy-rs/dns/bin/webtunnel"
+        ), "torrc must point at the extracted filename:\n{body}");
     }
 
     #[test]
@@ -468,9 +476,31 @@ mod tests {
     #[test]
     fn plugin_binary_name_maps_correctly() {
         assert_eq!(plugin_binary_name("obfs4"), Some("lyrebird"));
-        assert_eq!(plugin_binary_name("snowflake"), Some("snowflake-client"));
-        assert_eq!(plugin_binary_name("webtunnel"), Some("webtunnel-client"));
+        assert_eq!(plugin_binary_name("snowflake"), Some("snowflake"));
+        assert_eq!(plugin_binary_name("webtunnel"), Some("webtunnel"));
         assert_eq!(plugin_binary_name(""), None);
         assert_eq!(plugin_binary_name("unknown"), None);
+    }
+
+    /// The name in the torrc and the name the extractor writes to disk are
+    /// set in two different modules, and when they disagreed tor simply
+    /// refused to start — the pluggable transport an at-risk user selected
+    /// silently did not run. Assert the invariant rather than either literal,
+    /// so a rename on one side cannot drift from the other again.
+    #[test]
+    fn every_plugin_binary_is_one_the_extractor_actually_extracts() {
+        let extracted: Vec<&str> = crate::dns::runtime::BINARIES
+            .iter()
+            .map(|b| b.name)
+            .collect();
+        for plugin in ALLOWED_PLUGINS {
+            if let Some(bin) = plugin_binary_name(plugin) {
+                assert!(
+                    extracted.contains(&bin),
+                    "torrc for {plugin:?} points at {bin:?}, which the extractor \
+                     never writes (it writes {extracted:?})"
+                );
+            }
+        }
     }
 }

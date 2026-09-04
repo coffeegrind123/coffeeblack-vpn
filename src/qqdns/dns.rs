@@ -8,6 +8,10 @@
 
 use std::net::SocketAddr;
 
+/// RFC 1035 caps a complete domain name at 255 octets including the length
+/// bytes. Enforcing it bounds what one datagram can allocate here.
+const MAX_QNAME_TOTAL_LEN: usize = 255;
+
 /// Port of `label_domain`: split a domain into its non-empty labels
 /// (lowercased, trailing/leading dots stripped).
 pub fn label_domain(domain: &[u8]) -> Vec<Vec<u8>> {
@@ -87,6 +91,7 @@ pub struct ParsedQuery {
 /// labels, qtype, and the offset just past QCLASS.
 fn handle_question(data: &[u8], mut offset: usize) -> Result<(Vec<Vec<u8>>, u16, usize), DnsError> {
     let mut labels = Vec::new();
+    let mut total_len = 0usize;
     let len_data = data.len();
     while offset < len_data {
         let label_len = data[offset] as usize;
@@ -107,6 +112,15 @@ fn handle_question(data: &[u8], mut offset: usize) -> Result<(Vec<Vec<u8>>, u16,
         let start = offset + 1;
         offset = start + label_len;
         if offset > len_data {
+            return Err(DnsError::Malformed);
+        }
+        // Enforce the total-name limit, not just the per-label one. Without
+        // it the accumulated name grows with the datagram rather than with the
+        // protocol, so one maximal UDP datagram of 63-byte labels became a
+        // correspondingly large allocation (and reassembly fragment) for an
+        // unauthenticated sender.
+        total_len += 1 + label_len;
+        if total_len > MAX_QNAME_TOTAL_LEN {
             return Err(DnsError::Malformed);
         }
         labels.push(data[start..offset].to_ascii_lowercase());
@@ -204,3 +218,54 @@ impl std::fmt::Display for DnsError {
 }
 
 impl std::error::Error for DnsError {}
+
+#[cfg(test)]
+mod qname_bounds_tests {
+    use super::{handle_dns_request, MAX_QNAME_TOTAL_LEN};
+
+    /// Build a query whose QNAME carries `label_count` maximal 63-byte labels.
+    fn query_with_labels(label_count: usize) -> Vec<u8> {
+        let mut m = Vec::new();
+        m.extend_from_slice(&1u16.to_be_bytes()); // id
+        m.extend_from_slice(&0x0100u16.to_be_bytes()); // flags: RD
+        m.extend_from_slice(&1u16.to_be_bytes()); // QDCOUNT
+        m.extend_from_slice(&0u16.to_be_bytes());
+        m.extend_from_slice(&0u16.to_be_bytes());
+        m.extend_from_slice(&0u16.to_be_bytes());
+        for _ in 0..label_count {
+            m.push(63);
+            m.extend_from_slice(&[b'a'; 63]);
+        }
+        m.push(0);
+        m.extend_from_slice(&1u16.to_be_bytes()); // QTYPE
+        m.extend_from_slice(&1u16.to_be_bytes()); // QCLASS IN
+        m
+    }
+
+    #[test]
+    fn accepts_a_name_within_the_total_limit() {
+        // 3 * 64 = 192 octets, comfortably inside the 255 limit.
+        let q = query_with_labels(3);
+        let parsed = handle_dns_request(&q).expect("a normal-length name parses");
+        assert_eq!(parsed.labels.len(), 3);
+    }
+
+    #[test]
+    fn rejects_a_name_past_the_total_limit() {
+        // 5 * 64 = 320 octets. Each label is individually legal, so only the
+        // total-length check can reject this.
+        let q = query_with_labels(5);
+        assert!(
+            handle_dns_request(&q).is_err(),
+            "a name over {MAX_QNAME_TOTAL_LEN} octets must be rejected"
+        );
+    }
+
+    #[test]
+    fn a_maximal_datagram_cannot_allocate_without_bound() {
+        // The pre-fix behaviour: allocation grew with the datagram rather than
+        // with the protocol limit.
+        let q = query_with_labels(1000);
+        assert!(handle_dns_request(&q).is_err());
+    }
+}

@@ -226,32 +226,53 @@ impl QuicHandshakeResponder {
             DatagramEvent::NewConnection(incoming) => {
                 let remote = incoming.remote_address();
                 if self.connections.len() < Self::MAX_TRACKED_CONNECTIONS {
-                    if let Ok((ch, conn)) = self.endpoint.accept(incoming, now, buf, None) {
-                        // Flush any immediate post-accept datagram (e.g. stateless
-                        // reset or early server Initial ACK) produced by accept().
-                        if !buf.is_empty() {
-                            out.push(QuicResponse {
-                                destination: remote,
-                                payload: Bytes::copy_from_slice(buf),
-                            });
+                    match self.endpoint.accept(incoming, now, buf, None) {
+                        Ok((ch, conn)) => {
+                            // Flush any immediate post-accept datagram (e.g. stateless
+                            // reset or early server Initial ACK) produced by accept().
+                            if !buf.is_empty() {
+                                out.push(QuicResponse {
+                                    destination: remote,
+                                    payload: Bytes::copy_from_slice(buf),
+                                });
+                                buf.clear();
+                            }
+                            self.connections.insert(ch, conn);
+                            *self.active_remotes.entry(remote).or_insert(0) += 1;
+                            // Mark for silent eviction after the first transmit burst.
+                            // The proxy only needs to emit the Certificate flight; it
+                            // never receives a client Finished, so leaving the connection
+                            // alive would cause quinn-proto to retransmit the Handshake
+                            // epoch at ~1s/2s/5s intervals — visible as spurious
+                            // mid-session Initial/Handshake packets on the wire.
+                            self.flush_and_forget.insert(ch);
+                        }
+                        Err(_) => {
+                            // quinn writes a CONNECTION_CLOSE into `buf` on the
+                            // error path and we are discarding it, so the buffer
+                            // must be cleared before `drive()` reuses it —
+                            // otherwise the next datagram we emit is prefixed
+                            // with those stale bytes, which is both a malformed
+                            // QUIC packet and a leak of prior buffer content.
                             buf.clear();
                         }
-                        self.connections.insert(ch, conn);
-                        *self.active_remotes.entry(remote).or_insert(0) += 1;
-                        // Mark for silent eviction after the first transmit burst.
-                        // The proxy only needs to emit the Certificate flight; it
-                        // never receives a client Finished, so leaving the connection
-                        // alive would cause quinn-proto to retransmit the Handshake
-                        // epoch at ~1s/2s/5s intervals — visible as spurious
-                        // mid-session Initial/Handshake packets on the wire.
-                        self.flush_and_forget.insert(ch);
                     }
-                } else if !buf.is_empty() {
-                    out.push(QuicResponse {
-                        destination: remote,
-                        payload: Bytes::copy_from_slice(buf),
-                    });
-                    buf.clear();
+                } else {
+                    // Saturated. `Incoming` must be handed back to quinn, not
+                    // dropped: quinn-proto's `ignore()` documents that merely
+                    // dropping it leaks the endpoint state tracking that
+                    // connection attempt, permanently. Once `max_incoming` such
+                    // leaks accumulate the endpoint refuses every new
+                    // connection for the life of the process, silently killing
+                    // the QUIC camouflage.
+                    self.endpoint.ignore(incoming);
+                    if !buf.is_empty() {
+                        out.push(QuicResponse {
+                            destination: remote,
+                            payload: Bytes::copy_from_slice(buf),
+                        });
+                        buf.clear();
+                    }
                 }
             }
             DatagramEvent::ConnectionEvent(ch, event) => {

@@ -146,6 +146,18 @@ pub async fn update_settings(
                     "dnsUpstream must be host:port (e.g. 1.1.1.1:53), got {up:?}"
                 )));
             }
+            // Unauthenticated internet users drive traffic to whatever this
+            // points at, so an internal address would make the proxy a relay
+            // into the private network. Mirrors the vetting the Xray dest
+            // probe already applies in `xray::probe::resolve_vetted_addr`.
+            if let Ok(addr) = up.parse::<std::net::SocketAddr>() {
+                if is_forbidden_upstream_ip(&addr.ip()) {
+                    return Err(bad_request(format!(
+                        "dnsUpstream must be a public resolver; loopback, private, \
+                         link-local, multicast and unspecified addresses are refused, got {up:?}"
+                    )));
+                }
+            }
         }
         // A QUIC cert domain is required whenever the handshake responder
         // is on with quic/auto — validate the effective combination.
@@ -244,4 +256,61 @@ pub async fn restart(
 
 fn bad_request(msg: String) -> (StatusCode, Json<Value>) {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": msg })))
+}
+
+/// True when `ip` is one the DNS forwarder must never be pointed at.
+///
+/// The forwarder relays datagrams from unauthenticated internet clients, so a
+/// non-public upstream turns the proxy into a path into the private network.
+fn is_forbidden_upstream_ip(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || v4.is_unspecified()
+                || v4.octets()[0] == 0
+                // 100.64.0.0/10 carrier-grade NAT
+                || (v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]))
+        }
+        std::net::IpAddr::V6(v6) => {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_forbidden_upstream_ip(&std::net::IpAddr::V4(mapped));
+            }
+            v6.is_loopback()
+                || v6.is_multicast()
+                || v6.is_unspecified()
+                // fc00::/7 unique-local, fe80::/10 link-local
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+#[cfg(test)]
+mod upstream_vetting_tests {
+    use super::is_forbidden_upstream_ip;
+    use std::net::IpAddr;
+
+    #[test]
+    fn refuses_internal_destinations() {
+        for bad in [
+            "127.0.0.1", "10.0.0.5", "192.168.1.1", "172.16.0.1",
+            "169.254.169.254", "0.0.0.0", "224.0.0.1", "100.64.0.1",
+            "::1", "fe80::1", "fd00::1", "::", "::ffff:127.0.0.1",
+        ] {
+            let ip: IpAddr = bad.parse().unwrap();
+            assert!(is_forbidden_upstream_ip(&ip), "should refuse {bad}");
+        }
+    }
+
+    #[test]
+    fn allows_real_public_resolvers() {
+        for ok in ["1.1.1.1", "8.8.8.8", "9.9.9.9", "2606:4700:4700::1111"] {
+            let ip: IpAddr = ok.parse().unwrap();
+            assert!(!is_forbidden_upstream_ip(&ip), "should allow {ok}");
+        }
+    }
 }

@@ -517,7 +517,30 @@ pub async fn apply_and_reconcile() -> Result<()> {
     // disable before AmneziaWG reclaims the public port.
     if let Ok(iface) = db::get_interface() {
         if let Err(e) = crate::firewall::apply_proxy_lockdown(&iface) {
-            tracing::warn!(error = %e, "proxy firewall lockdown failed (non-fatal)");
+            // Fail closed while the proxy is being enabled. The comment above
+            // is the whole reason this call is ordered here: AmneziaWG is
+            // about to be rebound onto the backend port with an all-addresses
+            // UDP bind, and the lockdown is what keeps that raw, un-imitated
+            // listener off the WAN. Warning and carrying on left it exposed on
+            // a predictable `public_port ± 1` indefinitely, while the UI
+            // reported the proxy as Running — the opposite of what enabling
+            // the proxy is for.
+            //
+            // On the disable path the lockdown is a teardown and a failure
+            // only leaves a stale drop rule, which is not an exposure, so that
+            // direction stays non-fatal.
+            let enabling = db::get_proxy_settings().map(|s| s.enabled).unwrap_or(false);
+            if enabling {
+                tracing::error!(
+                    error = %e,
+                    "proxy firewall lockdown failed; refusing to rebind AmneziaWG onto \
+                     the backend port, which would leave the raw listener WAN-reachable"
+                );
+                return Err(anyhow::anyhow!(
+                    "backend-port lockdown failed, proxy not enabled: {e}"
+                ));
+            }
+            tracing::warn!(error = %e, "proxy lockdown teardown failed (non-fatal)");
         }
     }
     // Restart so the kernel/userspace listener actually moves and the public

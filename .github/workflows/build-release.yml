@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # Rustup ships with the runner; we just need the musl target +
       # musl-tools (provides the musl-gcc linker our RUSTFLAGS asks
@@ -72,7 +72,7 @@ jobs:
       # the lockfile + pin files so a vendor bump or dependency change
       # invalidates the cache cleanly. Saves ~3 min on repeat runs.
       - name: Cache cargo registry + target
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -89,7 +89,7 @@ jobs:
       # Cache key includes the union of every pin file's content, so
       # bumping any binary version invalidates the cache exactly once.
       - name: Cache vendor binary blobs
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: vendor/*.gz
           key: vendor-${{ runner.os }}-${{ hashFiles('vendor/*_VERSION') }}
@@ -153,6 +153,13 @@ jobs:
           tar -C dist -czf "awg-easy-rs-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz" awg-easy-rs
           cp target/x86_64-unknown-linux-musl/release/awg-easy-rs awg-easy-rs
           echo "tarball_sha=$(sha256sum awg-easy-rs-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          # Publish the digests as a real artifact, not just as prose in the
+          # release body. `scripts/install.sh` fetches this and verifies the
+          # binary before running it as root; a digest a machine cannot read
+          # is a digest that never gets checked.
+          sha256sum \
+            "awg-easy-rs-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz" \
+            awg-easy-rs > SHA256SUMS
 
       - name: Compute bundled-component versions
         id: components
@@ -188,13 +195,14 @@ jobs:
           git push origin ${{ steps.version.outputs.tag }}
 
       - name: Create GitHub Release
-        uses: ncipollo/release-action@v1
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
         with:
           tag: ${{ steps.version.outputs.tag }}
           name: "awg-easy-rs ${{ steps.version.outputs.tag }}"
           artifacts: |
             awg-easy-rs-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz
             awg-easy-rs
+            SHA256SUMS
           body: |
             Statically linked **x86_64-linux** ELF — runs unchanged on
             glibc, musl, or any other libc host. No system packages

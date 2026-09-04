@@ -189,9 +189,38 @@ fn apply_quic_padding_short(data: &mut [u8], pad_size: usize) {
     }
 }
 
-/// FNV-1a seed from first 64 bytes of payload for PRNG initialisation.
+/// Per-process secret mixed into every cover-traffic seed, drawn once from the
+/// OS CSPRNG.
+///
+/// Without it the seed was `fnv1a(payload)` where `payload` is the WireGuard
+/// ciphertext travelling in the clear in the *same datagram*. Every value the
+/// transform emits to look random — QUIC spin/key-phase bits, the STUN
+/// transaction ID, the SIP branch and tags, DNS transaction IDs — was
+/// therefore recomputable by any passive observer, making the padding a
+/// zero-false-positive fingerprint for this proxy: the opposite of the
+/// feature's purpose.
+static COVER_SECRET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+
+fn cover_secret() -> u32 {
+    *COVER_SECRET.get_or_init(|| {
+        let mut b = [0u8; 4];
+        crate::rng::fill(&mut b);
+        u32::from_le_bytes(b)
+    })
+}
+
+/// Seed the cover-traffic PRNG unpredictably.
+///
+/// Still a deterministic function of the payload *within one process*, which
+/// the transform relies on (a given datagram's cover traffic must not depend
+/// on how many attributes happen to fit). What changes is that the function is
+/// keyed: an observer who can see the payload but not `COVER_SECRET` cannot
+/// reproduce the output, which is what removes the fingerprint. A per-packet
+/// counter would add unlinkability between identical payloads, but WireGuard
+/// payloads are ciphertext and effectively never repeat, and it would break
+/// the intra-datagram stability the callers depend on.
 fn fnv1a_seed(payload: &[u8]) -> u32 {
-    let mut state: u32 = 0x811c_9dc5;
+    let mut state: u32 = 0x811c_9dc5 ^ cover_secret();
     for &b in payload.iter().take(64) {
         state ^= b as u32;
         state = state.wrapping_mul(0x0100_0193);

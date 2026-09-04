@@ -217,9 +217,14 @@ pub async fn regenerate_keys(
 
 #[cfg(not(xray_bundled))]
 pub async fn regenerate_keys(
-    State(_state): State<AppState>,
-    _jar: CookieJar,
+    State(state): State<AppState>,
+    jar: CookieJar,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Guard the stub too. These routes are mounted unconditionally, so with
+    // the guard inside the cfg arm an unbundled build answered them without a
+    // session — disclosing which transports were compiled in. dns.rs and
+    // mtproxy.rs already put the guard outside the cfg split; match them.
+    let _admin = require_admin(&jar, &state)?;
     Err(api_err(
         StatusCode::NOT_IMPLEMENTED,
         "Xray support not bundled in this build",
@@ -299,9 +304,10 @@ pub async fn supervisor_status(
 
 #[cfg(not(xray_bundled))]
 pub async fn supervisor_status(
-    State(_state): State<AppState>,
-    _jar: CookieJar,
+    State(state): State<AppState>,
+    jar: CookieJar,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let _admin = require_admin(&jar, &state)?;
     Ok(Json(json!({
         "state": "disabled",
         "reason": "Xray support not bundled in this build",
@@ -325,9 +331,10 @@ pub async fn restart(
 
 #[cfg(not(xray_bundled))]
 pub async fn restart(
-    State(_state): State<AppState>,
-    _jar: CookieJar,
+    State(state): State<AppState>,
+    jar: CookieJar,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let _admin = require_admin(&jar, &state)?;
     Err(api_err(
         StatusCode::NOT_IMPLEMENTED,
         "Xray support not bundled in this build",

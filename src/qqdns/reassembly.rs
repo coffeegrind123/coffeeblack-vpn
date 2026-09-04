@@ -56,6 +56,25 @@ struct Inner {
 }
 
 /// Fragment reassembler keyed by `data_offset`.
+///
+/// # Slots are not bound to a sender, and cannot be
+///
+/// Any host that can reach the listener with a correctly suffixed query can
+/// occupy a slot, because the wire format carries no client identifier — the
+/// upstream protocol's own "one instance, one client endpoint" limitation.
+/// Binding a slot to its first sender's address is *not* a fix: queries arrive
+/// via public recursive resolvers, `dns_ips` is a list, and anycast means one
+/// client's fragments legitimately arrive from several source addresses. Such
+/// a check would break ordinary operation while an attacker just spoofs the
+/// resolver's address.
+///
+/// What is bounded instead is the damage: the slot array is a fixed
+/// `TOTAL_DATA_OFFSET` (2^15) entries, each holding at most `NUM_SLOTS` (64)
+/// fragments, and `dns::handle_question` caps a fragment at one DNS name (255
+/// octets). Worst-case resident memory is therefore fixed, not a function of
+/// attacker traffic, and the sweeper reclaims abandoned slots. Injected
+/// fragments corrupt a message rather than disclose one — the tunnel payload
+/// is encrypted, so a forged fragment fails authentication downstream.
 #[derive(Clone)]
 pub struct DataHandler {
     inner: Arc<Mutex<Inner>>,

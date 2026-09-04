@@ -345,7 +345,10 @@ update_xray() {
         "https://github.com/XTLS/Xray-core/releases/download/${version}/Xray-linux-64.zip"
     curl -sSL --fail-with-body -o "$dgst" \
         "https://github.com/XTLS/Xray-core/releases/download/${version}/Xray-linux-64.zip.dgst" || \
-        warn "no .dgst published for $version — skipping zip-SHA cross-check"
+        { [ "${ALLOW_UNVERIFIED_VENDOR:-0}" = "1" ] \
+            && warn "no .dgst for $version; ALLOW_UNVERIFIED_VENDOR=1 — proceeding" \
+            || die "no .dgst published for Xray $version — cannot verify the download. \
+Re-run with ALLOW_UNVERIFIED_VENDOR=1 to accept HTTPS alone."; }
 
     if [ -s "$dgst" ]; then
         local expected actual
@@ -394,19 +397,33 @@ update_dnscrypt_proxy() {
     curl -sSL --fail-with-body -o "$sig" \
         "https://github.com/DNSCrypt/dnscrypt-proxy/releases/download/${v}/dnscrypt-proxy-linux_x86_64-${v}.tar.gz.minisig" 2>/dev/null || true
 
+    # Fail closed. This artifact is unpacked and then *executed* on the build
+    # host a few lines below, and its SHA is written into the pin file that the
+    # runtime check trusts — so accepting an unverified download here defeats
+    # every later integrity check rather than merely weakening this one.
+    #
+    # The maintainers have rotated the signing key without updating their docs
+    # before, which is why this used to warn. That is a reason to make the
+    # override explicit and auditable, not to accept any artifact silently: set
+    # ALLOW_UNVERIFIED_VENDOR=1 to proceed after checking the key out of band.
     if [ -s "$sig" ] && command -v minisign >/dev/null 2>&1; then
-        # Documented public key from the dnscrypt-proxy README. May be
-        # stale; that's why we don't fail-closed on signature errors.
+        # Documented public key from the dnscrypt-proxy README.
         if minisign -V -P RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3 \
                 -m "$tgz" 2>&1 | grep -q "Signature and comment signature verified"; then
             ok "minisign signature verified"
+        elif [ "${ALLOW_UNVERIFIED_VENDOR:-0}" = "1" ]; then
+            warn "minisign verification FAILED but ALLOW_UNVERIFIED_VENDOR=1 — proceeding"
         else
-            warn "minisign signature verification FAILED — \
-public key may have rotated. Manually verify $version before publishing this bump."
+            die "minisign signature verification FAILED for dnscrypt-proxy $v. \
+The signing key may have rotated: verify it out of band, then re-run with \
+ALLOW_UNVERIFIED_VENDOR=1 if you accept the artifact."
         fi
+    elif [ "${ALLOW_UNVERIFIED_VENDOR:-0}" = "1" ]; then
+        warn "no minisig or minisign unavailable; ALLOW_UNVERIFIED_VENDOR=1 — proceeding"
     else
-        warn "minisign not installed or no .minisig published — \
-HTTPS chain-of-trust only"
+        die "cannot verify dnscrypt-proxy $v: \
+$( [ -s "$sig" ] || echo 'no .minisig published' )$( command -v minisign >/dev/null 2>&1 || echo 'minisign not installed' ). \
+Install minisign, or re-run with ALLOW_UNVERIFIED_VENDOR=1 to accept HTTPS alone."
     fi
 
     log "extracting dnscrypt-proxy ELF"
@@ -416,6 +433,8 @@ HTTPS chain-of-trust only"
 
     verify_static "$elf" "dnscrypt-proxy"
 
+    # Smoke-test runs the downloaded binary on the build host, so it must come
+    # after verification, never before.
     log "smoke-test"
     "$elf" -version >/dev/null 2>&1 || warn "dnscrypt-proxy -version returned non-zero"
 

@@ -103,17 +103,46 @@ pub fn save_config() -> Result<()> {
     let config = render_server_config()?;
 
     if crate::privhelper::is_enabled() {
-        crate::privhelper::call(&crate::privhelper::Request::WgSync { config })?;
+        // The helper renders the firewall hooks itself; we only supply the
+        // addresses, which it re-validates as CIDRs before substituting them
+        // into its own constant templates.
+        crate::privhelper::call(&crate::privhelper::Request::WgSync {
+            config,
+            firewall: Some(crate::privhelper::FirewallParams {
+                ipv4_cidr: iface.ipv4_cidr.clone(),
+                ipv6_cidr: iface.ipv6_cidr.clone(),
+                port: iface.port as u16,
+            }),
+        })?;
         return Ok(());
     }
 
     let path = format!("{}/{}.conf", crate::config::CONFIG.wg_conf_dir, iface.name);
-    std::fs::write(&path, &config)?;
+    // Create with 0600 rather than writing and chmod'ing afterwards: this file
+    // carries the server private key and every peer's preshared key, and
+    // `fs::write` creates with the process umask, leaving it world-readable
+    // for the duration of the write. `.mode()` is applied by open(2) itself,
+    // so there is no window. Mirrors `privhelper::wg_sync`.
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(crate::secretfile::SECRET_FILE_MODE)
+            .open(&path)?;
+        f.write_all(config.as_bytes())?;
+        // An existing file keeps its old mode through O_CREAT, so still
+        // enforce it for a config written by an older version.
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(crate::secretfile::SECRET_FILE_MODE),
+        )?;
     }
+    #[cfg(not(unix))]
+    std::fs::write(&path, &config)?;
 
     cli::awg_sync(&iface.name)?;
     Ok(())
@@ -173,6 +202,23 @@ pub fn render_server_config() -> Result<String> {
         gen_iface.i5.clear();
         suppress_awg3_conflicts(&mut gen_iface);
     }
+
+    // In privileged-helper mode the hooks are rendered by the helper, from its
+    // own compiled-in templates and validated network parameters — see
+    // `privhelper::FirewallParams`. Emitting them here too would just be
+    // rejected: `awg-quick` runs hook text as root, so the helper refuses to
+    // accept any that crossed the socket.
+    let hooks = if crate::privhelper::is_enabled() {
+        crate::db::Hooks {
+            pre_up: String::new(),
+            post_up: String::new(),
+            pre_down: String::new(),
+            post_down: String::new(),
+            ..hooks
+        }
+    } else {
+        hooks
+    };
 
     let mut config = config_gen::generate_server_interface(&gen_iface, &hooks)?;
 
@@ -298,7 +344,7 @@ pub fn cron_job() -> Result<()> {
             continue;
         }
         if let Some(ref expires) = client.expires_at {
-            if let Some(exp) = crate::datetime::parse_rfc3339(expires) {
+            if let Some(exp) = crate::datetime::parse_expiry(expires) {
                 if now > exp {
                     tracing::info!("Client {} ({}) expired, disabling", client.id, client.name);
                     crate::db::toggle_client(client.id, false)?;

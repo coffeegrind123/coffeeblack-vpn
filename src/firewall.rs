@@ -585,6 +585,28 @@ fn append_client_rules(
 
     let src4 = client.ipv4_address.as_deref().unwrap_or("0.0.0.0");
     let src6 = client.ipv6_address.as_deref().unwrap_or("::");
+
+    // The peer's own addresses are spliced into the ruleset exactly like the
+    // targets below, so they need the same validation. `parse_target` guards
+    // the destination but nothing guarded the source, leaving a legacy or
+    // hand-edited row able to carry nft syntax into the transaction. Same
+    // disposition as an invalid target: skip this client rather than abort the
+    // rebuild, since default-deny means a skipped client is closed, not open.
+    if src4.parse::<std::net::Ipv4Addr>().is_err() {
+        tracing::warn!(
+            client = client.id, addr = %src4,
+            "skipping per-client firewall rules: ipv4_address is not an IPv4 address"
+        );
+        return Ok(());
+    }
+    if src6.parse::<std::net::Ipv6Addr>().is_err() {
+        tracing::warn!(
+            client = client.id, addr = %src6,
+            "skipping per-client firewall rules: ipv6_address is not an IPv6 address"
+        );
+        return Ok(());
+    }
+
     let comment = sanitize_comment(&client.name, client.id);
 
     for t in &targets {

@@ -215,7 +215,7 @@ installer writes:
 | `WG_EASY_CONF_DIR` | `/etc/wireguard` | Runtime root. |
 | `WG_EASY_DB_PATH` | `/etc/wireguard/wg-easy.db` | SQLite database. |
 | `INIT_ENABLED` | `true` | Seed the first admin. Effective only while no admin exists (idempotent). |
-| `INIT_USERNAME` / `INIT_PASSWORD` | *(prompted)* | First admin credentials. |
+| `INIT_USERNAME` / `INIT_PASSWORD` | *(prompted)* | First admin credentials. The password must be ≥12 characters; a shorter one aborts startup. |
 | `INIT_HOST` | *(prompted / auto)* | Public WireGuard endpoint for client configs. |
 | `INIT_PORT` | `51820` | AmneziaWG UDP listen port. |
 | `INIT_DNS` | `1.1.1.1,1.0.0.1` | DNS pushed to clients. |

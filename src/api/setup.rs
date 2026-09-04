@@ -139,8 +139,8 @@ pub struct SetupStep4Request {
 }
 
 pub async fn setup_step4_post(
-    State(_state): State<AppState>,
-    _jar: CookieJar,
+    State(state): State<AppState>,
+    jar: CookieJar,
     Json(body): Json<SetupStep4Request>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     // Check setup step (should be 3 — ready for host/port config)
@@ -149,6 +149,23 @@ pub async fn setup_step4_post(
         return Err(api_err(
             StatusCode::BAD_REQUEST,
             "Setup not ready for this step. Complete step 2 first.",
+        ));
+    }
+
+    // Once an admin exists, this stops being first-run setup and becomes an
+    // ordinary configuration write: `host` is interpolated into the Endpoint
+    // line of every generated peer config, so an unauthenticated caller could
+    // otherwise point every future client at an address of their choosing.
+    if db::get_user_count().unwrap_or(0) > 0 {
+        let _admin = crate::api::admin::require_admin(&jar, &state)?;
+    }
+
+    // Reject anything that is not a hostname or IP literal before it reaches
+    // a config file.
+    if !is_valid_endpoint_host(&body.host) {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "host must be a hostname or IP address",
         ));
     }
 
@@ -207,4 +224,74 @@ fn detect_private_ips() -> Vec<String> {
         }
     }
     ips
+}
+
+/// Accept only a hostname or IP literal for the peer `Endpoint` host.
+///
+/// This value is interpolated verbatim into every generated client config, so
+/// it must not be able to carry a newline (which would inject a further config
+/// directive) or the surrounding punctuation of an `Endpoint = host:port`
+/// line. Deliberately permissive about the shape of a *name* — internationalised
+/// and single-label hostnames are legitimate — and strict about the character
+/// set.
+fn is_valid_endpoint_host(host: &str) -> bool {
+    // Deliberately does NOT trim: the caller stores exactly what it validated,
+    // so accepting surrounding whitespace here would let a trailing `\r` or
+    // space through into the config file.
+    let h = host;
+    if h.is_empty() || h.len() > 253 {
+        return false;
+    }
+    // An IPv6 literal is written bare here; the config generator adds the
+    // brackets. Accept it via the standard parser rather than by character set.
+    if h.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    // Hostname: letters, digits, dot and hyphen only. No label may be empty,
+    // which also rejects a leading/trailing dot and a doubled dot.
+    h.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && label
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    })
+}
+
+#[cfg(test)]
+mod host_validation_tests {
+    use super::is_valid_endpoint_host;
+
+    #[test]
+    fn accepts_real_endpoint_hosts() {
+        for ok in [
+            "vpn.example.com",
+            "example.com",
+            "localhost",
+            "203.0.113.7",
+            "2001:db8::1",
+            "a-b.c-d.example",
+        ] {
+            assert!(is_valid_endpoint_host(ok), "should accept {ok:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_values_that_could_inject_a_config_directive() {
+        for bad in [
+            "",
+            "   ",
+            "vpn.example.com\nPostUp = id",
+            "vpn.example.com:51820",
+            "vpn.example.com/../x",
+            "vpn example.com",
+            "vpn.example.com\r",
+            ".example.com",
+            "example..com",
+            "example.com.",
+            "vpn.example.com#comment",
+        ] {
+            assert!(!is_valid_endpoint_host(bad), "should reject {bad:?}");
+        }
+    }
 }

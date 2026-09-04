@@ -205,6 +205,25 @@ impl GlobalProbeBudget {
         self.try_consume_at(bytes, coarse_now_secs())
     }
 
+    /// Whether any allowance remains this second, without reserving it.
+    ///
+    /// For work that must be gated *before* its cost is known — the QUIC
+    /// handshake responder computes a TLS signature inline on the receive loop
+    /// long before it knows how many bytes it will emit. Charging only the
+    /// reply meant an exhausted budget still bought an attacker unlimited CPU.
+    /// This is intentionally a peek, not a reservation: the reply itself is
+    /// still charged through `try_consume`.
+    pub(crate) fn has_headroom(&self) -> bool {
+        self.has_headroom_at(coarse_now_secs())
+    }
+
+    /// Same, with an injectable clock.
+    pub(crate) fn has_headroom_at(&self, now: u32) -> bool {
+        let (old_bytes, old_ts) = unpack(self.state.load(Ordering::Acquire));
+        // A new second resets the allowance, so headroom is unconditional then.
+        now != old_ts || old_bytes > 0
+    }
+
     /// Same, with an injectable clock so tests need no real sleeps.
     pub(crate) fn try_consume_at(&self, bytes: usize, now: u32) -> bool {
         // A single reply larger than the whole per-second allowance can never

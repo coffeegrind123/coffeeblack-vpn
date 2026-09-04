@@ -51,8 +51,13 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 /// Validate the incoming Authorization header against the stored metrics
 /// password. The password is stored hashed (sha-256 hex) — see `update_general`.
 fn check_metrics_password(headers: &HeaderMap, stored_hash: &str) -> bool {
+    // Fail closed. This used to return `true` for an empty stored hash, so a
+    // deployment whose metrics password was cleared served the full peer
+    // roster — names, transfer counters, last handshake, and in the JSON
+    // variant each peer's current remote endpoint IP — to anyone who asked.
+    // Correctness relied on an unrelated handler never writing that state.
     if stored_hash.is_empty() {
-        return true;
+        return false;
     }
     let auth = match headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
         Some(s) => s,
@@ -107,17 +112,19 @@ pub async fn interface_info() -> Result<Json<Value>, (StatusCode, Json<Value>)> 
 pub async fn one_time_link(
     Path(token): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
-    // Look up token
-    let link = db::get_one_time_link(&token).map_err(|_| {
+    // Claim the token atomically. Looking it up and deleting it afterwards let
+    // two concurrent requests both pass the lookup and both receive the config
+    // (which embeds the peer's private key), defeating the single-use property
+    // this endpoint exists to enforce.
+    let link = db::claim_one_time_link(&token).map_err(|_| {
         api_err(StatusCode::NOT_FOUND, "Invalid or expired one-time link")
     })?;
 
-    // Check expiry
+    // Check expiry. The row is already gone — claiming it is what deleted it —
+    // so an expired link needs no further cleanup here.
     if let Some(ref expires) = link.expires_at {
-        if let Some(exp) = crate::datetime::parse_rfc3339(expires) {
+        if let Some(exp) = crate::datetime::parse_expiry(expires) {
             if crate::datetime::now_utc() > exp {
-                // Remove expired link
-                let _ = db::delete_one_time_link(link.id);
                 return Err(api_err(StatusCode::GONE, "One-time link has expired"));
             }
         }
@@ -131,9 +138,6 @@ pub async fn one_time_link(
     let client = db::get_client(link.id).map_err(|_| {
         api_err(StatusCode::NOT_FOUND, "Client not found")
     })?;
-
-    // Delete the one-time link (one-time use)
-    let _ = db::delete_one_time_link(link.id);
 
     let filename = format!("{}.conf", sanitize_filename(&client.name));
 
@@ -156,6 +160,7 @@ pub async fn one_time_link(
 // ---------------------------------------------------------------------------
 
 pub async fn metrics_json(
+    peer: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let general = db::get_general().map_err(map_err)?;
@@ -164,10 +169,24 @@ pub async fn metrics_json(
         return Err(api_err(StatusCode::FORBIDDEN, "JSON metrics disabled"));
     }
 
-    if let Some(ref hash) = general.metrics_password {
-        if !check_metrics_password(&headers, hash) {
-            return Err(api_err(StatusCode::UNAUTHORIZED, "Bearer token required"));
-        }
+    // Bound guessing of the bearer token. This gate stands in front of the
+    // whole peer roster, including each peer's current remote endpoint, and
+    // had no attempt limiting at all while /api/session next door has had one
+    // since the beginning.
+    crate::api::session::check_ip_attempt_limit(
+        "metrics",
+        crate::api::session::client_ip_for_limit(
+            &headers,
+            peer.map(|axum::extract::ConnectInfo(a)| a),
+        )
+        .as_deref(),
+        30,
+    )?;
+
+    // `None` and empty are the same state — metrics enabled with no credential
+    // — and both must be refused rather than skipping the check.
+    if !check_metrics_password(&headers, general.metrics_password.as_deref().unwrap_or("")) {
+        return Err(api_err(StatusCode::UNAUTHORIZED, "Bearer token required"));
     }
 
     let iface = db::get_interface().map_err(map_err)?;
@@ -217,6 +236,7 @@ pub async fn metrics_json(
 // ---------------------------------------------------------------------------
 
 pub async fn metrics_prometheus(
+    peer: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let general = db::get_general().map_err(map_err)?;
@@ -228,10 +248,24 @@ pub async fn metrics_prometheus(
         ));
     }
 
-    if let Some(ref hash) = general.metrics_password {
-        if !check_metrics_password(&headers, hash) {
-            return Err(api_err(StatusCode::UNAUTHORIZED, "Bearer token required"));
-        }
+    // Bound guessing of the bearer token. This gate stands in front of the
+    // whole peer roster, including each peer's current remote endpoint, and
+    // had no attempt limiting at all while /api/session next door has had one
+    // since the beginning.
+    crate::api::session::check_ip_attempt_limit(
+        "metrics",
+        crate::api::session::client_ip_for_limit(
+            &headers,
+            peer.map(|axum::extract::ConnectInfo(a)| a),
+        )
+        .as_deref(),
+        30,
+    )?;
+
+    // `None` and empty are the same state — metrics enabled with no credential
+    // — and both must be refused rather than skipping the check.
+    if !check_metrics_password(&headers, general.metrics_password.as_deref().unwrap_or("")) {
+        return Err(api_err(StatusCode::UNAUTHORIZED, "Bearer token required"));
     }
 
     let iface = db::get_interface().map_err(map_err)?;
@@ -314,7 +348,7 @@ pub async fn metrics_prometheus(
             client.id,
             act.last_seen_at
                 .as_deref()
-                .and_then(crate::datetime::parse_rfc3339)
+                .and_then(crate::datetime::parse_expiry)
                 .map(|d| d.unix_timestamp())
                 .unwrap_or(0)
         ));

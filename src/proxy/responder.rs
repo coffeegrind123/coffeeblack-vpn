@@ -103,8 +103,15 @@ pub fn classify_awg_packet(data: &[u8], params: &AwgParams) -> Option<AwgPacketT
     ];
 
     for (offset, range, pkt_type) in candidates {
-        // Check if we have enough bytes to read the header
-        if data.len() < offset + 4 {
+        // Check if we have enough bytes to read the header.
+        //
+        // `saturating_add` rather than `+`: `offset` comes from the S1–S4
+        // params, and on a 32-bit target a large enough value would wrap the
+        // sum to something small, pass this guard, and then panic on the
+        // indexing below. `wg::params` bounds S1–S4 to 0..=1132 and the
+        // project ships x86_64, so this is latent rather than reachable — but
+        // the guard costs nothing and the bound lives in another module.
+        if data.len() < offset.saturating_add(4) {
             continue;
         }
 

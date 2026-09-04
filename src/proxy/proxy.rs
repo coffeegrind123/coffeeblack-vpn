@@ -147,6 +147,24 @@ pub struct Proxy {
 /// [`Proxy::dns_forward_semaphore`]).
 const MAX_INFLIGHT_DNS_FORWARDS: usize = 256;
 
+/// Smallest datagram the stateless SIP fallback will answer.
+///
+/// `generate_sip_trying` emits ~41 bytes of fixed framing whatever the input,
+/// so answering a tiny datagram turns the port into an amplifying reflector
+/// pointed at a spoofed source. A genuine SIP request carries a request line
+/// plus Via/From/To/Call-ID/CSeq and clears this comfortably; the 4-byte
+/// `SIP/` that reaches the fallback arm does not.
+const MIN_SIP_REQUEST_BYTES: usize = 100;
+
+/// Largest DNS answer relayed back to an unverified source address.
+///
+/// Bounding the reply near the classic 512-byte DNS limit keeps the forwarder
+/// from being a high-ratio amplifier: a 17-byte query could otherwise return
+/// up to 4096 bytes to whatever address was spoofed. Anything larger is
+/// truncated and marked TC=1, which is exactly what a resolver is supposed to
+/// do when an answer does not fit — a legitimate client retries over TCP.
+const MAX_FORWARDED_DNS_REPLY_BYTES: usize = 512;
+
 #[derive(Debug, Serialize)]
 struct ProxyStatusFile {
     schema_version: u32,
@@ -607,6 +625,23 @@ impl Proxy {
         }))
     }
 
+    /// Whether it is safe to require AWG classification before allocating a
+    /// session for a new source address.
+    ///
+    /// Only when the params can actually classify both ends of a client's
+    /// lifetime: `h1` for the Handshake Initiation a new client starts with,
+    /// and `h4` for the Transport Data a returning client sends after its
+    /// session has aged out. `supervisor::norm_h` maps a blank H field to `0`,
+    /// so a pre-2.0 interface (or one whose H values were never generated)
+    /// yields `Some(params)` that matches nothing — gating on that would drop
+    /// every packet and take the proxy off the air rather than protecting it.
+    /// In that case admission stays permissive, exactly as before.
+    fn session_admission_is_classified(&self) -> bool {
+        self.awg_params
+            .as_deref()
+            .is_some_and(|p| p.h1.max > 0 && p.h4.max > 0)
+    }
+
     /// Handle a packet received from a client.
     async fn handle_client_packet(&self, data: &[u8], client_addr: SocketAddr) {
         // Perform a single metrics lookup per client packet and reuse the
@@ -664,6 +699,29 @@ impl Proxy {
                     self.dns_query_echo.insert(client_addr, echo_ref.into());
                 }
             }
+        }
+
+        // Do not let an unauthenticated stranger allocate a session. Each one
+        // costs a backend socket (an fd), a relay task and a receive buffer,
+        // and the table is keyed by full SocketAddr — so without this gate a
+        // single host cycling source ports fills `max_sessions` and every
+        // genuine client is refused from then on. The classification needed to
+        // tell tunnel traffic from a stray datagram was already computed above
+        // for probe routing; this just stops throwing it away.
+        //
+        // Only applies when the AWG params are known: with no params nothing
+        // can be classified, and refusing everything would take the proxy off
+        // the air. An established session keeps forwarding either way, so a
+        // peer whose padding stops matching mid-session is never dropped.
+        if self.session_admission_is_classified()
+            && !is_awg_packet
+            && !self.sessions.contains(&client_addr)
+        {
+            debug!(
+                %client_addr,
+                "dropping unclassified datagram from a new source; not allocating a session"
+            );
+            return;
         }
 
         // Forward to backend (and spawn relay task for new sessions)
@@ -739,7 +797,18 @@ impl Proxy {
                             let (is_continuation, responses, probe_allowed) = {
                                 let mut responder = quic.lock().await;
                                 let continuation = responder.has_active_connection(client_addr);
-                                let allowed = continuation || metrics.try_acquire_probe();
+                                // Check the global byte budget *before* doing
+                                // the crypto, not just before sending. A QUIC
+                                // Initial from a new source costs a TLS
+                                // signature computed inline on the single
+                                // receive loop, so charging only the reply let
+                                // an exhausted budget still buy the attacker
+                                // unlimited CPU. A continuation belongs to an
+                                // already-admitted handshake and is not
+                                // re-charged here.
+                                let allowed = continuation
+                                    || (self.probe_budget.has_headroom()
+                                        && metrics.try_acquire_probe());
                                 if !allowed {
                                     (continuation, Vec::new(), false)
                                 } else {
@@ -849,6 +918,20 @@ impl Proxy {
         let method = match responder::sip_method(data) {
             Some(m) => m.to_ascii_uppercase(),
             None => {
+                // Do not answer a datagram too small to be a SIP request. The
+                // stateless `100 Trying` carries ~41 bytes of fixed framing, so
+                // replying to the 4-byte `SIP/` that reaches this arm is a 10x
+                // reflector aimed at whatever source address was spoofed. A
+                // real SIP request has a request line, Via, From, To, Call-ID
+                // and CSeq, so it is never anywhere near this small.
+                if data.len() < MIN_SIP_REQUEST_BYTES {
+                    debug!(
+                        %client_addr,
+                        len = data.len(),
+                        "ignoring undersized SIP probe; too small to be a request"
+                    );
+                    return;
+                }
                 let allowed = if pre_acquired_probe_token {
                     true
                 } else {
@@ -1193,6 +1276,16 @@ impl Proxy {
         let Some(upstream) = self.dns_upstream else {
             return false;
         };
+        // Refuse the query types whose whole purpose, to a reflector, is a
+        // large answer from a small question. Nothing legitimate about this
+        // camouflage path needs them.
+        // ANY (255), DNSKEY (48), RRSIG (46) — qtype travels as two raw bytes.
+        if responder::parse_dns_query_echo_ref(query)
+            .is_some_and(|e| matches!(u16::from_be_bytes(e.qtype), 255 | 48 | 46))
+        {
+            debug!(%client_addr, "refusing to forward an amplification-prone DNS qtype");
+            return false;
+        }
         let Ok(permit) = Arc::clone(&self.dns_forward_semaphore).try_acquire_owned() else {
             return false;
         };
@@ -1500,6 +1593,20 @@ async fn forward_dns_query(
     };
     if from != upstream || n == 0 {
         return None;
+    }
+
+    // Bound what goes back to the (unverified, spoofable) source address.
+    // Relaying the upstream answer verbatim made this an open resolver with up
+    // to ~241x payload amplification; truncating to the classic 512-byte limit
+    // and setting TC=1 is the resolver-correct way to say "too big, retry over
+    // TCP" and caps the reflection ratio.
+    if n > MAX_FORWARDED_DNS_REPLY_BYTES {
+        let mut truncated = buf[..MAX_FORWARDED_DNS_REPLY_BYTES].to_vec();
+        // TC is bit 1 of the flags word at offset 2.
+        if truncated.len() > 2 {
+            truncated[2] |= 0x02;
+        }
+        return Some(bytes::Bytes::from(truncated));
     }
 
     Some(bytes::Bytes::copy_from_slice(&buf[..n]))
@@ -2275,6 +2382,51 @@ mod tests {
     /// Regression test for the echo-capture path: the client's DNS query lives in
     /// the S-padding prefix of an AWG packet, which is classified as AWG and so
     /// skips `handle_probe`. The capture must therefore happen on the data path,
+    /// Session admission may only require AWG classification when the params
+    /// can actually classify. `supervisor::norm_h` maps a blank H field to 0,
+    /// so an interface whose H values were never generated yields params that
+    /// match nothing — gating on those would drop every packet and take the
+    /// proxy off the air instead of protecting it.
+    #[tokio::test]
+    async fn session_admission_stays_permissive_when_params_cannot_classify() {
+        use crate::proxy::config::{AwgParams, HRange};
+
+        let zero = HRange { min: 0, max: 0 };
+        let usable = HRange { min: 100, max: 200 };
+        let base = AwgParams {
+            jc: 8, jmin: 50, jmax: 1000, s1: 72, s2: 142, s3: 59, s4: 40,
+            h1: usable, h2: usable, h3: usable, h4: usable,
+        };
+
+        let mk = |params: Option<AwgParams>| async move {
+            let frontend = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
+            let backend_addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+            Proxy::from_parts(
+                ProxyConfig::default(),
+                frontend,
+                Arc::new(SessionTable::new(backend_addr, Duration::from_secs(60), 16)),
+                Arc::new(MetricsStore::new(16, 16)),
+                Protocol::Quic,
+                params,
+            )
+        };
+
+        // No params at all: nothing can be classified, so stay permissive.
+        assert!(!mk(None).await.session_admission_is_classified());
+
+        // Blank H1/H4 (the pre-2.0 / never-generated shape): still permissive.
+        let blank = AwgParams { h1: zero, h4: zero, ..base };
+        assert!(!mk(Some(blank)).await.session_admission_is_classified());
+
+        // A usable handshake range but no transport range: a returning client
+        // whose session aged out would be locked out, so still permissive.
+        let no_h4 = AwgParams { h4: zero, ..base };
+        assert!(!mk(Some(no_h4)).await.session_admission_is_classified());
+
+        // Fully usable params: the gate engages.
+        assert!(mk(Some(base)).await.session_admission_is_classified());
+    }
+
     /// otherwise responses never echo the query (root-label fallback only).
     #[tokio::test]
     async fn dns_echo_captured_from_awg_data_packet() {

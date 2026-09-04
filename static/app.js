@@ -73,6 +73,20 @@ function escJs(s) {
   return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"').replace(/\n/g,'\\n').replace(/\r/g,'\\r');
 }
 
+// JS-escape *then* HTML-escape, for a value interpolated into a quoted inline
+// event-handler attribute (`onclick="f('${escAttrJs(x)}')"`).
+//
+// escJs alone is wrong there and was the bug: it turns `"` into `\"`, but a
+// backslash is not an escape character in an HTML attribute value, so the
+// browser's HTML parser sees a bare `"` and ends the attribute — everything
+// after it becomes further attributes on the element. HTML-escaping second is
+// what makes the value opaque to the HTML parser; the browser decodes the
+// entities before the JS parser ever sees the string, so the JS escaping
+// underneath still applies. Order matters: escJs first, esc second.
+function escAttrJs(s) {
+  return esc(escJs(s));
+}
+
 // Inline SVG sparkline. Empty/short series renders a dim baseline.
 // className lets callers swap sizing context (peer-spark = row, stat-spark = stats strip).
 function renderSpark(values, w = 60, h = 22, color, className = 'peer-spark') {
@@ -637,7 +651,7 @@ function renderClients() {
           <button class="btn btn--quiet btn--icon" title="Download config" onclick="downloadConfig(${c.id})"><svg><use href="#i-download"/></svg></button>
           <button class="btn btn--quiet btn--icon" title="One-time link" onclick="generateOTL(${c.id})"><svg><use href="#i-link"/></svg></button>` : `
           <span class="peer-nokey" title="This server does not hold this peer's private key — it was issued once at creation. Rotate to issue a new configuration.">key not held</span>`}
-          <button class="btn btn--quiet btn--icon" title="Rotate key — issues a new config once and invalidates the current one" onclick="event.stopPropagation();rotateClientKey(${c.id}, '${escJs(c.name)}')"><svg><use href="#i-refresh"/></svg></button>
+          <button class="btn btn--quiet btn--icon" title="Rotate key — issues a new config once and invalidates the current one" onclick="event.stopPropagation();rotateClientKey(${c.id}, '${escAttrJs(c.name)}')"><svg><use href="#i-refresh"/></svg></button>
           <button class="btn btn--quiet btn--icon" title="Edit" onclick="navigate('/clients/${c.id}')"><svg><use href="#i-edit"/></svg></button>
         </div>
         ${otlBlock}
@@ -967,7 +981,7 @@ async function loadClientEdit(id) {
                 <div class="key-block">
                   <code>${esc(c.publicKey)}</code>
                   <div class="key-actions">
-                    <button class="btn btn--quiet btn--icon" title="Copy" onclick="copyText('${escJs(c.publicKey)}')"><svg><use href="#i-copy"/></svg></button>
+                    <button class="btn btn--quiet btn--icon" title="Copy" onclick="copyText('${escAttrJs(c.publicKey)}')"><svg><use href="#i-copy"/></svg></button>
                   </div>
                 </div>
                 <p class="field-help">Derived from the peer's private key. Safe to share.</p>
@@ -987,7 +1001,7 @@ async function loadClientEdit(id) {
                 <span class="otl-link">${esc(window.location.origin + '/cnf/' + c.oneTimeLink.oneTimeLink)}</span>
                 <span>expires in</span>
                 <span class="otl-countdown" id="edit-otl-${id}">—</span>
-                <button type="button" class="btn btn--quiet btn--sm" onclick="copyText('${escJs(window.location.origin + '/cnf/' + c.oneTimeLink.oneTimeLink)}')"><svg><use href="#i-copy"/></svg> copy</button>
+                <button type="button" class="btn btn--quiet btn--sm" onclick="copyText('${escAttrJs(window.location.origin + '/cnf/' + c.oneTimeLink.oneTimeLink)}')"><svg><use href="#i-copy"/></svg> copy</button>
               </div>` : ''}
               ${c.keyRetained ? `
               <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
@@ -995,7 +1009,7 @@ async function loadClientEdit(id) {
                 <button type="button" class="btn btn--ghost btn--sm" onclick="showConfig(${id})"><svg><use href="#i-eye"/></svg> View config</button>
                 <button type="button" class="btn btn--ghost btn--sm" onclick="downloadConfig(${id})"><svg><use href="#i-download"/></svg> Download .conf</button>
                 <button type="button" class="btn btn--ghost btn--sm" onclick="generateOTL(${id})"><svg><use href="#i-link"/></svg> ${c.oneTimeLink ? 'Regenerate link' : 'One-time link'}</button>
-                <button type="button" class="btn btn--ghost btn--sm" onclick="rotateClientKey(${id}, '${escJs(c.name)}')"><svg><use href="#i-refresh"/></svg> Rotate key</button>
+                <button type="button" class="btn btn--ghost btn--sm" onclick="rotateClientKey(${id}, '${escAttrJs(c.name)}')"><svg><use href="#i-refresh"/></svg> Rotate key</button>
               </div>` : `
               <div class="issued-warning" style="margin-top:14px">
                 <svg><use href="#i-alert"/></svg>
@@ -1007,7 +1021,7 @@ async function loadClientEdit(id) {
                 </div>
               </div>
               <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-                <button type="button" class="btn btn--ghost btn--sm" onclick="rotateClientKey(${id}, '${escJs(c.name)}')"><svg><use href="#i-refresh"/></svg> Rotate key</button>
+                <button type="button" class="btn btn--ghost btn--sm" onclick="rotateClientKey(${id}, '${escAttrJs(c.name)}')"><svg><use href="#i-refresh"/></svg> Rotate key</button>
               </div>`}
             </div>
           </div>
@@ -1061,7 +1075,7 @@ async function loadClientEdit(id) {
           <b>Delete peer</b>
           <span>Removes <span class="mono">${esc(c.name || '')}</span> from <span class="mono">awg0</span>, revokes its keys, and frees the address. Cannot be undone.</span>
         </div>
-        <button class="btn btn--danger" onclick="confirmDelete(${id}, '${escJs(c.name || '')}')"><svg><use href="#i-trash"/></svg> Delete peer</button>
+        <button class="btn btn--danger" onclick="confirmDelete(${id}, '${escAttrJs(c.name || '')}')"><svg><use href="#i-trash"/></svg> Delete peer</button>
       </div>
 
       <div class="save-bar">
@@ -2434,7 +2448,7 @@ function renderXrayClients(clients, status) {
       </div>
       <div class="peer-actions">
         <button class="btn btn--quiet btn--icon" title="Copy vless:// share URL.&#10;&#10;Paste into:&#10;• Amnezia VPN — Add server → Configuration file or text&#10;• v2rayN / v2rayNG — server list → import URL/clipboard&#10;• Hiddify, NekoBox, Streisand, Shadowrocket, FoXray — same flow" onclick="copyXrayShare(${c.id})">vless://</button>
-        <button class="btn btn--quiet btn--icon" title="QR code.&#10;&#10;Scan from inside:&#10;• Amnezia VPN — Add server → Scan QR&#10;• v2rayNG, Hiddify, NekoBox, Shadowrocket — server list → scan&#10;Or save the SVG and import as image" onclick="showXrayQr(${c.id}, '${escJs(c.name)}')">QR</button>
+        <button class="btn btn--quiet btn--icon" title="QR code.&#10;&#10;Scan from inside:&#10;• Amnezia VPN — Add server → Scan QR&#10;• v2rayNG, Hiddify, NekoBox, Shadowrocket — server list → scan&#10;Or save the SVG and import as image" onclick="showXrayQr(${c.id}, '${escAttrJs(c.name)}')">QR</button>
         ${isAdmin ? `<button class="btn btn--quiet btn--icon" title="Edit" onclick="navigate('/xray/clients/${c.id}')"><svg><use href="#i-edit"/></svg></button>` : ''}
       </div>
     </div>
@@ -2532,7 +2546,7 @@ async function loadXrayClientEdit(id) {
                 </div>
                 <div class="share-option">
                   <div class="share-option-head">
-                    <button class="btn btn--ghost btn--sm" type="button" onclick="showXrayQr(${c.id}, '${escJs(c.name)}')">Show QR code</button>
+                    <button class="btn btn--ghost btn--sm" type="button" onclick="showXrayQr(${c.id}, '${escAttrJs(c.name)}')">Show QR code</button>
                     <span class="share-tag">scan with phone</span>
                   </div>
                   <div class="share-option-text">
@@ -2571,7 +2585,7 @@ async function loadXrayClientEdit(id) {
           <b>Delete peer</b>
           <span>Removes <span class="mono">${esc(c.name)}</span>'s shortId and UUID. Existing clients with this share will fail with "client not found".</span>
         </div>
-        <button class="btn btn--danger" onclick="confirmXrayDelete(${c.id}, '${escJs(c.name)}')"><svg><use href="#i-trash"/></svg> Delete peer</button>
+        <button class="btn btn--danger" onclick="confirmXrayDelete(${c.id}, '${escAttrJs(c.name)}')"><svg><use href="#i-trash"/></svg> Delete peer</button>
       </div>
       <div class="save-bar">
         <span class="changed">Changes reload Xray (SIGHUP)</span>
@@ -2689,8 +2703,8 @@ async function restartXray() {
 function mtproxyUserRow(u) {
   const link = pickMtproxyShareLink(u.links);
   const linkBtn = link
-    ? `<button class="btn btn--quiet btn--icon" title="Copy ${esc(link.kind)} share link\n${esc(link.url)}" onclick="copyMtproxyLink(this, '${escJs(link.url)}')">tg://</button>
-       <button class="btn btn--quiet btn--icon" title="QR code of the share link" onclick="showMtproxyQr('${escJs(u.username)}', '${escJs(link.url)}')">QR</button>`
+    ? `<button class="btn btn--quiet btn--icon" title="Copy ${esc(link.kind)} share link\n${esc(link.url)}" onclick="copyMtproxyLink(this, '${escAttrJs(link.url)}')">tg://</button>
+       <button class="btn btn--quiet btn--icon" title="QR code of the share link" onclick="showMtproxyQr('${escAttrJs(u.username)}', '${escAttrJs(link.url)}')">QR</button>`
     : `<span class="pill" title="telemt is offline; reconciler will push this user when it comes back">no live link</span>`;
   const secretShort = (u.secret || '').slice(0, 8) + '…' + (u.secret || '').slice(-6);
   const stateBadge = u.enabled
@@ -2704,9 +2718,9 @@ function mtproxyUserRow(u) {
       <td>${stateBadge}</td>
       <td style="text-align:right">
         ${linkBtn}
-        <button class="btn btn--quiet btn--icon" title="Rotate this user's secret. Existing share links stop working." onclick="rotateMtproxyUser('${escJs(u.username)}')"><svg><use href="#i-refresh"/></svg></button>
-        <button class="btn btn--quiet btn--icon" title="${u.enabled ? 'Disable' : 'Enable'} this user" onclick="toggleMtproxyUser('${escJs(u.username)}', ${!u.enabled})"><svg><use href="#i-${u.enabled ? 'eye' : 'check'}"/></svg></button>
-        <button class="btn btn--quiet btn--icon" title="Delete user" onclick="deleteMtproxyUser('${escJs(u.username)}')"><svg><use href="#i-trash"/></svg></button>
+        <button class="btn btn--quiet btn--icon" title="Rotate this user's secret. Existing share links stop working." onclick="rotateMtproxyUser('${escAttrJs(u.username)}')"><svg><use href="#i-refresh"/></svg></button>
+        <button class="btn btn--quiet btn--icon" title="${u.enabled ? 'Disable' : 'Enable'} this user" onclick="toggleMtproxyUser('${escAttrJs(u.username)}', ${!u.enabled})"><svg><use href="#i-${u.enabled ? 'eye' : 'check'}"/></svg></button>
+        <button class="btn btn--quiet btn--icon" title="Delete user" onclick="deleteMtproxyUser('${escAttrJs(u.username)}')"><svg><use href="#i-trash"/></svg></button>
       </td>
     </tr>`;
 }
@@ -2921,7 +2935,7 @@ function mdnsvpnClientRow(c) {
       <td style="text-align:right">
         <button class="btn btn--quiet btn--icon" title="Download client_config.toml" onclick="downloadMdnsvpnFile(${c.id}, 'config.toml')"><svg><use href="#i-download"/></svg></button>
         <button class="btn btn--quiet btn--icon" title="Download client_resolvers.txt" onclick="downloadMdnsvpnFile(${c.id}, 'resolvers.txt')">res</button>
-        <button class="btn btn--quiet btn--icon" title="Show share URL + QR (mdnsvpn://b64?... — paste into mdnsvpn -json_base64)" onclick="showMdnsvpnQr(${c.id}, '${escJs(c.name)}')">QR</button>
+        <button class="btn btn--quiet btn--icon" title="Show share URL + QR (mdnsvpn://b64?... — paste into mdnsvpn -json_base64)" onclick="showMdnsvpnQr(${c.id}, '${escAttrJs(c.name)}')">QR</button>
         <button class="btn btn--quiet btn--icon" title="${c.enabled ? 'Disable' : 'Enable'} this client" onclick="toggleMdnsvpnClient(${c.id}, ${!c.enabled})"><svg><use href="#i-${c.enabled ? 'eye' : 'check'}"/></svg></button>
         <button class="btn btn--quiet btn--icon" title="Delete client" onclick="deleteMdnsvpnClient(${c.id})"><svg><use href="#i-trash"/></svg></button>
       </td>

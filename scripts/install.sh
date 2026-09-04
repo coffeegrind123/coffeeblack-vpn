@@ -55,6 +55,7 @@ readonly SYSCTL_CONF="/etc/sysctl.d/99-awg-easy-rs.conf"
 readonly MODULES_LOAD_CONF="/etc/modules-load.d/amneziawg.conf"
 
 readonly RELEASE_URL="https://github.com/coffeegrind123/awg-easy-rs/releases/latest/download/awg-easy-rs"
+readonly SHA256SUMS_URL="https://github.com/coffeegrind123/awg-easy-rs/releases/latest/download/SHA256SUMS"
 readonly MUSL_TARGET="x86_64-unknown-linux-musl"
 # Full 40-char fingerprint of the AmneziaWG APT signing key. Short IDs are
 # collision-prone; always fetch and verify by full fingerprint.
@@ -716,6 +717,39 @@ download_release() {
 	if ! head -c 4 "${tmp}" | grep -q $'\x7fELF'; then
 		rm -f "${tmp}"; die "Downloaded file is not an ELF binary; the release URL may be unavailable."
 	fi
+
+	# Verify the published SHA-256 before this ever runs as root. The four-byte
+	# ELF check above says only "this is a binary", not "this is *our* binary";
+	# HTTPS protects the transport but not the artifact, and `curl -fL` follows
+	# redirects to wherever they point. The release publishes SHA256SUMS
+	# precisely so this check can exist.
+	local sums
+	sums="$(mktemp /tmp/awg-easy-rs-sums.XXXXXX)" || die "Failed to create temp file for the checksum download."
+	local got=0
+	if command -v curl >/dev/null 2>&1; then
+		curl -4 -fL --retry 3 -o "${sums}" "${SHA256SUMS_URL}" && got=1
+	elif command -v wget >/dev/null 2>&1; then
+		wget -4 -O "${sums}" "${SHA256SUMS_URL}" && got=1
+	fi
+	if [[ "${got}" -ne 1 || ! -s "${sums}" ]]; then
+		rm -f "${tmp}" "${sums}"
+		die "Could not download ${SHA256SUMS_URL} to verify the release binary. Refusing to install an unverified binary that will run as root. Use --binary-src <path> or --build if you are installing deliberately from another source."
+	fi
+	local want
+	want="$(awk '$2 ~ /(^|\/)awg-easy-rs$/ { print $1; exit }' "${sums}")"
+	if [[ -z "${want}" ]]; then
+		rm -f "${tmp}" "${sums}"
+		die "SHA256SUMS did not list awg-easy-rs; refusing to install an unverified binary."
+	fi
+	local have
+	have="$(sha256sum "${tmp}" | cut -d' ' -f1)"
+	if [[ "${want}" != "${have}" ]]; then
+		rm -f "${tmp}" "${sums}"
+		die "Checksum mismatch for the downloaded binary. Expected ${want}, got ${have}. Refusing to install."
+	fi
+	rm -f "${sums}"
+	info "Verified release binary against published SHA-256 (${have})."
+
 	chmod +x "${tmp}"
 	BINARY_SRC="${tmp}"
 	info "Downloaded binary to ${BINARY_SRC}."

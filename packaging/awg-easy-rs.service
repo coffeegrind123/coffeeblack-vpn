@@ -28,9 +28,16 @@ RestartSec=5s
 #   1. systemctl enable --now awg-easy-rs-helper.service
 #   2. useradd --system --no-create-home --shell /usr/sbin/nologin awg-easy
 #   3. set WG_EASY_HELPER_GID in the helper unit to that user's gid
-#   4. uncomment the four lines below and comment out User=root/Group=root
-#      and both capability lines
+#   4. uncomment the SIX lines below and comment out User=root/Group=root,
+#      both capability lines, and the NoNewPrivileges line further down
 #   5. systemctl daemon-reload && systemctl restart awg-easy-rs
+#
+# The capability and NoNewPrivileges parts of step 4 are not optional polish.
+# The root-mode bounding set below carries CAP_SETUID, CAP_SETGID,
+# CAP_SYS_ADMIN and CAP_DAC_OVERRIDE, and privilege gain is permitted. Switch
+# User= while leaving either as-is and the web process can climb back to root,
+# which is exactly what the helper exists to prevent. The helper unit already
+# sets a minimal bounding set and forbids privilege gain; this one must match.
 #
 # Left opt-in rather than default because it needs an account and a second
 # unit; an upgrade should not silently change how the service is deployed.
@@ -41,6 +48,8 @@ RestartSec=5s
 #Group=awg-easy
 #Environment=WG_EASY_HELPER_SOCKET=/run/awg-easy-rs/helper.sock
 #AmbientCapabilities=
+#CapabilityBoundingSet=
+#NoNewPrivileges=yes
 #
 User=root
 Group=root
@@ -104,6 +113,11 @@ LimitNOFILE=65536
 #   * ProtectKernelTunables=yes → blocks sysctl net.ipv4.ip_forward writes
 #   * PrivateNetwork=yes        → hides the interface/namespace entirely
 #   * RestrictAddressFamilies=  → blocks AF_NETLINK used to program the interface
+#
+# Root mode only. In privilege-separated mode this MUST become `yes` (step 4
+# above): the unprivileged web process needs no privilege gain, and leaving it
+# `false` alongside a bounding set carrying CAP_SETUID/CAP_SETGID/CAP_SYS_ADMIN
+# hands root back to any RCE in the HTTP layer — defeating the split entirely.
 NoNewPrivileges=false
 # No core dumps. A dump of this process contains the decrypted secret key,
 # every session token, and any peer key material in flight — written to disk

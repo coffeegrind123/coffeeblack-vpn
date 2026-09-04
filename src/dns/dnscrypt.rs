@@ -131,6 +131,20 @@ pub fn generate(bundle: &db::DnsBundle) -> Result<String> {
         ));
     }
 
+    // Operator additional_config goes here, BEFORE the first table header.
+    // TOML scopes bare `key = value` lines to the most recent [table], so
+    // appending this after `[sources.'public-resolvers']` (as it used to be)
+    // silently reparented every operator key into that table — where
+    // dnscrypt-proxy ignores it. An operator hardening the resolver would see
+    // their setting accepted and have no effect, which is worse than a
+    // rejection. At top level the documented "operator keys override ours"
+    // behaviour actually holds, since dnscrypt-proxy takes the last value.
+    if !bundle.additional_config.trim().is_empty() {
+        toml.push_str("\n# --- operator-supplied additional_config ---\n");
+        toml.push_str(bundle.additional_config.trim_end());
+        toml.push('\n');
+    }
+
     // Sources — the upstream public-resolvers list. Pinned to the
     // canonical dnscrypt-resolvers project mirror with the maintainer's
     // minisign key. Without this dnscrypt-proxy can't auto-discover
@@ -145,12 +159,6 @@ pub fn generate(bundle: &db::DnsBundle) -> Result<String> {
     toml.push_str("cache_file = 'public-resolvers.md'\n");
     toml.push_str("refresh_delay = 73\n");
     toml.push_str("prefix = ''\n");
-
-    if !bundle.additional_config.trim().is_empty() {
-        toml.push_str("\n# --- operator-supplied additional_config ---\n");
-        toml.push_str(bundle.additional_config.trim_end());
-        toml.push('\n');
-    }
 
     Ok(toml)
 }

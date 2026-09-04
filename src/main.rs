@@ -81,8 +81,18 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
+    // Fail closed. `run_init_setup` returns Ok when INIT_ENABLED is unset or an
+    // admin already exists, so an Err here means the operator asked for
+    // unattended provisioning and it did not happen. Continuing would serve the
+    // unauthenticated first-run wizard on a public listener, letting whoever
+    // reaches it first claim the admin account.
     if let Err(e) = run_init_setup() {
-        tracing::warn!("INIT_ENABLED auto-setup failed (non-fatal): {e}");
+        tracing::error!("INIT_ENABLED auto-setup failed: {e:#}");
+        tracing::error!(
+            "Refusing to start: the setup wizard would be reachable without \
+             authentication and any client could claim the admin account."
+        );
+        std::process::exit(1);
     }
 
     // Scrub the admin bootstrap password from our own environment now that
@@ -282,7 +292,22 @@ async fn main() -> anyhow::Result<()> {
             html_response(h, INDEX_HTML)
         });
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], config::CONFIG.port));
+    // Honour HOST. It was parsed into CONFIG.host but never read, so an
+    // operator setting HOST=127.0.0.1 to keep the admin panel on loopback
+    // silently got it on every interface instead. Fail loudly on a value we
+    // cannot parse rather than falling back to the wildcard, which is the
+    // failure mode that made this worth fixing.
+    let host: std::net::IpAddr = config::CONFIG.host.parse().map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "HOST is not an IP address: {:?}. Use 0.0.0.0 (all interfaces), \
+                 :: (all, incl. IPv6), or a specific address such as 127.0.0.1.",
+                config::CONFIG.host
+            ),
+        )
+    })?;
+    let addr = SocketAddr::from((host, config::CONFIG.port));
     tracing::info!("awg-easy-rs starting on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -462,6 +487,29 @@ fn html_response(headers: HeaderMap, data: &'static str) -> Response {
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::ETAG, etag)
+        // Send the policy as a real header, not only the <meta> in
+        // index.html. Browsers ignore `frame-ancestors` (and `sandbox` and
+        // `report-uri`) in a meta-delivered CSP, so the meta tag's
+        // `frame-ancestors 'none'` was doing nothing — this panel is full of
+        // one-click privileged actions, so clickjacking cover is worth having.
+        // `X-Frame-Options` covers the same ground for older engines.
+        //
+        // `script-src` keeps 'unsafe-inline' because the SPA is built on inline
+        // `onclick=` handlers throughout index.html and app.js — dropping it
+        // here would not harden anything, it would break every button in the
+        // panel. So CSP is NOT the control that stops handler injection; the
+        // escaping is (`escAttrJs` in app.js). What the header genuinely adds
+        // over the meta tag is `frame-ancestors`, plus `object-src`/`base-uri`.
+        .header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; \
+             style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
+             connect-src 'self'; object-src 'none'; base-uri 'none'; \
+             form-action 'self'; frame-ancestors 'none'",
+        )
+        .header("X-Frame-Options", "DENY")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
         .body(axum::body::Body::from(data))
         .unwrap()
 }

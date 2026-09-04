@@ -173,6 +173,24 @@ pub fn validate_init_spec(spec: &str) -> Result<(), String> {
     // MESSAGE_MAX_SIZE (65535). We mirror that bound so bad configs are
     // caught at API time rather than awg-quick time.
     const MESSAGE_MAX_SIZE: u64 = 65_535;
+
+    // No control characters anywhere, checked before the tag walk.
+    //
+    // The per-tag parsers `trim()` their argument, so a raw newline inside a
+    // tag survived validation — `<b 0x41 \n >` and `<rc 5\n>` were both
+    // accepted. The value is written verbatim into the generated `[Interface]`
+    // block, so that newline ends the `I1 = …` line and whatever follows it
+    // becomes another config directive (a `PostUp`, which awg-quick runs as
+    // root). Rejecting the whole class here is cheaper and safer than trying
+    // to make every tag parser whitespace-exact.
+    if let Some(pos) = spec.find(|c: char| c.is_control()) {
+        return Err(format!(
+            "control character {:?} at offset {} is not allowed in an init-spec",
+            spec[pos..].chars().next().unwrap_or('\0'),
+            pos
+        ));
+    }
+
     let bytes = spec.as_bytes();
     let mut i = 0;
     let mut total: u64 = 0;
@@ -473,6 +491,45 @@ mod tests {
                     b
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod init_spec_control_char_tests {
+    use super::validate_init_spec;
+
+    /// Every one of these was accepted before the control-character check:
+    /// the per-tag parsers `trim()` their argument, so a raw newline inside a
+    /// tag survived and reached the generated `[Interface]` block, where it
+    /// ends the `I1 = …` line and lets the remainder become a further config
+    /// directive.
+    #[test]
+    fn rejects_control_characters_anywhere_in_the_spec() {
+        for bad in [
+            "<b 0x41 \n >",
+            "<rc 5\n>",
+            "<b 0x41\nPostUp = id>",
+            "<b 0x41>\n<t>",
+            "<c>\nPostUp = id",
+            "<t\r>",
+            "<b 0x41\t>",
+        ] {
+            assert!(
+                validate_init_spec(bad).is_err(),
+                "should have rejected {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn still_accepts_ordinary_specs() {
+        for ok in ["", "<b 0xAABB>", "<t>", "<c>", "<r 16>", "<b 0xAA><t><c>"] {
+            assert!(
+                validate_init_spec(ok).is_ok(),
+                "should have accepted {ok:?}: {:?}",
+                validate_init_spec(ok)
+            );
         }
     }
 }

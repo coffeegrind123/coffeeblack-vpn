@@ -53,6 +53,60 @@ fn login_attempts() -> &'static Mutex<AttemptStore> {
     LOGIN_ATTEMPTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Per-source-IP attempt limiter for a non-login credential check.
+///
+/// The metrics endpoints gate the entire peer roster — names, transfer
+/// counters, last handshake, and each peer's current remote endpoint IP —
+/// behind a single static bearer token, and did so with no attempt limiting at
+/// all, while `/api/session` next door has had one all along. Reuses the same
+/// store and 60-second horizon so both paths age out together.
+pub(crate) fn check_ip_attempt_limit(
+    prefix: &str,
+    ip: Option<&str>,
+    limit: usize,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let Some(ip) = ip else { return Ok(()) };
+    let mut attempts = login_attempts().lock().map_err(|e| {
+        tracing::error!("Rate limit lock poisoned: {e}");
+        api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+    })?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    if attempts.len() > MAX_RATE_LIMIT_KEYS {
+        attempts.retain(|_, window| {
+            window.retain(|t| now.saturating_sub(*t) < 60);
+            !window.is_empty()
+        });
+        if attempts.len() > MAX_RATE_LIMIT_KEYS {
+            return Err(api_err(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Server is rate limiting. Try again later.",
+            ));
+        }
+    }
+    let key = rate_limit_key(prefix, ip);
+    let window = attempts.entry(key).or_default();
+    window.retain(|t| now.saturating_sub(*t) < 60);
+    if window.len() >= limit {
+        return Err(api_err(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many attempts from this address. Try again later.",
+        ));
+    }
+    window.push(now);
+    Ok(())
+}
+
+/// Resolve the client IP for a limiter key, honouring TRUST_PROXY.
+pub(crate) fn client_ip_for_limit(
+    headers: &axum::http::HeaderMap,
+    peer: Option<std::net::SocketAddr>,
+) -> Option<String> {
+    resolve_client_ip(headers, peer)
+}
+
 /// Reset the rate limiter state (for tests).
 pub fn reset_login_attempts() {
     if let Some(m) = LOGIN_ATTEMPTS.get() {
@@ -458,6 +512,12 @@ pub async fn change_password(
     let hash = auth::hash_password(&body.new_password).map_err(map_err)?;
     db::update_password(user.id, &hash).map_err(map_err)?;
 
+    // Evict every other session for this user. A password change is what
+    // someone does after suspecting their session was stolen; without this it
+    // would not actually remove the attacker's access.
+    let current = super::session_token(&jar);
+    super::revoke_user_sessions(&state, user.id, current.as_deref());
+
     Ok(ok_success())
 }
 
@@ -594,6 +654,10 @@ pub async fn toggle_totp(
             fields.insert("totp_key".into(), String::new());
             fields.insert("totp_verified".into(), "0".into());
             db::update_user(user.id, &fields).map_err(map_err)?;
+            // Removing the second factor is a credential change: evict the
+            // user's other sessions so a stolen one cannot outlive it.
+            let current = super::session_token(&jar);
+            super::revoke_user_sessions(&state, user.id, current.as_deref());
             Ok(Json(json!({
                 "success": true,
                 "type": "deleted",

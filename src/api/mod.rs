@@ -472,6 +472,26 @@ pub fn require_auth(
     crate::db::get_user(session.user_id).map_err(map_err)
 }
 
+/// Drop every session belonging to `user_id`, optionally sparing one token.
+///
+/// Called when a credential changes. Changing a password (or disabling 2FA) is
+/// the standard response to a suspected compromise, so leaving previously
+/// issued sessions valid would mean the action does not actually evict an
+/// attacker holding a stolen cookie. The caller's own session is spared so the
+/// user is not logged out of the tab they just used.
+pub fn revoke_user_sessions(state: &AppState, user_id: i64, keep_token: Option<&str>) {
+    if let Ok(mut sessions) = state.sessions.lock() {
+        sessions.retain(|token, s| {
+            s.user_id != user_id || keep_token.is_some_and(|k| k == token)
+        });
+    }
+}
+
+/// The caller's raw session token, when the request carried one.
+pub fn session_token(jar: &axum_extra::extract::cookie::CookieJar) -> Option<String> {
+    jar.get("awg_session").map(|c| c.value().to_string())
+}
+
 /// Convert a camelCase JSON key to snake_case database column name.
 pub fn to_snake_case(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 4);
