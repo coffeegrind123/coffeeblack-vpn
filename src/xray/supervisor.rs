@@ -36,7 +36,7 @@ use crate::db;
 use crate::xray::{config_gen, runtime};
 
 /// Path the supervisor writes the active server.json to. Lives next to
-/// the extracted Xray binary so a single `WG_EASY_XRAY_DIR` mount covers
+/// the extracted Xray binary so a single `COFFEEBLACK_XRAY_DIR` mount covers
 /// the whole runtime surface.
 fn config_path() -> PathBuf {
     PathBuf::from(&CONFIG.xray_dir).join("server.json")
@@ -244,7 +244,7 @@ async fn spawn(bin: &PathBuf, config: &PathBuf) -> Result<Child> {
         .spawn()
         .with_context(|| format!("spawn {}", bin.display()))?;
     // Pipe stdout/stderr through tracing so operators get useful logs
-    // alongside everything else awg-easy-rs emits. `take()` removes the
+    // alongside everything else coffeeblack-vpn emits. `take()` removes the
     // pipes from the Child so it doesn't block on full pipe buffers.
     if let Some(stdout) = child.stdout.take() {
         spawn_log_pump(stdout, "xray.stdout", crate::log::Level::Info);
@@ -410,7 +410,7 @@ fn spawn_watchdog(mut child: Child, shutdown_requested: Arc<AtomicBool>) {
 
 /// Used by main.rs to take Xray down during graceful shutdown. Best-
 /// effort — failures are logged but don't propagate, since the rest
-/// of awg-easy-rs needs to finish its own teardown.
+/// of coffeeblack-vpn needs to finish its own teardown.
 pub async fn shutdown_for_exit() {
     let _ = stop().await;
 }
@@ -422,7 +422,7 @@ mod tests {
     #[test]
     fn config_path_lives_under_xray_dir() {
         let p = config_path();
-        // The exact dir varies with WG_EASY_XRAY_DIR, but the filename
+        // The exact dir varies with COFFEEBLACK_XRAY_DIR, but the filename
         // must always be `server.json`.
         assert_eq!(p.file_name().and_then(|s| s.to_str()), Some("server.json"));
     }
@@ -525,14 +525,14 @@ mod tests {
     async fn supervisor_lifecycle_e2e() {
         // Per-test xray dir so we don't fight other e2e tests.
         let dir = format!(
-            "/tmp/awg-easy-rs-sup-test-{}-{}",
+            "/tmp/coffeeblack-vpn-sup-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(0),
         );
-        std::env::set_var("WG_EASY_XRAY_DIR", &dir);
+        std::env::set_var("COFFEEBLACK_XRAY_DIR", &dir);
 
         // Fresh in-memory DB.
         db::init_test_db();

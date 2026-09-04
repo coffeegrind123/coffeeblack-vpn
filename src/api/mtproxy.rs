@@ -18,7 +18,7 @@
 //! stays bound to `127.0.0.1:9091` with whitelist `127.0.0.1/32 ::1/128`
 //! per the generated config.toml.
 //!
-//! Awg-easy-rs is the durable source of truth for the user roster.
+//! Coffeeblack-vpn is the durable source of truth for the user roster.
 //! Every CRUD here writes the DB first, then drives the live telemt
 //! through `mtproxy::client`. On startup or config change, the
 //! supervisor's user-reconciler converges live state to DB state.

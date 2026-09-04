@@ -7,15 +7,15 @@
 
 use std::time::Duration;
 
-use awg_easy_rs::qqdns::codec::{
+use coffeeblack_vpn::qqdns::codec::{
     self, get_base32_final_domains, get_chunk_data, get_chunk_len, SendDomain, DATA_OFFSET_WIDTH,
     TOTAL_DATA_OFFSET,
 };
-use awg_easy_rs::qqdns::dns::{
+use coffeeblack_vpn::qqdns::dns::{
     build_dns_query, create_noerror_empty_response, encode_qname, handle_dns_request, label_domain,
     match_recv_suffix,
 };
-use awg_easy_rs::qqdns::reassembly::DataHandler;
+use coffeeblack_vpn::qqdns::reassembly::DataHandler;
 use serde_json::Value;
 
 fn vectors() -> Value {
@@ -28,7 +28,7 @@ fn vectors() -> Value {
 }
 
 fn hexd(s: &str) -> Vec<u8> {
-    awg_easy_rs::encoding::hex_decode(s).expect("valid hex")
+    coffeeblack_vpn::encoding::hex_decode(s).expect("valid hex")
 }
 
 #[test]

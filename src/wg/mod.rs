@@ -2,7 +2,7 @@
 //!
 //! Pure AmneziaWG — binary is always `awg`/`awg-quick`.
 
-pub mod awg3;
+pub mod cb3;
 pub mod cli;
 pub mod config_gen;
 pub mod kernel;
@@ -66,8 +66,8 @@ pub fn startup() -> Result<()> {
     // Generate random AWG obfuscation params on first run
     if iface.h1.is_empty() || iface.h1 == "0" {
         crate::info!("Generating random AmneziaWG obfuscation parameters...");
-        let awg_params = params::generate_awg_params();
-        crate::db::update_interface_awg_params(&awg_params)?;
+        let cb_params = params::generate_cb_params();
+        crate::db::update_interface_cb_params(&cb_params)?;
         iface = crate::db::get_interface()?;
     }
 
@@ -79,9 +79,9 @@ pub fn startup() -> Result<()> {
     if let Err(e) = crate::firewall::apply_proxy_lockdown(&iface) {
         crate::warn!("proxy backend lockdown at startup failed (non-fatal): {e}");
     }
-    cli::awg_down(&iface.name).ok(); // ignore if not yet up
-    cli::awg_up(&iface.name)?;
-    cli::awg_sync(&iface.name)?;
+    cli::cb_down(&iface.name).ok(); // ignore if not yet up
+    cli::cb_up(&iface.name)?;
+    cli::cb_sync(&iface.name)?;
 
     // Apply firewall rules
     if iface.firewall_enabled {
@@ -96,7 +96,7 @@ pub fn startup() -> Result<()> {
 ///
 /// With the privileged helper enabled the rendered text is handed to the
 /// helper instead, which owns both the write and the sync. That keeps the web
-/// process without write access to `/etc/wireguard` — where the server private
+/// process without write access to `/etc/coffeeblack/conf` — where the server private
 /// key lives — as well as without `CAP_NET_ADMIN`.
 pub fn save_config() -> Result<()> {
     let iface = crate::db::get_interface()?;
@@ -144,7 +144,7 @@ pub fn save_config() -> Result<()> {
     #[cfg(not(unix))]
     std::fs::write(&path, &config)?;
 
-    cli::awg_sync(&iface.name)?;
+    cli::cb_sync(&iface.name)?;
     Ok(())
 }
 
@@ -159,9 +159,9 @@ pub fn save_config() -> Result<()> {
 /// touches the rendered copy; the stored row is untouched and comes back
 /// the moment the proxy is turned off.
 ///
-/// See `wg::awg3::proxy_conflict` for why each is incompatible.
-fn suppress_awg3_conflicts(gen_iface: &mut crate::db::Interface) {
-    if let Some(reason) = crate::wg::awg3::proxy_conflict(
+/// See `wg::cb3::proxy_conflict` for why each is incompatible.
+fn suppress_cb3_conflicts(gen_iface: &mut crate::db::Interface) {
+    if let Some(reason) = crate::wg::cb3::proxy_conflict(
         &gen_iface.header_protection_key,
         gen_iface.random_trailers,
     ) {
@@ -200,7 +200,7 @@ pub fn render_server_config() -> Result<String> {
         gen_iface.i3.clear();
         gen_iface.i4.clear();
         gen_iface.i5.clear();
-        suppress_awg3_conflicts(&mut gen_iface);
+        suppress_cb3_conflicts(&mut gen_iface);
     }
 
     // In privileged-helper mode the hooks are rendered by the helper, from its
@@ -292,14 +292,14 @@ pub fn build_client_config(client_id: i64, private_key_override: Option<&str>) -
         gen_client.i3 = None;
         gen_client.i4 = None;
         gen_client.i5 = None;
-        suppress_awg3_conflicts(&mut gen_iface);
+        suppress_cb3_conflicts(&mut gen_iface);
     }
     config_gen::generate_client_config(&gen_iface, &user_config, &gen_client)
 }
 
 /// Dump running AmneziaWG status for all peers.
 pub fn dump_peers(iface_name: &str) -> Result<Vec<cli::PeerDump>> {
-    cli::awg_dump(iface_name)
+    cli::cb_dump(iface_name)
 }
 
 // ---------------------------------------------------------------------------
@@ -363,14 +363,14 @@ pub fn cron_job() -> Result<()> {
 /// Graceful shutdown — take down the AmneziaWG interface.
 pub fn shutdown() -> Result<()> {
     let iface = crate::db::get_interface()?;
-    cli::awg_down(&iface.name).ok();
+    cli::cb_down(&iface.name).ok();
     Ok(())
 }
 
 /// Restart the AmneziaWG interface.
 pub fn restart() -> Result<()> {
     let iface = crate::db::get_interface()?;
-    cli::awg_down(&iface.name).ok();
-    cli::awg_up(&iface.name)?;
+    cli::cb_down(&iface.name).ok();
+    cli::cb_up(&iface.name)?;
     Ok(())
 }

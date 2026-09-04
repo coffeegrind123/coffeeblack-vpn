@@ -34,7 +34,7 @@ impl HRange {
 /// | Cookie Reply         | H3          | S3      |
 /// | Transport Data       | H4          | S4      |
 #[derive(Debug, Clone)]
-pub struct AwgParams {
+pub struct CbParams {
     /// Junk packet count per handshake.
     pub jc: u32,
     /// Minimum junk packet size in bytes.
@@ -77,7 +77,7 @@ pub struct AwgParams {
 /// H3 = 500000-600000
 /// H4 = 700000-800000
 /// ```
-pub fn parse_awg_config(text: &str) -> Result<AwgParams, ProxyError> {
+pub fn parse_cb_config(text: &str) -> Result<CbParams, ProxyError> {
     let mut jc: Option<u32> = None;
     let mut jmin: Option<u32> = None;
     let mut jmax: Option<u32> = None;
@@ -132,7 +132,7 @@ pub fn parse_awg_config(text: &str) -> Result<AwgParams, ProxyError> {
         }
     }
 
-    let params = AwgParams {
+    let params = CbParams {
         jc: jc.ok_or_else(|| ProxyError::Config("missing AWG parameter: Jc".into()))?,
         jmin: jmin.ok_or_else(|| ProxyError::Config("missing AWG parameter: Jmin".into()))?,
         jmax: jmax.ok_or_else(|| ProxyError::Config("missing AWG parameter: Jmax".into()))?,
@@ -146,12 +146,12 @@ pub fn parse_awg_config(text: &str) -> Result<AwgParams, ProxyError> {
         h4: h4.ok_or_else(|| ProxyError::Config("missing AWG parameter: H4".into()))?,
     };
 
-    validate_awg_params(&params)?;
+    validate_cb_params(&params)?;
     Ok(params)
 }
 
 /// Load AWG parameters from a config file on disk.
-pub fn load_awg_config(path: &Path) -> Result<AwgParams, ProxyError> {
+pub fn load_cb_config(path: &Path) -> Result<CbParams, ProxyError> {
     let contents = std::fs::read_to_string(path).map_err(|e| {
         ProxyError::Config(format!(
             "failed to read AWG config {}: {}",
@@ -159,7 +159,7 @@ pub fn load_awg_config(path: &Path) -> Result<AwgParams, ProxyError> {
             e
         ))
     })?;
-    parse_awg_config(&contents)
+    parse_cb_config(&contents)
 }
 
 fn parse_u32(key: &str, value: &str) -> Result<u32, ProxyError> {
@@ -194,7 +194,7 @@ fn parse_h_range(key: &str, value: &str) -> Result<HRange, ProxyError> {
     }
 }
 
-fn validate_awg_params(p: &AwgParams) -> Result<(), ProxyError> {
+fn validate_cb_params(p: &CbParams) -> Result<(), ProxyError> {
     // Jmin <= Jmax
     if p.jmin > p.jmax {
         return Err(ProxyError::Config(format!(
@@ -337,11 +337,11 @@ pub struct ProxyConfig {
     #[serde(default = "default_status_interval")]
     pub status_interval_secs: u64,
 
-    /// Optional path to the AmneziaWG config file (e.g. `/etc/awg/awg0.conf`).
+    /// Optional path to the AmneziaWG config file (e.g. `/etc/coffeeblack/conf/cb0.conf`).
     /// When set, AWG obfuscation parameters (S1-S4, H1-H4) are loaded and used
     /// for packet classification and per-type padding transformation.
     #[serde(default)]
-    pub awg_config: Option<String>,
+    pub cb_config: Option<String>,
 }
 
 fn default_session_ttl() -> u64 {
@@ -431,7 +431,7 @@ impl Default for ProxyConfig {
             max_sessions: default_max_sessions(),
             status_file: default_status_file(),
             status_interval_secs: default_status_interval(),
-            awg_config: None,
+            cb_config: None,
         }
     }
 }
@@ -586,7 +586,7 @@ backend = "127.0.0.1:51821"
         assert_eq!(cfg.relay_buffer_size, 8192);
         assert_eq!(cfg.status_file, "/var/lib/amneziawg-proxy/sessions.json");
         assert_eq!(cfg.status_interval_secs, 5);
-        assert!(cfg.awg_config.is_none());
+        assert!(cfg.cb_config.is_none());
     }
 
     #[test]
@@ -600,7 +600,7 @@ rate_limit_per_sec = 10
 imitate_protocol = "dns"
 buffer_size = 4096
 relay_buffer_size = 2048
-awg_config = "/etc/awg/awg0.conf"
+cb_config = "/etc/coffeeblack/conf/cb0.conf"
 quic_handshake_enabled = false
 quic_certificate_domain = "example.org"
 dns_forward_enabled = true
@@ -623,7 +623,7 @@ status_interval_secs = 2
         assert_eq!(cfg.relay_buffer_size, 2048);
         assert_eq!(cfg.status_file, "/run/amneziawg-proxy/sessions.json");
         assert_eq!(cfg.status_interval_secs, 2);
-        assert_eq!(cfg.awg_config.as_deref(), Some("/etc/awg/awg0.conf"));
+        assert_eq!(cfg.cb_config.as_deref(), Some("/etc/coffeeblack/conf/cb0.conf"));
     }
 
     #[test]
@@ -845,7 +845,7 @@ backend = "127.0.0.1:51821"
 
     // -- AWG config parsing tests --
 
-    fn sample_awg_conf() -> &'static str {
+    fn sample_cb_conf() -> &'static str {
         r#"[Interface]
 Address = 10.66.66.1/24,fd42:42:42::1/64
 ListenPort = 51820
@@ -869,8 +869,8 @@ AllowedIPs = 10.66.66.2/32
     }
 
     #[test]
-    fn parse_awg_config_full() {
-        let p = parse_awg_config(sample_awg_conf()).unwrap();
+    fn parse_cb_config_full() {
+        let p = parse_cb_config(sample_cb_conf()).unwrap();
         assert_eq!(p.jc, 5);
         assert_eq!(p.jmin, 50);
         assert_eq!(p.jmax, 1000);
@@ -885,7 +885,7 @@ AllowedIPs = 10.66.66.2/32
     }
 
     #[test]
-    fn parse_awg_config_accepts_install_script_s_range_boundaries() {
+    fn parse_cb_config_accepts_install_script_s_range_boundaries() {
         for s in [15, 64, 150] {
             let conf = format!(
                 r#"[Interface]
@@ -902,7 +902,7 @@ H3 = 500-600
 H4 = 700-800
 "#
             );
-            let p = parse_awg_config(&conf).unwrap();
+            let p = parse_cb_config(&conf).unwrap();
             assert_eq!(p.s1, s);
             assert_eq!(p.s2, s);
             assert_eq!(p.s3, s);
@@ -911,7 +911,7 @@ H4 = 700-800
     }
 
     #[test]
-    fn parse_awg_config_does_not_reject_below_install_script_s_range() {
+    fn parse_cb_config_does_not_reject_below_install_script_s_range() {
         let conf = r#"[Interface]
 Jc = 1
 Jmin = 10
@@ -925,12 +925,12 @@ H2 = 300-400
 H3 = 500-600
 H4 = 700-800
 "#;
-        let p = parse_awg_config(conf).unwrap();
+        let p = parse_cb_config(conf).unwrap();
         assert_eq!((p.s1, p.s2, p.s3, p.s4), (0, 1, 14, 14));
     }
 
     #[test]
-    fn parse_awg_config_single_h_value() {
+    fn parse_cb_config_single_h_value() {
         let conf = r#"[Interface]
 Jc = 1
 Jmin = 10
@@ -944,24 +944,24 @@ H2 = 2000-3000
 H3 = 5000-6000
 H4 = 8000-9000
 "#;
-        let p = parse_awg_config(conf).unwrap();
+        let p = parse_cb_config(conf).unwrap();
         assert_eq!(p.h1, HRange { min: 999, max: 999 });
     }
 
     #[test]
-    fn parse_awg_config_missing_param() {
+    fn parse_cb_config_missing_param() {
         let conf = r#"[Interface]
 Jc = 5
 Jmin = 50
 Jmax = 1000
 S1 = 42
 "#;
-        let err = parse_awg_config(conf).unwrap_err();
+        let err = parse_cb_config(conf).unwrap_err();
         assert!(err.to_string().contains("missing AWG parameter"));
     }
 
     #[test]
-    fn parse_awg_config_jmin_gt_jmax() {
+    fn parse_cb_config_jmin_gt_jmax() {
         let conf = r#"[Interface]
 Jc = 5
 Jmin = 500
@@ -975,12 +975,12 @@ H2 = 300-400
 H3 = 500-600
 H4 = 700-800
 "#;
-        let err = parse_awg_config(conf).unwrap_err();
+        let err = parse_cb_config(conf).unwrap_err();
         assert!(err.to_string().contains("Jmin"));
     }
 
     #[test]
-    fn parse_awg_config_overlapping_h_ranges() {
+    fn parse_cb_config_overlapping_h_ranges() {
         let conf = r#"[Interface]
 Jc = 5
 Jmin = 50
@@ -994,12 +994,12 @@ H2 = 250-400
 H3 = 500-600
 H4 = 700-800
 "#;
-        let err = parse_awg_config(conf).unwrap_err();
+        let err = parse_cb_config(conf).unwrap_err();
         assert!(err.to_string().contains("overlaps"));
     }
 
     #[test]
-    fn parse_awg_config_h_range_inverted() {
+    fn parse_cb_config_h_range_inverted() {
         let conf = r#"[Interface]
 Jc = 5
 Jmin = 50
@@ -1013,12 +1013,12 @@ H2 = 400-500
 H3 = 600-700
 H4 = 800-900
 "#;
-        let err = parse_awg_config(conf).unwrap_err();
+        let err = parse_cb_config(conf).unwrap_err();
         assert!(err.to_string().contains("min"));
     }
 
     #[test]
-    fn parse_awg_config_ignores_peer_section() {
+    fn parse_cb_config_ignores_peer_section() {
         // Ensure keys in [Peer] don't interfere
         let conf = r#"[Interface]
 Jc = 5
@@ -1037,12 +1037,12 @@ H4 = 700-800
 PublicKey = XXXX
 AllowedIPs = 10.0.0.0/8
 "#;
-        let p = parse_awg_config(conf).unwrap();
+        let p = parse_cb_config(conf).unwrap();
         assert_eq!(p.jc, 5);
     }
 
     #[test]
-    fn parse_awg_config_case_insensitive_section() {
+    fn parse_cb_config_case_insensitive_section() {
         let conf = r#"[interface]
 Jc = 5
 Jmin = 50
@@ -1056,7 +1056,7 @@ H2 = 300-400
 H3 = 500-600
 H4 = 700-800
 "#;
-        let p = parse_awg_config(conf).unwrap();
+        let p = parse_cb_config(conf).unwrap();
         assert_eq!(p.s1, 20);
     }
 
@@ -1071,22 +1071,22 @@ H4 = 700-800
     }
 
     #[test]
-    fn load_awg_config_from_file() {
+    fn load_cb_config_from_file() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("awg0.conf");
-        std::fs::write(&path, sample_awg_conf()).unwrap();
-        let p = load_awg_config(&path).unwrap();
+        let path = dir.path().join("cb0.conf");
+        std::fs::write(&path, sample_cb_conf()).unwrap();
+        let p = load_cb_config(&path).unwrap();
         assert_eq!(p.s1, 42);
     }
 
     #[test]
-    fn load_awg_config_missing_file() {
-        let err = load_awg_config(Path::new("/nonexistent/awg0.conf")).unwrap_err();
+    fn load_cb_config_missing_file() {
+        let err = load_cb_config(Path::new("/nonexistent/cb0.conf")).unwrap_err();
         assert!(err.to_string().contains("failed to read"));
     }
 
     #[test]
-    fn parse_awg_config_invalid_h_value() {
+    fn parse_cb_config_invalid_h_value() {
         let conf = r#"[Interface]
 Jc = 5
 Jmin = 50
@@ -1100,12 +1100,12 @@ H2 = 300-400
 H3 = 500-600
 H4 = 700-800
 "#;
-        let err = parse_awg_config(conf).unwrap_err();
+        let err = parse_cb_config(conf).unwrap_err();
         assert!(err.to_string().contains("invalid"));
     }
 
     #[test]
-    fn parse_awg_config_large_h_ranges() {
+    fn parse_cb_config_large_h_ranges() {
         // Realistic ranges as generated by the install script
         let conf = r#"[Interface]
 Jc = 5
@@ -1120,7 +1120,7 @@ H2 = 100000005-200000004
 H3 = 200000005-300000004
 H4 = 300000005-400000004
 "#;
-        let p = parse_awg_config(conf).unwrap();
+        let p = parse_cb_config(conf).unwrap();
         assert_eq!(p.h1.min, 5);
         assert_eq!(p.h1.max, 100_000_004);
         assert!(p.h4.contains(350_000_000));

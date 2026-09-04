@@ -17,12 +17,12 @@
 #     preserves the original mode (600/400), and rolls back from the .bak on any
 #     failure.
 #
-# It searches /etc/wireguard and /etc/amnezia/amneziawg by default; override the
+# It searches /etc/coffeeblack/conf and /etc/amnezia/amneziawg by default; override the
 # target with --config PATH.
 #
 # Usage:
 #   sudo ./migrate-pre2.sh                    # find + migrate (prompts)
-#   sudo ./migrate-pre2.sh --config /etc/wireguard/awg0.conf
+#   sudo ./migrate-pre2.sh --config /etc/coffeeblack/conf/cb0.conf
 #   sudo ./migrate-pre2.sh --force            # no prompt (also: AUTO_INSTALL=y)
 #   sudo ./migrate-pre2.sh --dry-run          # report what would change, do nothing
 #   ./migrate-pre2.sh --help
@@ -30,7 +30,7 @@
 # NOTE: after migration, existing client configs are INCOMPATIBLE and must be
 # regenerated (their S3/S4/H1–H4 no longer match the server).
 #
-# https://github.com/coffeegrind123/awg-easy-rs
+# https://github.com/coffeegrind123/coffeeblack-vpn
 
 set -euo pipefail
 
@@ -55,7 +55,7 @@ CONFIG_OVERRIDE=""
 FORCE=false
 DRY_RUN=false
 
-readonly -a SEARCH_DIRS=("/etc/wireguard" "/etc/amnezia/amneziawg")
+readonly -a SEARCH_DIRS=("/etc/coffeeblack/conf" "/etc/amnezia/amneziawg")
 
 # Range bounds (AmneziaWG protocol domains).
 readonly S_MIN=15
@@ -458,7 +458,7 @@ migrate_one() {
 	# Work on a temp copy in the same directory (atomic rename target).
 	local dir tmp
 	dir="$(dirname "${conf}")"
-	if ! tmp="$(mktemp "${dir}/.awgmig.XXXXXX")"; then
+	if ! tmp="$(mktemp "${dir}/.cbmig.XXXXXX")"; then
 		rm -f "${bak}"
 		die "Failed to create temp file in ${dir}."
 	fi
@@ -563,7 +563,7 @@ main() {
 	if [[ ${rc} -eq 0 ]]; then
 		step "Done"
 		info "All targeted configs are at AmneziaWG 2.0. Regenerate client configs and restart the service:"
-		info "  sudo systemctl restart awg-easy-rs"
+		info "  sudo systemctl restart coffeeblack-vpn"
 	fi
 	return "${rc}"
 }

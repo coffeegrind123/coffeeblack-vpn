@@ -7,7 +7,7 @@
 //! embedded SHA, which keeps the second-and-subsequent startups fast (no
 //! point streaming 36 MB through flate2 every boot).
 //!
-//! Operators who want to track Xray independently of awg-easy-rs releases
+//! Operators who want to track Xray independently of coffeeblack-vpn releases
 //! can set `XRAY_BIN_PATH=/usr/local/bin/xray` and bypass this module
 //! entirely — the supervisor honours that env var first.
 
@@ -22,10 +22,10 @@ use sha2::{Digest, Sha256};
 use crate::config::CONFIG;
 
 /// Embedded Xray-core release tag (see vendor/XRAY_VERSION).
-pub const XRAY_VERSION: &str = env!("AWG_EASY_XRAY_VERSION");
+pub const XRAY_VERSION: &str = env!("COFFEEBLACK_XRAY_VERSION");
 
 /// SHA-256 of the *uncompressed* Xray ELF for the current target arch.
-pub const XRAY_SHA256: &str = env!("AWG_EASY_XRAY_SHA256");
+pub const XRAY_SHA256: &str = env!("COFFEEBLACK_XRAY_SHA256");
 
 /// Gzipped Xray ELF, picked at build time by `build.rs` based on
 /// `CARGO_CFG_TARGET_ARCH`. ~12-13 MiB compressed; ~35 MiB extracted.
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn embedded_sha_is_64_hex_chars() {
         // Sanity: build.rs must set this for bundled targets.
-        assert_eq!(XRAY_SHA256.len(), 64, "AWG_EASY_XRAY_SHA256 must be a hex SHA-256");
+        assert_eq!(XRAY_SHA256.len(), 64, "COFFEEBLACK_XRAY_SHA256 must be a hex SHA-256");
         assert!(XRAY_SHA256.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
@@ -162,7 +162,7 @@ mod tests {
     fn extract_then_skip_is_idempotent() {
         let _g = TEST_LOCK.lock().unwrap();
         let tmpdir = tempdir_for_test();
-        std::env::set_var("WG_EASY_XRAY_DIR", &tmpdir);
+        std::env::set_var("COFFEEBLACK_XRAY_DIR", &tmpdir);
         // Force a fresh CONFIG read for this thread is not possible (it's a
         // LazyLock), so we reach into extract_bundled_binary's behaviour by
         // testing decompression+SHA invariants directly via a private dir.
@@ -195,6 +195,6 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos())
             .unwrap_or(0);
-        format!("/tmp/awg-easy-rs-xray-test-{pid}-{nanos}")
+        format!("/tmp/coffeeblack-vpn-xray-test-{pid}-{nanos}")
     }
 }

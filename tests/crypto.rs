@@ -7,7 +7,7 @@
 //! process and its own resolution, which is exactly what the "no key
 //! configured" coverage in `src/crypto.rs`'s unit tests relies on.
 
-use awg_easy_rs::{crypto, db};
+use coffeeblack_vpn::{crypto, db};
 use serial_test::serial;
 
 /// Set the key before the LazyLock can resolve. Idempotent; every test calls
@@ -15,7 +15,7 @@ use serial_test::serial;
 fn install_key() {
     // Deterministic 32 bytes, base64 — test material only.
     std::env::set_var(
-        "WG_EASY_SECRET_KEY",
+        "COFFEEBLACK_SECRET_KEY",
         "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
     );
 }
@@ -31,7 +31,7 @@ fn key_is_picked_up_from_the_environment() {
     install_key();
     assert!(
         crypto::is_configured(),
-        "a 32-byte base64 key in WG_EASY_SECRET_KEY must be accepted"
+        "a 32-byte base64 key in COFFEEBLACK_SECRET_KEY must be accepted"
     );
 }
 
@@ -218,7 +218,7 @@ fn wireguard_material_is_encrypted_at_rest() {
     let psk = "cHJlc2hhcmVkLWtleS1oZXJlLTAwMDAwMDAwMDAwMDA=";
     let id = db::create_client(&db::CreateClientParams {
         user_id: None,
-        interface_id: Some("awg0".into()),
+        interface_id: Some("cb0".into()),
         name: "phone".into(),
         ipv4_address: Some("10.8.0.2".into()),
         ipv6_address: None,
@@ -336,7 +336,7 @@ fn dns_tunnel_key_and_session_secret_are_encrypted_at_rest() {
 fn one_time_link_tokens_are_stored_hashed() {
     seed();
     let id = db::create_client(&db::CreateClientParams {
-        user_id: None, interface_id: Some("awg0".into()), name: "p".into(),
+        user_id: None, interface_id: Some("cb0".into()), name: "p".into(),
         ipv4_address: Some("10.8.0.9".into()), ipv6_address: None,
         private_key: "pk".into(), public_key: "pub".into(), pre_shared_key: None,
         pre_up: None, post_up: None, pre_down: None, post_down: None,
@@ -355,7 +355,7 @@ fn one_time_link_tokens_are_stored_hashed() {
     let stored = raw("one_time_links_table", "one_time_link");
     assert_eq!(stored.len(), 1);
     assert_ne!(stored[0], token, "the raw token must not be the stored value");
-    assert_eq!(stored[0], awg_easy_rs::auth::sha256(token));
+    assert_eq!(stored[0], coffeeblack_vpn::auth::sha256(token));
 
     // Lookup by the real token still works…
     assert_eq!(db::get_one_time_link(token).unwrap().id, id);
@@ -373,7 +373,7 @@ fn one_time_link_tokens_are_stored_hashed() {
 fn migration_upgrades_every_registered_column() {
     seed();
     db::create_client(&db::CreateClientParams {
-        user_id: None, interface_id: Some("awg0".into()), name: "p".into(),
+        user_id: None, interface_id: Some("cb0".into()), name: "p".into(),
         ipv4_address: Some("10.8.0.7".into()), ipv6_address: None,
         private_key: "legacy-private".into(), public_key: "pub".into(),
         pre_shared_key: Some("legacy-psk".into()),

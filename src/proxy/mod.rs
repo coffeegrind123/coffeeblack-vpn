@@ -19,7 +19,7 @@
 //!
 //! The port modules below are near-verbatim from the upstream crate (only
 //! the `crate::` paths were rehomed under `crate::proxy::`); the
-//! awg-easy-rs-specific glue lives in [`supervisor`].
+//! coffeeblack-vpn-specific glue lives in [`supervisor`].
 //!
 //! The ported files are kept a faithful mirror of upstream so they can be
 //! re-synced, so the handful of stylistic clippy lints they trip (all of

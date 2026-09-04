@@ -11,7 +11,7 @@ use serde::{Serialize, Deserialize};
 
 /// Complete set of AmneziaWG obfuscation parameters.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AwgParams {
+pub struct CbParams {
     /// Junk packet count (1-128, typical 4-12)
     pub jc: i32,
     /// Junk packet minimum size in bytes (0-1279)
@@ -56,9 +56,9 @@ pub struct AwgParams {
 /// - S2: 15..=150 (spec max 1188, enforced on validate)
 /// - H1-H4: distinct values in [5, 2147483647] (awg-go accepts both single values and ranges)
 /// - I1: random tagged blob per amnezia-client default format
-pub fn generate_awg_params() -> AwgParams {
+pub fn generate_cb_params() -> CbParams {
     // Small helpers over the OS CSPRNG (src/rng.rs), returning `i32` to match
-    // the AwgParams fields. These are obfuscation parameters, not keys, but an
+    // the CbParams fields. These are obfuscation parameters, not keys, but an
     // unbiased draw is still wanted so the header/junk-size distribution can't
     // be fingerprinted; `rng::range_incl_i64` rejection-samples to guarantee it.
     let gen_incl = |lo: i64, hi: i64| -> i32 { rng::range_incl_i64(lo, hi) as i32 };
@@ -69,7 +69,7 @@ pub fn generate_awg_params() -> AwgParams {
     // while still avoiding fragmentation against the default 1420 MTU.
     let jmax = gen_incl(i64::from(jmin + 1).max(1), 1279);
     // awg-easy's default draws S1/S2 from 15..=150. The spec hard caps
-    // (1132 / 1188) are larger and enforced in `validate_awg_params`, so 150
+    // (1132 / 1188) are larger and enforced in `validate_cb_params`, so 150
     // is always the effective upper bound when generating — the previous
     // `150.min(1132)` was a no-op that read as a real clamp.
     let s1 = gen_incl(15, 150);
@@ -131,7 +131,7 @@ pub fn generate_awg_params() -> AwgParams {
     let random_hex: String = (0..48).map(|_| format!("{:02x}", rng::byte())).collect();
     let i1 = format!("<r 2><b 0x{}>", random_hex);
 
-    AwgParams {
+    CbParams {
         jc,
         jmin,
         jmax,
@@ -262,7 +262,7 @@ fn validate_init_tag(inner: &str) -> Result<u64, String> {
 }
 
 /// Validate that AmneziaWG parameters are within allowed ranges.
-pub fn validate_awg_params(params: &AwgParams) -> Result<(), String> {
+pub fn validate_cb_params(params: &CbParams) -> Result<(), String> {
     if !(1..=128).contains(&params.jc) {
         return Err("Jc must be 1-128".into());
     }
@@ -327,29 +327,29 @@ mod tests {
 
     #[test]
     fn validate_rejects_s1_plus_56_equals_s2() {
-        let mut p = generate_awg_params();
+        let mut p = generate_cb_params();
         // The spec forbids S1 + 56 == S2.
         p.s1 = 100;
         p.s2 = 156;
-        assert!(validate_awg_params(&p).is_err());
+        assert!(validate_cb_params(&p).is_err());
         // One off the collision is fine.
         p.s2 = 157;
-        assert!(validate_awg_params(&p).is_ok());
+        assert!(validate_cb_params(&p).is_ok());
     }
 
     #[test]
     fn validate_rejects_out_of_range_s1_s2() {
-        let mut p = generate_awg_params();
+        let mut p = generate_cb_params();
         p.s1 = -1;
-        assert!(validate_awg_params(&p).is_err());
+        assert!(validate_cb_params(&p).is_err());
         p.s1 = 1133; // > 1132 spec max
-        assert!(validate_awg_params(&p).is_err());
+        assert!(validate_cb_params(&p).is_err());
 
-        let mut p = generate_awg_params();
+        let mut p = generate_cb_params();
         p.s2 = -1;
-        assert!(validate_awg_params(&p).is_err());
+        assert!(validate_cb_params(&p).is_err());
         p.s2 = 1189; // > 1188 spec max
-        assert!(validate_awg_params(&p).is_err());
+        assert!(validate_cb_params(&p).is_err());
     }
 
     #[test]
@@ -406,49 +406,49 @@ mod tests {
 
     #[test]
     fn validate_rejects_s3_plus_56_equals_s4() {
-        let mut p = generate_awg_params();
+        let mut p = generate_cb_params();
         // Bidirectional collision — either direction is illegal.
         p.s3 = Some(60);
         p.s4 = Some(116); // 60 + 56
-        assert!(validate_awg_params(&p).is_err());
+        assert!(validate_cb_params(&p).is_err());
         p.s3 = Some(116);
         p.s4 = Some(60); // 60 + 56 the other way
-        assert!(validate_awg_params(&p).is_err());
+        assert!(validate_cb_params(&p).is_err());
         // One off the collision is fine.
         p.s3 = Some(60);
         p.s4 = Some(117);
-        assert!(validate_awg_params(&p).is_ok());
+        assert!(validate_cb_params(&p).is_ok());
     }
 
     #[test]
     fn validate_rejects_out_of_range_s3_s4() {
-        let mut p = generate_awg_params();
+        let mut p = generate_cb_params();
         p.s3 = Some(1133); // > 1132 spec max
-        assert!(validate_awg_params(&p).is_err());
-        let mut p = generate_awg_params();
+        assert!(validate_cb_params(&p).is_err());
+        let mut p = generate_cb_params();
         p.s4 = Some(1189); // > 1188 spec max
-        assert!(validate_awg_params(&p).is_err());
+        assert!(validate_cb_params(&p).is_err());
     }
 
     #[test]
     fn lone_s3_or_s4_is_allowed() {
         // A pre-2.0 interface may legitimately carry only one (or neither);
         // the ±56 rule only engages once both are present.
-        let mut p = generate_awg_params();
+        let mut p = generate_cb_params();
         p.s3 = Some(80);
         p.s4 = None;
-        assert!(validate_awg_params(&p).is_ok());
+        assert!(validate_cb_params(&p).is_ok());
         p.s3 = None;
         p.s4 = Some(80);
-        assert!(validate_awg_params(&p).is_ok());
+        assert!(validate_cb_params(&p).is_ok());
     }
 
     #[test]
     fn generated_params_pass_validation() {
         // Generation must produce valid params on every iteration.
         for _ in 0..100 {
-            let p = generate_awg_params();
-            validate_awg_params(&p).expect("generated params should validate");
+            let p = generate_cb_params();
+            validate_cb_params(&p).expect("generated params should validate");
             assert!(p.jmax < 1280, "Jmax must be strictly < 1280");
             assert!(p.jmin < p.jmax);
             // AmneziaWG 2.0: S3/S4 must be generated (not left None) and
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn generated_h_ranges_are_non_overlapping() {
-        let p = generate_awg_params();
+        let p = generate_cb_params();
         let parse = |s: &str| -> (i64, i64) {
             let mut it = s.splitn(2, '-').map(|x| x.parse::<i64>().unwrap());
             let lo = it.next().unwrap();

@@ -11,7 +11,7 @@
  /// the zero-content expectation that option code 12 (Padding, RFC 7830) implies.
 -const DNS_OPT_COVER_CODE: u16 = 0xFDE9;
 +///
-+/// awg-easy-rs patch: rather than pin a single constant (upstream used a fixed
++/// coffeeblack-vpn patch: rather than pin a single constant (upstream used a fixed
 +/// `0xFDE9`, which is a perfect one-rule cross-deployment DPI signature), the
 +/// exact code is drawn per-packet from the payload-seeded transaction ID and
 +/// stays inside the local-use range — so no single value identifies the tool.
@@ -52,7 +52,7 @@
      const METHODS: [&str; 3] = ["INVITE", "OPTIONS", "REGISTER"];
      let status_idx = next!() as usize % STATUS.len();
 -    let host = HOSTS[next!() as usize % HOSTS.len()];
-+    // awg-easy-rs patch: build a plausible, non-reserved host per packet from
++    // coffeeblack-vpn patch: build a plausible, non-reserved host per packet from
 +    // the seed instead of fixed `*.example.*` literals (upstream), which are an
 +    // RFC-2606 substring signature. Label + numeric id + TLD, all seed-drawn.
 +    const SIP_LABELS: [&str; 8] = ["voip", "sip", "pbx", "call", "trunk", "edge", "rtc", "sbc"];

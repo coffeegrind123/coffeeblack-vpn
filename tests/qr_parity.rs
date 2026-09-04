@@ -14,7 +14,7 @@
 //! neither numeric nor alphanumeric mode can represent — the optimiser lands on
 //! byte mode too, making the two identical end to end.
 
-use awg_easy_rs::qr;
+use coffeeblack_vpn::qr;
 use qrcode::bits::Bits;
 use qrcode::types::{EcLevel, Version};
 use qrcode::render::svg;

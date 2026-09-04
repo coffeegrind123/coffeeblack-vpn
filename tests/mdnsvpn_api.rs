@@ -8,9 +8,9 @@
 
 mod common;
 
-use awg_easy_rs::{api, auth, db};
-use awg_easy_rs::http::Body;
-use awg_easy_rs::http::{header, Request, StatusCode};
+use coffeeblack_vpn::{api, auth, db};
+use coffeeblack_vpn::http::Body;
+use coffeeblack_vpn::http::{header, Request, StatusCode};
 use serde_json::{json, Value};
 use serial_test::serial;
 
@@ -18,7 +18,7 @@ fn seed() {
     common::seed();
 }
 
-fn router() -> awg_easy_rs::http::Router {
+fn router() -> coffeeblack_vpn::http::Router {
     api::build_router(api::AppState::new())
 }
 
@@ -38,7 +38,7 @@ fn create_admin() -> (i64, String) {
     (id, "adminpass".into())
 }
 
-async fn login(app: &awg_easy_rs::http::Router, username: &str, password: &str) -> String {
+async fn login(app: &coffeeblack_vpn::http::Router, username: &str, password: &str) -> String {
     let body = json!({ "username": username, "password": password });
     let req = Request::builder()
         .method("POST")
@@ -55,9 +55,9 @@ async fn login(app: &awg_easy_rs::http::Router, username: &str, password: &str) 
         .collect();
     cookies
         .into_iter()
-        .find(|c| c.starts_with("awg_session="))
+        .find(|c| c.starts_with("coffeeblack_session="))
         .unwrap()
-        .strip_prefix("awg_session=")
+        .strip_prefix("coffeeblack_session=")
         .unwrap()
         .split(';')
         .next()
@@ -65,22 +65,22 @@ async fn login(app: &awg_easy_rs::http::Router, username: &str, password: &str) 
         .to_string()
 }
 
-async fn json_get(app: &awg_easy_rs::http::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
+async fn json_get(app: &coffeeblack_vpn::http::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("GET")
         .uri(path)
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 64).unwrap();
+    let body = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 64).unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     (status, v)
 }
 
 async fn json_post(
-    app: &awg_easy_rs::http::Router,
+    app: &coffeeblack_vpn::http::Router,
     path: &str,
     cookie: &str,
     body: Value,
@@ -89,21 +89,21 @@ async fn json_post(
         .method("POST")
         .uri(path)
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 64).unwrap();
+    let body = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 64).unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     (status, v)
 }
 
-async fn raw_get(app: &awg_easy_rs::http::Router, path: &str, cookie: &str) -> (StatusCode, String) {
+async fn raw_get(app: &coffeeblack_vpn::http::Router, path: &str, cookie: &str) -> (StatusCode, String) {
     let req = Request::builder()
         .method("GET")
         .uri(path)
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -111,7 +111,7 @@ async fn raw_get(app: &awg_easy_rs::http::Router, path: &str, cookie: &str) -> (
     // QR-code SVGs encode every module as its own <rect/>, so they can
     // run into the hundreds of KB for share strings as long as
     // `mdnsvpn://b64?<base64>`. 1 MB cap is plenty.
-    let body = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
+    let body = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let s = String::from_utf8(body.to_vec()).unwrap_or_default();
     (status, s)
 }
@@ -119,14 +119,14 @@ async fn raw_get(app: &awg_easy_rs::http::Router, path: &str, cookie: &str) -> (
 /// Like `raw_get`, but keeps the response headers so cache-policy can be
 /// asserted on secret-bearing bodies.
 async fn headers_get(
-    app: &awg_easy_rs::http::Router,
+    app: &coffeeblack_vpn::http::Router,
     path: &str,
     cookie: &str,
-) -> (StatusCode, awg_easy_rs::http::HeaderMap) {
+) -> (StatusCode, coffeeblack_vpn::http::HeaderMap) {
     let req = Request::builder()
         .method("GET")
         .uri(path)
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -408,7 +408,7 @@ async fn create_list_delete_client_round_trip() {
     let req = Request::builder()
         .method("DELETE")
         .uri(format!("/api/mdnsvpn/clients/{id}"))
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -487,7 +487,7 @@ async fn create_duplicate_name_is_rejected() {
 // Share endpoints
 // ---------------------------------------------------------------------------
 
-async fn setup_for_share(app: &awg_easy_rs::http::Router, cookie: &str) -> i64 {
+async fn setup_for_share(app: &coffeeblack_vpn::http::Router, cookie: &str) -> i64 {
     // Inbound: set domains + key so the supervisor would-be-runnable.
     let (status, _) = json_post(
         app,
@@ -814,11 +814,11 @@ async fn bundle_zip_contains_config_and_resolver_file() {
     let req = Request::builder()
         .method("GET")
         .uri(format!("/api/mdnsvpn/clients/{id}/bundle.zip"))
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    let bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
+    let bytes = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
 
     assert!(bytes.starts_with(b"PK\x03\x04"), "not a zip");
     let blob = String::from_utf8_lossy(&bytes);
@@ -888,7 +888,7 @@ async fn share_url_carries_resolvers_without_corrupting_the_blob() {
     let payload = parts.next().unwrap();
     // Must remain valid *standard* base64 with padding — upstream decodes with
     // base64.StdEncoding, which rejects the URL-safe alphabet.
-    let decoded = awg_easy_rs::encoding::b64_decode(payload)
+    let decoded = coffeeblack_vpn::encoding::b64_decode(payload)
         .expect("share payload must be standard base64");
     let blob: Value = serde_json::from_slice(&decoded).unwrap();
     assert_eq!(blob["LISTEN_PORT"], 19000);

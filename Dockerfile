@@ -52,8 +52,8 @@ ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=static"
 # instead of silently resolving to different versions than were tested. Matches
 # `scripts/install.sh`, which already builds with `--locked`.
 RUN cargo build --release --locked --target x86_64-unknown-linux-musl && \
-    strip target/x86_64-unknown-linux-musl/release/awg-easy-rs && \
-    cp target/x86_64-unknown-linux-musl/release/awg-easy-rs /build/awg-easy-rs
+    strip target/x86_64-unknown-linux-musl/release/coffeeblack-vpn && \
+    cp target/x86_64-unknown-linux-musl/release/coffeeblack-vpn /build/coffeeblack-vpn
 
 # Stage 2: Build amneziawg-go (needs Go >= 1.24)
 FROM golang:1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS awg-go-builder
@@ -116,10 +116,10 @@ COPY --from=awg-builder /build/amneziawg-tools/src/wg-quick/linux.bash /usr/bin/
 RUN chmod +x /usr/bin/awg /usr/bin/awg-quick /usr/bin/amneziawg-go
 
 # Symlink amnezia config dir to wireguard
-RUN mkdir -p /etc/amnezia && ln -s /etc/wireguard /etc/amnezia/amneziawg
+RUN mkdir -p /etc/amnezia && ln -s /etc/coffeeblack/conf /etc/amnezia/amneziawg
 
 # Copy the Rust binary (truly static, runs on any x86_64 libc).
-COPY --from=builder /build/awg-easy-rs /usr/local/bin/awg-easy-rs
+COPY --from=builder /build/coffeeblack-vpn /usr/local/bin/coffeeblack-vpn
 
 # Health check — verifies the web UI binary is responding. We deliberately
 # don't probe `awg show` here because a misconfigured WireGuard interface
@@ -139,15 +139,15 @@ ENV DISABLE_IPV6=false
 #                            (Xray/telemt/MasterDnsVPN/dnscrypt-proxy/tor) are
 #                            exec'd from anonymous memfds, never written to a
 #                            filesystem.
-#  - WG_EASY_PERSIST_DB    → the only durable touch point: the RAM database is
+#  - COFFEEBLACK_PERSIST_DB    → the only durable touch point: the RAM database is
 #                            snapshotted here (and restored on boot) so a
 #                            planned restart keeps the full client roster. Put
 #                            it on a small persistent volume (see compose).
-#  - /etc/wireguard is a tmpfs (see compose) so the generated configs, the
+#  - /etc/coffeeblack/conf is a tmpfs (see compose) so the generated configs, the
 #    AmneziaWG .conf, and tor's data dir live in RAM too.
 ENV IN_MEMORY=true
-ENV WG_EASY_PERSIST_DB=/data/wg-easy.db
-ENV WG_EASY_PERSIST_INTERVAL=30
+ENV COFFEEBLACK_PERSIST_DB=/data/coffeeblack.db
+ENV COFFEEBLACK_PERSIST_INTERVAL=30
 
 # Durable snapshot target (a volume is mounted here by compose). Created so
 # the snapshot rename has a directory to land in even before the volume mount.
@@ -156,4 +156,4 @@ RUN mkdir -p /data
 EXPOSE 51821/tcp
 EXPOSE 51820/udp
 
-CMD ["/usr/local/bin/awg-easy-rs"]
+CMD ["/usr/local/bin/coffeeblack-vpn"]

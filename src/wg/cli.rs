@@ -13,7 +13,7 @@ use std::io::Write;
 use anyhow::{Result, anyhow};
 
 /// Check whether the awg binary is available on this system.
-fn awg_available() -> bool {
+fn cb_available() -> bool {
     Command::new("which")
         .arg("awg")
         .output()
@@ -29,7 +29,7 @@ pub fn run(prog: &str, args: &[&str]) -> Result<String> {
 }
 
 fn run_argv(prog: &str, args: &[&str]) -> Result<String> {
-    if !cfg!(target_os = "linux") || !awg_available() {
+    if !cfg!(target_os = "linux") || !cb_available() {
         return Ok(String::new());
     }
     let output = Command::new(prog).args(args).output()?;
@@ -64,7 +64,7 @@ fn validate_iface_name(name: &str) -> Result<()> {
 /// process needs no `CAP_NET_ADMIN` of its own. Falls back to executing
 /// directly otherwise — that is the original single-process behaviour and
 /// stays the default until an operator opts in.
-pub fn awg_up(name: &str) -> Result<()> {
+pub fn cb_up(name: &str) -> Result<()> {
     validate_iface_name(name)?;
     if crate::privhelper::is_enabled() {
         return crate::privhelper::call(&crate::privhelper::Request::WgUp).map(|_| ());
@@ -73,7 +73,7 @@ pub fn awg_up(name: &str) -> Result<()> {
 }
 
 /// Take down an AmneziaWG interface with awg-quick.
-pub fn awg_down(name: &str) -> Result<()> {
+pub fn cb_down(name: &str) -> Result<()> {
     validate_iface_name(name)?;
     if crate::privhelper::is_enabled() {
         return crate::privhelper::call(&crate::privhelper::Request::WgDown).map(|_| ());
@@ -83,9 +83,9 @@ pub fn awg_down(name: &str) -> Result<()> {
 
 /// Sync config without restarting the interface.
 /// Uses process substitution: awg syncconf <name> <(awg-quick strip <name>)
-pub fn awg_sync(name: &str) -> Result<()> {
+pub fn cb_sync(name: &str) -> Result<()> {
     validate_iface_name(name)?;
-    if !cfg!(target_os = "linux") || !awg_available() {
+    if !cfg!(target_os = "linux") || !cb_available() {
         return Ok(());
     }
     // Capture `awg-quick strip <name>` first, then pipe via stdin to
@@ -123,7 +123,7 @@ pub struct PeerDump {
 
 /// Dump AmneziaWG peer status for an interface.
 /// Parses tab-separated output from `awg show <name> dump`.
-pub fn awg_dump(name: &str) -> Result<Vec<PeerDump>> {
+pub fn cb_dump(name: &str) -> Result<Vec<PeerDump>> {
     validate_iface_name(name)?;
     let output = if crate::privhelper::is_enabled() {
         crate::privhelper::call(&crate::privhelper::Request::WgShow)?

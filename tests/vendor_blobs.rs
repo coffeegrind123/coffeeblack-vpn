@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use awg_easy_rs::encoding::hex_encode;
-use awg_easy_rs::inflate;
+use coffeeblack_vpn::encoding::hex_encode;
+use coffeeblack_vpn::inflate;
 use sha2::{Digest, Sha256};
 
 fn vendor_dir() -> PathBuf {

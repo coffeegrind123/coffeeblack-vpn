@@ -1,5 +1,5 @@
 # Pinned versions and SHA-256 sums for the DNS bundle, embedded in the
-# awg-easy-rs binary. build.rs reads this file and validates that the
+# coffeeblack-vpn binary. build.rs reads this file and validates that the
 # vendored .gz blobs match the expected SHAs at compile time.
 #
 # Each binary is recorded as:

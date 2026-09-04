@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'">
 <meta name="referrer" content="no-referrer">
-<title>AmneziaWG Easy</title>
-<link rel="icon" type="image/svg+xml" href="/logo-amnezia.svg">
-<link rel="icon" type="image/x-icon" href="/favicon-amnezia.ico">
-<link rel="apple-touch-icon" href="/apple-touch-icon-amnezia.png">
+<title>CoffeeBlack VPN</title>
+<link rel="icon" type="image/svg+xml" href="/logo-coffeeblack.svg">
+<link rel="icon" type="image/x-icon" href="/favicon-coffeeblack.ico">
+<link rel="apple-touch-icon" href="/apple-touch-icon-coffeeblack.png">
 <style>
 :root {
   --bg-page: #050509;
@@ -696,7 +696,7 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
 .danger-zone-text { flex: 1; }
 .danger-zone b { font-size: 13px; color: var(--danger); font-weight: 600; }
 /* `>` so only the direct-child description span becomes a block; otherwise
-   nested <span class="mono"> tags inside the description (peer name, "awg0")
+   nested <span class="mono"> tags inside the description (peer name, "cb0")
    also get display:block and the sentence renders one word per line. */
 .danger-zone-text > span { font-size: 12px; color: var(--fg-mute); display: block; margin-top: 2px; }
 
@@ -1019,12 +1019,12 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
 <div class="shell" id="app-shell">
   <aside class="aside">
     <a class="brand-row" href="#/" onclick="navigate('/')">
-      <div class="brand-mark"><img src="/logo-amnezia.svg" alt=""></div>
-      <div class="brand-name">awg-easy<small>VPN manager</small></div>
+      <div class="brand-mark"><img src="/logo-coffeeblack.svg" alt=""></div>
+      <div class="brand-name">CoffeeBlack<small>VPN manager</small></div>
     </a>
     <div class="nav-section" id="nav-links">
       <div class="nav-label">Modes</div>
-      <button class="nav-item" data-route="/" onclick="navigate('/')" title="AmneziaWG: low-latency, full-tunnel, gaming-friendly UDP transport.">
+      <button class="nav-item" data-route="/" onclick="navigate('/')" title="Gaming mode: low-latency, full-tunnel, gaming-friendly UDP transport.">
         <svg><use href="#i-users"/></svg> Gaming <span class="pill" id="side-peer-count">—</span>
       </button>
       <button class="nav-item" data-route="/xray" onclick="navigate('/xray')" title="Xray VLESS+Reality+Vision: TCP/443 camouflaged behind a real CDN host. Browser-friendly.">
@@ -1043,7 +1043,7 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
       <div class="server-card">
         <div class="server-card-head">
           <span class="pulse-dot"></span>
-          <span>awg0</span>
+          <span>cb0</span>
           <span style="color:var(--fg-faint)">·</span>
           <span id="side-status">online</span>
         </div>
@@ -1212,7 +1212,7 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
       <div class="top">
         <h1 class="page-title">Admin</h1>
         <div class="top-spacer"></div>
-        <button class="btn btn--ghost btn--sm" onclick="restartWG()" title="Restart awg0 interface"><svg><use href="#i-refresh"/></svg> Restart awg0</button>
+        <button class="btn btn--ghost btn--sm" onclick="restartWG()" title="Restart cb0 interface"><svg><use href="#i-refresh"/></svg> Restart cb0</button>
       </div>
       <div class="scroll" style="padding-top:16px">
         <div class="admin-shell">
@@ -1220,7 +1220,7 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
             <div class="group-label">Server</div>
             <a href="#/admin" data-tab="general" onclick="showAdminTab('general',event)" class="active">General</a>
             <a href="#/admin" data-tab="config" onclick="showAdminTab('config',event)">Defaults</a>
-            <div class="group-label">Gaming (AmneziaWG)</div>
+            <div class="group-label">Gaming</div>
             <a href="#/admin" data-tab="interface" onclick="showAdminTab('interface',event)">Interface</a>
             <a href="#/admin" data-tab="hooks" onclick="showAdminTab('hooks',event)">Hooks</a>
             <div class="group-label">Browsing (Xray Reality)</div>
@@ -1250,12 +1250,12 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
     <aside class="auth-side">
       <div class="auth-side-grid"></div>
       <div class="auth-side-mark">
-        <div class="brand-mark"><img src="/logo-amnezia.svg" alt=""></div>
-        <div class="brand-name">awg-easy<small>AmneziaWG manager</small></div>
+        <div class="brand-mark"><img src="/logo-coffeeblack.svg" alt=""></div>
+        <div class="brand-name">CoffeeBlack<small>VPN manager</small></div>
       </div>
       <div class="auth-side-spacer"></div>
       <p class="auth-side-quote">Tunnels that don't look like tunnels — <em>obfuscated handshakes</em>, junk packets, four magic header values rolled per-server. The kind of thing nobody finds twice.</p>
-      <p class="auth-side-attr">— The point of AmneziaWG</p>
+      <p class="auth-side-attr">— The point of CoffeeBlack</p>
     </aside>
     <div class="auth-main">
       <div class="auth-card">
@@ -1299,8 +1299,8 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
     <aside class="auth-side">
       <div class="auth-side-grid"></div>
       <div class="auth-side-mark">
-        <div class="brand-mark"><img src="/logo-amnezia.svg" alt=""></div>
-        <div class="brand-name">awg-easy<small>first-time setup</small></div>
+        <div class="brand-mark"><img src="/logo-coffeeblack.svg" alt=""></div>
+        <div class="brand-name">CoffeeBlack<small>first-time setup</small></div>
       </div>
       <div class="auth-side-spacer"></div>
       <p class="auth-side-quote">Three minutes from clean install to your first peer connecting. <em>No configs to memorize</em>; only the values your VPN can't guess.</p>
@@ -1366,12 +1366,12 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
               <input type="text" id="setup-host" class="mono-input" placeholder="vpn.example.com" required>
             </div>
             <div class="field">
-              <label class="field-label" for="setup-port" title="UDP port for AmneziaWG connections. Default: 51820">UDP port</label>
+              <label class="field-label" for="setup-port" title="UDP port for Gaming-mode connections. Default: 51820">UDP port</label>
               <input type="number" id="setup-port" class="mono-input" value="51820" required>
             </div>
             <div class="notice notice--info">
               <svg><use href="#i-info"/></svg>
-              <div>The UDP port needs to be open on your firewall. We'll set up the <span class="mono">inet awg-easy-rs</span> nftables table automatically.</div>
+              <div>The UDP port needs to be open on your firewall. We'll set up the <span class="mono">inet coffeeblack</span> nftables table automatically.</div>
             </div>
             <div style="display:flex;gap:10px;margin-top:6px">
               <button type="button" class="btn btn--ghost" onclick="setupGo(2)">Back</button>
@@ -1419,7 +1419,7 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
 <div class="modal-overlay" id="modal-qr">
   <div class="modal">
     <h3>Scan to import</h3>
-    <p class="sub" style="margin-bottom:12px">Open AmneziaWG on your device and scan this code.</p>
+    <p class="sub" style="margin-bottom:12px">Open the Amnezia VPN app on your device and scan this code.</p>
     <div id="qr-image" style="text-align:center;padding:8px;background:#fff;border-radius:var(--r-sm)"></div>
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
       <button class="btn btn--ghost" onclick="closeModal('modal-qr')">Close</button>
@@ -1469,7 +1469,7 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
 <div class="modal-overlay" id="modal-delete">
   <div class="modal">
     <h3>Delete peer</h3>
-    <p class="sub" style="margin-bottom:14px">This removes the peer from <span class="mono">awg0</span>, revokes its keys, and frees the address. Cannot be undone.</p>
+    <p class="sub" style="margin-bottom:14px">This removes the peer from <span class="mono">cb0</span>, revokes its keys, and frees the address. Cannot be undone.</p>
     <div style="display:flex;gap:10px;justify-content:flex-end">
       <button class="btn btn--ghost" onclick="closeModal('modal-delete')">Cancel</button>
       <button class="btn btn--danger" id="delete-confirm-btn"><svg><use href="#i-trash"/></svg> Delete peer</button>

@@ -1,0 +1,17 @@
+<svg width="400" height="400" viewBox="0 0 400 400" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="CoffeeBlack">
+  <defs>
+    <linearGradient id="cb-crema" x1="52" y1="76" x2="348" y2="324" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FDC285"/>
+      <stop offset="0.55" stop-color="#FBB26A"/>
+      <stop offset="1" stop-color="#E8923A"/>
+    </linearGradient>
+    <mask id="cb-groove">
+      <rect width="400" height="400" fill="#fff"/>
+      <path d="M46 200 C122 170 152 230 200 200 C248 170 278 230 354 200"
+            stroke="#000" stroke-width="26" stroke-linecap="round" fill="none"/>
+    </mask>
+  </defs>
+  <g transform="rotate(-35 200 200)">
+    <ellipse cx="200" cy="200" rx="176" ry="128" fill="url(#cb-crema)" mask="url(#cb-groove)"/>
+  </g>
+</svg>

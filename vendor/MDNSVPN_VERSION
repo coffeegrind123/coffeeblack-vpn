@@ -1,4 +1,4 @@
-# Pinned MasterDnsVPN (Go server) version embedded in the awg-easy-rs binary.
+# Pinned MasterDnsVPN (Go server) version embedded in the coffeeblack-vpn binary.
 # build.rs reads this file to validate that the vendored blob matches the
 # expected version, and prints the version into the binary at compile time.
 #

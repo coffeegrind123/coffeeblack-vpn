@@ -12,8 +12,8 @@
 
 use std::process::Command;
 
-use awg_easy_rs::db::{MdnsvpnClient, MdnsvpnInbound};
-use awg_easy_rs::mdnsvpn::bundle;
+use coffeeblack_vpn::db::{MdnsvpnClient, MdnsvpnInbound};
+use coffeeblack_vpn::mdnsvpn::bundle;
 
 fn fixture_inbound() -> MdnsvpnInbound {
     MdnsvpnInbound {
@@ -69,7 +69,7 @@ fn have(bin: &str) -> bool {
 fn archive_passes_real_extractors() {
     let zip = bundle::build(&fixture_inbound(), &fixture_client()).expect("build bundle");
 
-    let dir = std::env::temp_dir().join(format!("awg-bundle-zip-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("coffeeblack-bundle-zip-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("mkdir");
     let path = dir.join("bundle.zip");
     std::fs::write(&path, &zip).expect("write zip");

@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn embedded_sha_is_64_hex_chars() {
-        assert_eq!(TELEMT_SHA256.len(), 64, "AWG_EASY_TELEMT_SHA256 must be a hex SHA-256");
+        assert_eq!(TELEMT_SHA256.len(), 64, "COFFEEBLACK_TELEMT_SHA256 must be a hex SHA-256");
         assert!(TELEMT_SHA256.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
@@ -119,7 +119,7 @@ mod tests {
         // Telemt uses unprefixed semver tags like "3.4.11".
         assert!(
             !TELEMT_VERSION.is_empty(),
-            "AWG_EASY_TELEMT_VERSION must be populated when bundled"
+            "COFFEEBLACK_TELEMT_VERSION must be populated when bundled"
         );
     }
 }

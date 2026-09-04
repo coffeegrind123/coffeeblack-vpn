@@ -16,7 +16,7 @@
 //! service could accumulate: who connected, when, from where, and how much
 //! they moved. Everything in the SQLite schema is written to a file when
 //! `IN_MEMORY=false`, and is copied verbatim into the durable snapshot when
-//! `WG_EASY_PERSIST_DB` is set — so a table, even in the `:memory:` database,
+//! `COFFEEBLACK_PERSIST_DB` is set — so a table, even in the `:memory:` database,
 //! is one config flag away from being a durable record of exactly that.
 //!
 //! Keeping the history in process memory makes the guarantee structural

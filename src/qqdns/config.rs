@@ -21,9 +21,9 @@ fn parse_json_list(s: &str) -> Vec<String> {
 
 /// The AmneziaWG loopback target decoded traffic is delivered to. `0` in the
 /// settings means "the interface's own ListenPort".
-pub fn effective_awg_target(settings: &db::QqdnsSettings, iface_port: i64) -> i64 {
-    if settings.awg_target_port != 0 {
-        settings.awg_target_port
+pub fn effective_cb_target(settings: &db::QqdnsSettings, iface_port: i64) -> i64 {
+    if settings.cb_target_port != 0 {
+        settings.cb_target_port
     } else {
         iface_port
     }
@@ -59,9 +59,9 @@ pub fn should_remain_disabled(
     if !(1..=65535).contains(&settings.receive_port) {
         return Some(format!("receive_port {} out of range", settings.receive_port));
     }
-    let target = effective_awg_target(settings, iface.port);
+    let target = effective_cb_target(settings, iface.port);
     if !(1..=65535).contains(&target) {
-        return Some(format!("awg_target_port {target} out of range"));
+        return Some(format!("cb_target_port {target} out of range"));
     }
     if settings.max_domain_len < 20 || settings.max_domain_len > 253 {
         return Some(format!(
@@ -91,7 +91,7 @@ pub fn build_engine_config(
     if let Some(reason) = should_remain_disabled(settings, iface) {
         return Err(anyhow!(reason));
     }
-    let target = effective_awg_target(settings, iface.port);
+    let target = effective_cb_target(settings, iface.port);
     let send_interface_ip = if settings.send_interface_ip.trim().is_empty() {
         "0.0.0.0".to_string()
     } else {

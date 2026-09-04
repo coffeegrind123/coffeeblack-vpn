@@ -1,4 +1,4 @@
-//! API route layer for awg-easy-rs.
+//! API route layer for coffeeblack-vpn.
 //!
 //! All HTTP handlers are organised into sub-modules:
 //! - `session`  — authentication and session management
@@ -439,7 +439,7 @@ pub fn require_auth(
     state: &AppState,
 ) -> Result<crate::db::User, (StatusCode, Json<Value>)> {
     let token = jar
-        .get("awg_session")
+        .get("coffeeblack_session")
         .map(|c| c.value().to_string())
         .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "Not authenticated"))?;
 
@@ -480,7 +480,7 @@ pub fn revoke_user_sessions(state: &AppState, user_id: i64, keep_token: Option<&
 
 /// The caller's raw session token, when the request carried one.
 pub fn session_token(jar: &crate::http::CookieJar) -> Option<String> {
-    jar.get("awg_session").map(|c| c.value().to_string())
+    jar.get("coffeeblack_session").map(|c| c.value().to_string())
 }
 
 /// Convert a camelCase JSON key to snake_case database column name.

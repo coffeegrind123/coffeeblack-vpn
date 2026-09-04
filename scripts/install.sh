@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# install.sh — bare-metal host installer for awg-easy-rs
+# install.sh — bare-metal host installer for coffeeblack-vpn
 #
-# awg-easy-rs is a single static-musl Rust binary that manages an AmneziaWG VPN
+# coffeeblack-vpn is a single static-musl Rust binary that manages an AmneziaWG VPN
 # (plus Xray / MTProxy / DNS-tunnel transports) behind one web UI. The binary
-# OWNS the AmneziaWG interface lifecycle itself (it runs `awg-quick up awg0` on
+# OWNS the AmneziaWG interface lifecycle itself (it runs `awg-quick up cb0` on
 # startup and tears it down on shutdown), so the host does NOT need an
 # `awg-quick@` systemd service. This installer's job is only to:
 #
 #   1. Install the AmneziaWG kernel module + amneziawg-tools (so `awg` /
 #      `awg-quick` exist and the fast kernel data path is available).
-#   2. Install the awg-easy-rs binary as a systemd service.
+#   2. Install the coffeeblack-vpn binary as a systemd service.
 #   3. Configure host sysctl (IPv4 + IPv6 forwarding).
 #   4. Seed the first-run admin config (INIT_* env vars) into an EnvironmentFile.
 #
@@ -27,7 +27,7 @@
 #   sudo ./install.sh status
 #   ./install.sh --help
 #
-# https://github.com/coffeegrind123/awg-easy-rs
+# https://github.com/coffeegrind123/coffeeblack-vpn
 
 set -euo pipefail
 
@@ -43,31 +43,31 @@ fi
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-readonly SERVICE_NAME="awg-easy-rs"
-readonly BINARY_NAME="awg-easy-rs"
+readonly SERVICE_NAME="coffeeblack-vpn"
+readonly BINARY_NAME="coffeeblack-vpn"
 readonly INSTALL_DIR="/usr/local/bin"
 readonly BINARY_DEST="${INSTALL_DIR}/${BINARY_NAME}"
-readonly ENV_DIR="/etc/awg-easy-rs"
-readonly ENV_FILE="${ENV_DIR}/awg-easy-rs.env"
+readonly ENV_DIR="/etc/coffeeblack"
+readonly ENV_FILE="${ENV_DIR}/coffeeblack.env"
 readonly SYSTEMD_UNIT_DEST="/etc/systemd/system/${SERVICE_NAME}.service"
-readonly WG_CONF_DIR="/etc/wireguard"
-readonly SYSCTL_CONF="/etc/sysctl.d/99-awg-easy-rs.conf"
+readonly WG_CONF_DIR="/etc/coffeeblack/conf"
+readonly SYSCTL_CONF="/etc/sysctl.d/99-coffeeblack.conf"
 readonly MODULES_LOAD_CONF="/etc/modules-load.d/amneziawg.conf"
 
-readonly RELEASE_URL="https://github.com/coffeegrind123/awg-easy-rs/releases/latest/download/awg-easy-rs"
-readonly SHA256SUMS_URL="https://github.com/coffeegrind123/awg-easy-rs/releases/latest/download/SHA256SUMS"
+readonly RELEASE_URL="https://github.com/coffeegrind123/coffeeblack-vpn/releases/latest/download/coffeeblack-vpn"
+readonly SHA256SUMS_URL="https://github.com/coffeegrind123/coffeeblack-vpn/releases/latest/download/SHA256SUMS"
 readonly MUSL_TARGET="x86_64-unknown-linux-musl"
 # Full 40-char fingerprint of the AmneziaWG APT signing key. Short IDs are
 # collision-prone; always fetch and verify by full fingerprint.
 readonly AMNEZIAWG_APT_FPR="75C9DD72C799870E310542E24166F2C257290828"
 
-readonly MANAGED_SENTINEL="# Managed by awg-easy-rs install.sh - safe to remove"
+readonly MANAGED_SENTINEL="# Managed by coffeeblack-vpn install.sh - safe to remove"
 
 # IPv4-forcing (broken-IPv6-VPS workaround) — ported verbatim in behaviour.
-readonly APT_FORCE_IPV4_CONF="/etc/apt/apt.conf.d/99awg-easy-rs-force-ipv4"
-readonly APT_FORCE_IPV4_SENTINEL="# Managed by awg-easy-rs - safe to remove"
+readonly APT_FORCE_IPV4_CONF="/etc/apt/apt.conf.d/99coffeeblack-force-ipv4"
+readonly APT_FORCE_IPV4_SENTINEL="# Managed by coffeeblack-vpn - safe to remove"
 readonly GAI_CONF="/etc/gai.conf"
-readonly GAI_CONF_SENTINEL="# Added by awg-easy-rs - safe to remove"
+readonly GAI_CONF_SENTINEL="# Added by coffeeblack-vpn - safe to remove"
 readonly GAI_CONF_IPV4_RULE="precedence ::ffff:0:0/96 100"
 readonly GAI_CONF_IPV4_RULE_REGEX='^[[:space:]]*precedence[[:space:]]+::ffff:0:0/96[[:space:]]+100([[:space:]]*(#.*)?)?$'
 
@@ -136,14 +136,14 @@ OS_VERSION_ID=""
 
 usage() {
 	cat <<EOF
-awg-easy-rs bare-metal installer
+coffeeblack-vpn bare-metal installer
 
 Usage:
   sudo $0 [SUBCOMMAND] [OPTIONS]
 
 Subcommands:
   install    (default)  Provision the AmneziaWG kernel module + tools, install
-                        the awg-easy-rs binary as a systemd service, configure
+                        the coffeeblack-vpn binary as a systemd service, configure
                         sysctl, and seed the first-run admin.
   upgrade               Replace the installed binary (download or rebuild) and
                         restart the service. Leaves config/DB untouched.
@@ -153,7 +153,7 @@ Subcommands:
   status                Show install / service / module health.
 
 Binary source (install / upgrade; choose at most one):
-  --binary-src PATH     Install a pre-built awg-easy-rs binary from PATH.
+  --binary-src PATH     Install a pre-built coffeeblack-vpn binary from PATH.
   --build-from-source   Build with: cargo build --release --target ${MUSL_TARGET}
   --install-rust        Install the Rust toolchain via rustup if cargo is
                         missing (only meaningful with --build-from-source).
@@ -192,7 +192,7 @@ First-run admin (install; used to seed INIT_* in the EnvironmentFile):
 
 uninstall options:
   --purge-config        Also delete ${ENV_DIR}.
-  --purge-data          Also delete ${WG_CONF_DIR} (DB, awg0.conf, subprocess state).
+  --purge-data          Also delete ${WG_CONF_DIR} (DB, cb0.conf, subprocess state).
 
 Environment overrides (non-interactive automation):
   AUTO_INSTALL=y        Same as --non-interactive; auto-confirms prompts.
@@ -206,7 +206,7 @@ Examples:
 
   # Non-interactive install from a pre-built binary
   sudo AUTO_INSTALL=y $0 install \\
-    --binary-src ./target/${MUSL_TARGET}/release/awg-easy-rs \\
+    --binary-src ./target/${MUSL_TARGET}/release/coffeeblack-vpn \\
     --admin-user admin --admin-password 's3cret!' --endpoint vpn.example.com
 
   # Build from source and install
@@ -494,7 +494,7 @@ ensureAmneziawgKernelModule() {
 		fi
 		warn "  2. dkms autoinstall -k \"${kver}\" && depmod -a"
 		warn "  3. modprobe amneziawg"
-		warn "awg-easy-rs will still start and serve the web UI; the kernel data path"
+		warn "coffeeblack-vpn will still start and serve the web UI; the kernel data path"
 		warn "stays unavailable until the module loads. This is non-fatal — continuing."
 		return 1
 	fi
@@ -518,7 +518,7 @@ setupDebianKeyring() {
 
 	local key_url="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${AMNEZIAWG_APT_FPR}"
 	local tmp_asc
-	tmp_asc="$(mktemp /tmp/awg-apt-key.XXXXXX)" || die "Failed to create temp file for APT key."
+	tmp_asc="$(mktemp /tmp/coffeeblack-apt-key.XXXXXX)" || die "Failed to create temp file for APT key."
 
 	local fetched=0
 	if command -v curl >/dev/null 2>&1; then
@@ -681,7 +681,7 @@ ensure_rust_toolchain() {
 }
 
 build_from_source() {
-	step "Building awg-easy-rs from source"
+	step "Building coffeeblack-vpn from source"
 	[[ -f "${REPO_ROOT}/Cargo.toml" ]] || \
 		die "No Cargo.toml at ${REPO_ROOT}; run from a repository checkout to build from source."
 	ensure_rust_toolchain
@@ -699,9 +699,9 @@ build_from_source() {
 }
 
 download_release() {
-	step "Downloading the latest awg-easy-rs release"
+	step "Downloading the latest coffeeblack-vpn release"
 	local tmp
-	tmp="$(mktemp /tmp/awg-easy-rs.XXXXXX)" || die "Failed to create temp file for the binary download."
+	tmp="$(mktemp /tmp/coffeeblack-vpn.XXXXXX)" || die "Failed to create temp file for the binary download."
 	local ok=0
 	if command -v curl >/dev/null 2>&1; then
 		curl -4 -fL --retry 3 -o "${tmp}" "${RELEASE_URL}" && ok=1
@@ -724,7 +724,7 @@ download_release() {
 	# redirects to wherever they point. The release publishes SHA256SUMS
 	# precisely so this check can exist.
 	local sums
-	sums="$(mktemp /tmp/awg-easy-rs-sums.XXXXXX)" || die "Failed to create temp file for the checksum download."
+	sums="$(mktemp /tmp/coffeeblack-vpn-sums.XXXXXX)" || die "Failed to create temp file for the checksum download."
 	local got=0
 	if command -v curl >/dev/null 2>&1; then
 		curl -4 -fL --retry 3 -o "${sums}" "${SHA256SUMS_URL}" && got=1
@@ -736,10 +736,10 @@ download_release() {
 		die "Could not download ${SHA256SUMS_URL} to verify the release binary. Refusing to install an unverified binary that will run as root. Use --binary-src <path> or --build if you are installing deliberately from another source."
 	fi
 	local want
-	want="$(awk '$2 ~ /(^|\/)awg-easy-rs$/ { print $1; exit }' "${sums}")"
+	want="$(awk '$2 ~ /(^|\/)coffeeblack-vpn$/ { print $1; exit }' "${sums}")"
 	if [[ -z "${want}" ]]; then
 		rm -f "${tmp}" "${sums}"
-		die "SHA256SUMS did not list awg-easy-rs; refusing to install an unverified binary."
+		die "SHA256SUMS did not list coffeeblack-vpn; refusing to install an unverified binary."
 	fi
 	local have
 	have="$(sha256sum "${tmp}" | cut -d' ' -f1)"
@@ -831,7 +831,7 @@ interactive_setup() {
 	step "Interactive configuration"
 	cat <<EOF
 
-Configure awg-easy-rs. Press Enter to accept the default shown in brackets.
+Configure coffeeblack-vpn. Press Enter to accept the default shown in brackets.
 
 EOF
 	prompt_default WEB_HOST "Web UI bind address"  "${WEB_HOST}"
@@ -921,9 +921,9 @@ write_env_file() {
 	local old_umask; old_umask="$(umask)"; umask 077
 
 	{
-		echo "# awg-easy-rs environment configuration"
+		echo "# coffeeblack-vpn environment configuration"
 		echo "# Generated by install.sh. Manage with: sudo systemctl restart ${SERVICE_NAME}"
-		echo "# All values are environment variables read by the awg-easy-rs binary."
+		echo "# All values are environment variables read by the coffeeblack-vpn binary."
 		echo ""
 		echo "# ── Web server ──────────────────────────────────────────────────────────────"
 		echo "PORT=${WEB_PORT}"
@@ -933,8 +933,8 @@ write_env_file() {
 		echo ""
 		echo "# ── Storage (bare-metal durable install: on-disk, not RAM) ──────────────────"
 		echo "IN_MEMORY=false"
-		echo "WG_EASY_CONF_DIR=${WG_CONF_DIR}"
-		echo "WG_EASY_DB_PATH=${WG_CONF_DIR}/wg-easy.db"
+		echo "COFFEEBLACK_CONF_DIR=${WG_CONF_DIR}"
+		echo "COFFEEBLACK_DB_PATH=${WG_CONF_DIR}/coffeeblack.db"
 		echo ""
 		echo "# ── Logging ─────────────────────────────────────────────────────────────────"
 		echo "RUST_LOG=info"
@@ -985,8 +985,8 @@ install_service_unit() {
 		warn "packaging/${SERVICE_NAME}.service not found; writing an inline unit."
 		cat > "${SYSTEMD_UNIT_DEST}" <<UNITEOF
 [Unit]
-Description=awg-easy-rs — AmneziaWG VPN + proxy manager with web UI
-Documentation=https://github.com/coffeegrind123/awg-easy-rs
+Description=coffeeblack-vpn — AmneziaWG VPN + proxy manager with web UI
+Documentation=https://github.com/coffeegrind123/coffeeblack-vpn
 After=network-online.target
 Wants=network-online.target
 
@@ -1040,7 +1040,54 @@ setup_runtime_dirs() {
 	step "Preparing runtime directories"
 	mkdir -p "${WG_CONF_DIR}"
 	chmod 700 "${WG_CONF_DIR}"
-	info "Runtime root: ${WG_CONF_DIR} (awg0.conf, wg-easy.db, subprocess state)."
+	info "Runtime root: ${WG_CONF_DIR} (cb0.conf, coffeeblack.db, subprocess state)."
+	link_amnezia_config_dir
+}
+
+# `awg-quick up cb0` does NOT consult COFFEEBLACK_CONF_DIR. amneziawg-tools'
+# wg-quick/linux.bash hardcodes the lookup:
+#
+#     [[ $CONFIG_FILE =~ ^[a-zA-Z0-9_=+.-]{1,15}$ ]] && \
+#         CONFIG_FILE="/etc/amnezia/amneziawg/$CONFIG_FILE.conf"
+#
+# We pass a bare interface name (src/wg/cli.rs), so that branch always fires and
+# awg-quick reads /etc/amnezia/amneziawg/cb0.conf while we write
+# ${WG_CONF_DIR}/cb0.conf. Bridge the two with a symlink — the same thing the
+# Dockerfile does. Without this, `awg-quick up` dies with "does not exist" and
+# Gaming mode never comes up.
+link_amnezia_config_dir() {
+	local link="/etc/amnezia/amneziawg"
+	mkdir -p /etc/amnezia
+
+	if [[ -L "${link}" ]]; then
+		local current
+		current="$(readlink -f "${link}" 2>/dev/null || true)"
+		[[ "${current}" == "$(readlink -f "${WG_CONF_DIR}")" ]] && {
+			info "Config bridge already correct: ${link} -> ${WG_CONF_DIR}"
+			return 0
+		}
+		# Distro packages ship this pointing at /etc/wireguard. Repoint it.
+		ln -sfn "${WG_CONF_DIR}" "${link}"
+		info "Repointed ${link} -> ${WG_CONF_DIR} (was ${current:-unresolved})."
+		return 0
+	fi
+
+	if [[ -d "${link}" ]]; then
+		if rmdir "${link}" 2>/dev/null; then
+			ln -s "${WG_CONF_DIR}" "${link}"
+			info "Config bridge: ${link} -> ${WG_CONF_DIR}"
+		else
+			warn "${link} is a non-empty directory; leaving it alone."
+			warn "awg-quick reads ${link}/cb0.conf but coffeeblack-vpn writes"
+			warn "${WG_CONF_DIR}/cb0.conf. Gaming mode will fail to come up until"
+			warn "you move that directory aside and re-run, or symlink it yourself:"
+			warn "  mv ${link} ${link}.bak && ln -s ${WG_CONF_DIR} ${link}"
+		fi
+		return 0
+	fi
+
+	ln -s "${WG_CONF_DIR}" "${link}"
+	info "Config bridge: ${link} -> ${WG_CONF_DIR}"
 }
 
 # ── Summary ────────────────────────────────────────────────────────────────────
@@ -1051,7 +1098,7 @@ print_summary() {
 	local scheme="https"; [[ "${INSECURE}" == "true" ]] && scheme="http"
 
 	printf "\n%b%b=======================================================%b\n" "${BOLD}" "${GREEN}" "${NC}"
-	printf "%b%b  awg-easy-rs installation complete%b\n" "${BOLD}" "${GREEN}" "${NC}"
+	printf "%b%b  coffeeblack-vpn installation complete%b\n" "${BOLD}" "${GREEN}" "${NC}"
 	printf "%b%b=======================================================%b\n\n" "${BOLD}" "${GREEN}" "${NC}"
 	printf "%bWeb UI:%b\n" "${BOLD}" "${NC}"
 	printf "  URL:            %s://%s:%s/\n" "${scheme}" "${url_host}" "${WEB_PORT}"
@@ -1103,7 +1150,7 @@ cmd_install() {
 }
 
 cmd_upgrade() {
-	step "Upgrading awg-easy-rs"
+	step "Upgrading coffeeblack-vpn"
 	check_root
 	check_systemd
 	checkOS
@@ -1134,13 +1181,13 @@ cmd_upgrade() {
 }
 
 cmd_uninstall() {
-	step "Uninstalling awg-easy-rs"
+	step "Uninstalling coffeeblack-vpn"
 	check_root
 	check_systemd
 
 	if [[ "${NON_INTERACTIVE}" != "true" && "${FORCE}" != "true" ]]; then
 		local confirm
-		prompt_yesno confirm "Remove the awg-easy-rs service and binary?" "false"
+		prompt_yesno confirm "Remove the coffeeblack-vpn service and binary?" "false"
 		[[ "${confirm}" == "true" ]] || { info "Uninstall aborted."; exit 0; }
 	fi
 
@@ -1151,9 +1198,9 @@ cmd_uninstall() {
 	fi
 
 	# Best-effort: bring the interface down if awg-quick exists and it is up.
-	if command -v awg-quick >/dev/null 2>&1 && ip link show awg0 >/dev/null 2>&1; then
-		awg-quick down awg0 2>/dev/null || true
-		info "Brought awg0 down."
+	if command -v awg-quick >/dev/null 2>&1 && ip link show cb0 >/dev/null 2>&1; then
+		awg-quick down cb0 2>/dev/null || true
+		info "Brought cb0 down."
 	fi
 
 	rm -f "${SYSTEMD_UNIT_DEST}"
@@ -1174,7 +1221,13 @@ cmd_uninstall() {
 		rm -rf "${WG_CONF_DIR}"
 		info "Purged data: ${WG_CONF_DIR}"
 	else
-		info "Kept data directory ${WG_CONF_DIR} (DB + awg0.conf; use --purge-data to remove)."
+		info "Kept data directory ${WG_CONF_DIR} (DB + cb0.conf; use --purge-data to remove)."
+	fi
+
+	if [[ -L /etc/amnezia/amneziawg ]] && \
+	   [[ "$(readlink -f /etc/amnezia/amneziawg 2>/dev/null)" == "$(readlink -f "${WG_CONF_DIR}" 2>/dev/null)" ]]; then
+		rm -f /etc/amnezia/amneziawg
+		info "Removed config bridge /etc/amnezia/amneziawg."
 	fi
 
 	warn "The amneziawg kernel module and amneziawg-tools were left installed."
@@ -1184,7 +1237,7 @@ cmd_uninstall() {
 
 cmd_status() {
 	check_systemd
-	step "awg-easy-rs status"
+	step "coffeeblack-vpn status"
 
 	if [[ -x "${BINARY_DEST}" ]]; then
 		local ver
@@ -1212,10 +1265,10 @@ cmd_status() {
 	else
 		warn "Module:  amneziawg NOT loaded"
 	fi
-	if ip link show awg0 >/dev/null 2>&1; then
-		info "Iface:   awg0 present"
+	if ip link show cb0 >/dev/null 2>&1; then
+		info "Iface:   cb0 present"
 	else
-		warn "Iface:   awg0 not up (awg-easy-rs brings it up on start)"
+		warn "Iface:   cb0 not up (coffeeblack-vpn brings it up on start)"
 	fi
 
 	printf "\nRecent logs (sudo journalctl -u %s -e):\n" "${SERVICE_NAME}"

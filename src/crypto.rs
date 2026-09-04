@@ -5,7 +5,7 @@
 //!
 //! The threat this addresses is **T-007: someone obtains the database file** —
 //! a stolen disk, a backup copied off-host, a snapshot volume, an
-//! `IN_MEMORY=false` deployment whose `wg-easy.db` ends up somewhere it
+//! `IN_MEMORY=false` deployment whose `coffeeblack.db` ends up somewhere it
 //! shouldn't. Under that threat the encryption is real: the key is delivered
 //! out of band and is never written into the database, so the file alone
 //! yields nothing.
@@ -23,12 +23,12 @@
 //!
 //! In priority order:
 //!
-//! 1. `WG_EASY_SECRET_KEY_PATH` — path to a file holding the base64 key.
+//! 1. `COFFEEBLACK_SECRET_KEY_PATH` — path to a file holding the base64 key.
 //!    Intended for systemd credentials: `LoadCredentialEncrypted=SECRET_KEY:…`
 //!    puts a machine-bound, decrypted-at-start copy at
-//!    `/run/credentials/awg-easy-rs.service/SECRET_KEY`, which never exists as
+//!    `/run/credentials/coffeeblack-vpn.service/SECRET_KEY`, which never exists as
 //!    plaintext on disk.
-//! 2. `WG_EASY_SECRET_KEY` — the base64 key itself, for Docker and dev.
+//! 2. `COFFEEBLACK_SECRET_KEY` — the base64 key itself, for Docker and dev.
 //!
 //! With neither set the module reports [`is_configured`] as `false` and
 //! callers fall back to storing plaintext, with a startup warning. That is a
@@ -63,7 +63,7 @@ const KEY_LEN: usize = 32;
 static KEY: LazyLock<Option<LessSafeKey>> = LazyLock::new(load_key);
 
 fn load_key() -> Option<LessSafeKey> {
-    let raw = match std::env::var("WG_EASY_SECRET_KEY_PATH") {
+    let raw = match std::env::var("COFFEEBLACK_SECRET_KEY_PATH") {
         Ok(path) if !path.is_empty() => match std::fs::read_to_string(&path) {
             Ok(contents) => contents,
             Err(e) => {
@@ -71,13 +71,13 @@ fn load_key() -> Option<LessSafeKey> {
                 // shouting about: it silently degrades to plaintext storage,
                 // which is precisely what they were trying to avoid.
                 crate::error!(
-                    "WG_EASY_SECRET_KEY_PATH={path} could not be read ({e}); \
+                    "COFFEEBLACK_SECRET_KEY_PATH={path} could not be read ({e}); \
                      secrets will be stored unencrypted"
                 );
                 return None;
             }
         },
-        _ => match std::env::var("WG_EASY_SECRET_KEY") {
+        _ => match std::env::var("COFFEEBLACK_SECRET_KEY") {
             Ok(v) if !v.is_empty() => v,
             _ => return None,
         },
@@ -123,7 +123,7 @@ pub fn log_status() {
     } else {
         crate::warn!(
             "secret encryption: DISABLED — TOTP secrets are stored in plaintext. \
-             Set WG_EASY_SECRET_KEY_PATH (systemd credential) or WG_EASY_SECRET_KEY \
+             Set COFFEEBLACK_SECRET_KEY_PATH (systemd credential) or COFFEEBLACK_SECRET_KEY \
              (base64, 32 bytes) so a stolen database does not yield working second factors."
         );
     }
@@ -173,7 +173,7 @@ pub fn decrypt(stored: &str) -> Result<String> {
     };
     let key = KEY
         .as_ref()
-        .context("value is encrypted but no secret key is configured (WG_EASY_SECRET_KEY_PATH / WG_EASY_SECRET_KEY)")?;
+        .context("value is encrypted but no secret key is configured (COFFEEBLACK_SECRET_KEY_PATH / COFFEEBLACK_SECRET_KEY)")?;
 
     let raw = crate::encoding::b64_decode(encoded)
         .context("encrypted value is not valid base64")?;

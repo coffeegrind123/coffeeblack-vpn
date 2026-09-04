@@ -4,7 +4,7 @@
 //! Each test resets the global DB to a fresh in-memory SQLite database.
 //! All tests are `#[serial(db)]` to prevent races on the global handle.
 
-use awg_easy_rs::db;
+use coffeeblack_vpn::db;
 use serial_test::serial;
 
 fn seed() {
@@ -20,7 +20,7 @@ fn seed() {
 fn get_interface_seeded() {
     seed();
     let iface = db::get_interface().unwrap();
-    assert_eq!(iface.name, "awg0");
+    assert_eq!(iface.name, "cb0");
     assert_eq!(iface.device, "eth0");
     assert_eq!(iface.port, 51820);
     assert_eq!(iface.ipv4_cidr, "10.8.0.0/24");
@@ -235,7 +235,7 @@ fn create_test_client(name: &str) -> i64 {
 fn create_test_client_with_ip(name: &str, ipv4: &str, ipv6: &str) -> i64 {
     db::create_client(&db::CreateClientParams {
         user_id: None,
-        interface_id: Some("awg0".into()),
+        interface_id: Some("cb0".into()),
         name: name.into(),
         ipv4_address: Some(ipv4.into()),
         ipv6_address: Some(ipv6.into()),
@@ -344,7 +344,7 @@ fn client_ipv4_unique_constraint() {
     // Creating another client with the same ipv4 should fail
     let result = db::create_client(&db::CreateClientParams {
         user_id: None,
-        interface_id: Some("awg0".into()),
+        interface_id: Some("cb0".into()),
         name: "c2".into(),
         ipv4_address: Some("10.8.0.10".into()), // same as c1
         ipv6_address: Some("fdcc::99".into()),
@@ -496,7 +496,7 @@ fn set_setup_step() {
 fn get_user_config_seeded() {
     seed();
     let uc = db::get_user_config().unwrap();
-    assert_eq!(uc.id, "awg0");
+    assert_eq!(uc.id, "cb0");
     assert_eq!(uc.default_mtu, 1420);
     assert_eq!(uc.default_persistent_keepalive, 0);
     assert_eq!(uc.port, 51820);
@@ -531,13 +531,13 @@ fn update_host_port() {
 fn get_hooks_seeded() {
     seed();
     let hooks = db::get_hooks().unwrap();
-    assert_eq!(hooks.id, "awg0");
-    // Native nftables defaults: PostUp creates the awg-easy-rs table and
+    assert_eq!(hooks.id, "cb0");
+    // Native nftables defaults: PostUp creates the coffeeblack-vpn table and
     // a masquerade rule; PostDown wipes the table atomically.
     assert!(hooks.post_up.contains("nft "), "post_up must use nft");
-    assert!(hooks.post_up.contains("inet awg-easy-rs"));
+    assert!(hooks.post_up.contains("inet coffeeblack"));
     assert!(hooks.post_up.contains("masquerade"));
-    assert!(hooks.post_down.contains("nft delete table inet awg-easy-rs"));
+    assert!(hooks.post_down.contains("nft delete table inet coffeeblack"));
     assert!(
         !hooks.post_up.contains("iptables") && !hooks.post_down.contains("iptables"),
         "default hooks must not reference iptables anymore"

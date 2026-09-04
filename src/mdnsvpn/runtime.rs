@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn embedded_sha_is_64_hex_chars() {
-        assert_eq!(MDNSVPN_SHA256.len(), 64, "AWG_EASY_MDNSVPN_SHA256 must be a hex SHA-256");
+        assert_eq!(MDNSVPN_SHA256.len(), 64, "COFFEEBLACK_MDNSVPN_SHA256 must be a hex SHA-256");
         assert!(MDNSVPN_SHA256.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
@@ -124,7 +124,7 @@ mod tests {
         // string is populated when the bundle is present.
         assert!(
             !MDNSVPN_VERSION.is_empty(),
-            "AWG_EASY_MDNSVPN_VERSION must be populated when bundled"
+            "COFFEEBLACK_MDNSVPN_VERSION must be populated when bundled"
         );
     }
 }

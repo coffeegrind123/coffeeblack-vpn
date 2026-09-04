@@ -1,14 +1,14 @@
 //! Track 3: API auth tests — login, logout, session, rate limiter, TOTP,
 //! Secure cookie, setup wizard.
 //!
-//! Uses `awg_easy_rs::http::Body` and `Router::oneshot` to send HTTP requests
+//! Uses `coffeeblack_vpn::http::Body` and `Router::oneshot` to send HTTP requests
 //! against the full router with a test database.
 
 mod common;
 
-use awg_easy_rs::{api, auth, db};
-use awg_easy_rs::http::Body;
-use awg_easy_rs::http::{header, Request, StatusCode};
+use coffeeblack_vpn::{api, auth, db};
+use coffeeblack_vpn::http::Body;
+use coffeeblack_vpn::http::{header, Request, StatusCode};
 use serde_json::{json, Value};
 use serial_test::serial;
 
@@ -20,7 +20,7 @@ fn seed() {
     common::seed();
 }
 
-fn router() -> awg_easy_rs::http::Router {
+fn router() -> coffeeblack_vpn::http::Router {
     api::build_router(api::AppState::new())
 }
 
@@ -39,7 +39,7 @@ fn create_admin() -> i64 {
     .unwrap()
 }
 
-async fn login(app: &awg_easy_rs::http::Router, username: &str, password: &str, totp_code: Option<&str>) -> (StatusCode, Value, Option<String>) {
+async fn login(app: &coffeeblack_vpn::http::Router, username: &str, password: &str, totp_code: Option<&str>) -> (StatusCode, Value, Option<String>) {
     let mut body = json!({ "username": username, "password": password });
     if let Some(code) = totp_code {
         body["totpCode"] = json!(code);
@@ -60,13 +60,13 @@ async fn login(app: &awg_easy_rs::http::Router, username: &str, password: &str, 
         .collect();
     let session_cookie = cookies
         .into_iter()
-        .find(|c| c.starts_with("awg_session="));
-    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
+        .find(|c| c.starts_with("coffeeblack_session="));
+    let body_bytes = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
     (status, body, session_cookie)
 }
 
-async fn get(app: &awg_easy_rs::http::Router, path: &str, cookie: Option<&str>) -> (StatusCode, Value) {
+async fn get(app: &coffeeblack_vpn::http::Router, path: &str, cookie: Option<&str>) -> (StatusCode, Value) {
     let mut builder = Request::builder().method("GET").uri(path);
     if let Some(c) = cookie {
         builder = builder.header(header::COOKIE, c);
@@ -74,7 +74,7 @@ async fn get(app: &awg_easy_rs::http::Router, path: &str, cookie: Option<&str>) 
     let req = builder.body(Body::empty()).unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
+    let body_bytes = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
     (status, body)
 }
@@ -161,12 +161,12 @@ async fn session_check_authenticated() {
     let (_, _, cookie) = login(&app, "admin", "admin123", None).await;
     let cookie = cookie.unwrap();
     let session_val = cookie
-        .strip_prefix("awg_session=")
+        .strip_prefix("coffeeblack_session=")
         .unwrap()
         .split(';')
         .next()
         .unwrap();
-    let (status, body) = get(&app, "/api/session", Some(&format!("awg_session={session_val}"))).await;
+    let (status, body) = get(&app, "/api/session", Some(&format!("coffeeblack_session={session_val}"))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["user"]["username"], "admin");
 }
@@ -190,7 +190,7 @@ async fn logout() {
     let (_, _, cookie) = login(&app, "admin", "admin123", None).await;
     let cookie = cookie.unwrap();
     let session_val = cookie
-        .strip_prefix("awg_session=")
+        .strip_prefix("coffeeblack_session=")
         .unwrap()
         .split(';')
         .next()
@@ -199,14 +199,14 @@ async fn logout() {
     let req = Request::builder()
         .method("DELETE")
         .uri("/api/session")
-        .header(header::COOKIE, format!("awg_session={session_val}"))
+        .header(header::COOKIE, format!("coffeeblack_session={session_val}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
     // After logout, session check should fail
-    let (status2, _) = get(&app, "/api/session", Some(&format!("awg_session={session_val}"))).await;
+    let (status2, _) = get(&app, "/api/session", Some(&format!("coffeeblack_session={session_val}"))).await;
     assert_eq!(status2, StatusCode::UNAUTHORIZED);
 }
 
@@ -233,7 +233,7 @@ async fn login_remember_me_sets_max_age() {
         .collect();
     let session_cookie = cookies
         .into_iter()
-        .find(|c| c.starts_with("awg_session="))
+        .find(|c| c.starts_with("coffeeblack_session="))
         .unwrap();
     assert!(session_cookie.contains("Max-Age=2592000")); // 30 days
 }
@@ -260,7 +260,7 @@ async fn session_cookie_httponly() {
         .collect();
     let cookie = cookies
         .into_iter()
-        .find(|c| c.starts_with("awg_session="))
+        .find(|c| c.starts_with("coffeeblack_session="))
         .unwrap();
     assert!(cookie.to_lowercase().contains("httponly"));
 }
@@ -434,7 +434,7 @@ async fn setup_step2_short_password() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
+    let body_bytes = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap();
     assert!(body["error"].as_str().unwrap().contains("at least 12"));
 }
@@ -510,7 +510,7 @@ async fn change_password_success() {
     let (_, _, cookie) = login(&app, "admin", "admin123", None).await;
     let cookie = cookie.unwrap();
     let session_val = cookie
-        .strip_prefix("awg_session=")
+        .strip_prefix("coffeeblack_session=")
         .unwrap()
         .split(';')
         .next()
@@ -524,7 +524,7 @@ async fn change_password_success() {
         .method("POST")
         .uri("/api/me/password")
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::COOKIE, format!("awg_session={session_val}"))
+        .header(header::COOKIE, format!("coffeeblack_session={session_val}"))
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -546,7 +546,7 @@ async fn change_password_wrong_current() {
     let (_, _, cookie) = login(&app, "admin", "admin123", None).await;
     let cookie = cookie.unwrap();
     let session_val = cookie
-        .strip_prefix("awg_session=")
+        .strip_prefix("coffeeblack_session=")
         .unwrap()
         .split(';')
         .next()
@@ -560,7 +560,7 @@ async fn change_password_wrong_current() {
         .method("POST")
         .uri("/api/me/password")
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::COOKIE, format!("awg_session={session_val}"))
+        .header(header::COOKIE, format!("coffeeblack_session={session_val}"))
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -576,7 +576,7 @@ async fn change_password_too_short() {
     let (_, _, cookie) = login(&app, "admin", "admin123", None).await;
     let cookie = cookie.unwrap();
     let session_val = cookie
-        .strip_prefix("awg_session=")
+        .strip_prefix("coffeeblack_session=")
         .unwrap()
         .split(';')
         .next()
@@ -590,7 +590,7 @@ async fn change_password_too_short() {
         .method("POST")
         .uri("/api/me/password")
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::COOKIE, format!("awg_session={session_val}"))
+        .header(header::COOKIE, format!("coffeeblack_session={session_val}"))
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();

@@ -1,8 +1,8 @@
 [package]
-name = "awg-easy-rs"
+name = "coffeeblack-vpn"
 version = "0.1.0"
 edition = "2021"
-description = "Standalone AmneziaWG VPN manager with Web UI - pure Rust rewrite of awg-easy"
+description = "CoffeeBlack VPN - standalone multi-transport VPN and censorship-resistant proxy manager with a built-in web UI"
 license = "MIT"
 
 [dependencies]

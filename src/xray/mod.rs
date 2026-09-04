@@ -1,6 +1,6 @@
 //! Browsing-mode (Xray VLESS+Reality+Vision) support.
 //!
-//! awg-easy-rs ships a pinned Xray-core ELF (vendored at build time, see
+//! coffeeblack-vpn ships a pinned Xray-core ELF (vendored at build time, see
 //! `vendor/`) and supervises it as a tokio child process. The Rust process
 //! never speaks the Reality/Vision wire protocol itself — this module is a
 //! thin orchestration layer:

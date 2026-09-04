@@ -391,7 +391,7 @@ mod tests {
     /// here rather than at deploy time.
     ///
     /// Serialized against `xray_validates_xhttp_config` because both set
-    /// the process-wide `WG_EASY_XRAY_DIR` env var and `cargo test` runs
+    /// the process-wide `COFFEEBLACK_XRAY_DIR` env var and `cargo test` runs
     /// tests in parallel by default — without serial they race on the
     /// bundled-binary extraction and one of them sees the partial file
     /// before the rename.
@@ -418,14 +418,14 @@ mod tests {
 
         // Per-test temp dir to avoid races with other xray e2e tests.
         let dir = format!(
-            "/tmp/awg-easy-rs-cfg-test-{}-{}",
+            "/tmp/coffeeblack-vpn-cfg-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(0),
         );
-        std::env::set_var("WG_EASY_XRAY_DIR", &dir);
+        std::env::set_var("COFFEEBLACK_XRAY_DIR", &dir);
         let path = std::path::PathBuf::from(&dir).join("server.json");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&path, &cfg).unwrap();
@@ -482,14 +482,14 @@ mod tests {
         let cfg = generate_server_config(&inbound, &clients).unwrap();
 
         let dir = format!(
-            "/tmp/awg-easy-rs-xhttp-test-{}-{}",
+            "/tmp/coffeeblack-vpn-xhttp-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(0),
         );
-        std::env::set_var("WG_EASY_XRAY_DIR", &dir);
+        std::env::set_var("COFFEEBLACK_XRAY_DIR", &dir);
         let path = std::path::PathBuf::from(&dir).join("server.json");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&path, &cfg).unwrap();

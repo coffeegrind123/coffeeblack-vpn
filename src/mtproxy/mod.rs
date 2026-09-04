@@ -4,7 +4,7 @@
 //! Telemt is upstream's Rust implementation of Telegram's MTProxy
 //! protocol with full Fake-TLS / SNI fronting (the `secret=ee<…>` link
 //! variant), per-user 32-hex secrets, replay protection, and traffic
-//! masking. Awg-easy-rs ships a pinned static-musl ELF (vendored at
+//! masking. Coffeeblack-vpn ships a pinned static-musl ELF (vendored at
 //! build time, see `vendor/`) and supervises it the same way Xray is
 //! supervised — Rust never speaks the MTProto wire protocol itself.
 //!
@@ -47,11 +47,11 @@ pub mod supervisor;
 /// Embedded telemt release tag, surfaced via `vendor/TELEMT_VERSION`.
 /// Always populated (even on un-bundled builds) so `/about` /
 /// `/api/admin/mtproxy/inbound` can show what would have shipped.
-pub const TELEMT_VERSION: &str = env!("AWG_EASY_TELEMT_VERSION");
+pub const TELEMT_VERSION: &str = env!("COFFEEBLACK_TELEMT_VERSION");
 
 /// SHA-256 of the *uncompressed* telemt ELF, surfaced via
 /// `vendor/TELEMT_VERSION`. Blank on un-bundled targets.
-pub const TELEMT_SHA256: &str = env!("AWG_EASY_TELEMT_SHA256");
+pub const TELEMT_SHA256: &str = env!("COFFEEBLACK_TELEMT_SHA256");
 
 /// True when the build embedded the telemt ELF for the current
 /// architecture. False on unsupported targets — the admin UI uses this

@@ -2,7 +2,7 @@
 //!
 //! Ported from the model in [islandr-proxy](https://github.com/chriscohnen/islandr)
 //! (ADR-0012), adapted to this project's single-binary shape — the helper is a
-//! subcommand of the same executable (`awg-easy-rs --privileged-helper`)
+//! subcommand of the same executable (`coffeeblack-vpn --privileged-helper`)
 //! rather than a second artefact to build, ship, and version.
 //!
 //! ## The problem
@@ -61,8 +61,8 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// Default socket path. Overridden with `WG_EASY_HELPER_SOCKET`.
-pub const DEFAULT_SOCKET: &str = "/run/awg-easy-rs/helper.sock";
+/// Default socket path. Overridden with `COFFEEBLACK_HELPER_SOCKET`.
+pub const DEFAULT_SOCKET: &str = "/run/coffeeblack/helper.sock";
 
 /// Largest request accepted, in bytes. Generated nftables rulesets for a large
 /// roster are a few tens of kilobytes; a megabyte is far above any legitimate
@@ -296,7 +296,7 @@ fn dispatch(cfg: &HelperConfig, req: Request) -> Response {
             wg_sync(cfg, &config, firewall.as_ref()).map(|_| String::new())
         }
         Request::NftApply { ruleset } => nft_apply(&ruleset).map(|_| String::new()),
-        Request::NftList => run(&["nft", "list", "table", "inet", "awg-easy-rs"]),
+        Request::NftList => run(&["nft", "list", "table", "inet", "coffeeblack-vpn"]),
     };
     match result {
         Ok(output) => Response::ok(output),
@@ -512,7 +512,7 @@ fn chown_gid(path: &Path, gid: u32) -> Result<()> {
 /// directly, which is the pre-existing single-process behaviour and remains
 /// the default so an upgrade changes nothing until the operator opts in.
 pub fn socket_path() -> Option<PathBuf> {
-    match std::env::var("WG_EASY_HELPER_SOCKET") {
+    match std::env::var("COFFEEBLACK_HELPER_SOCKET") {
         Ok(p) if !p.is_empty() => Some(PathBuf::from(p)),
         _ => None,
     }
@@ -604,8 +604,8 @@ mod tests {
             ipv6_cidr: "fdcc:ad94:bacf:61a3::/64".into(),
             port: 51820,
         };
-        let rendered = fw.render("awg0").expect("valid params render");
-        assert!(rendered.contains("PostUp = nft add table inet awg-easy-rs"));
+        let rendered = fw.render("cb0").expect("valid params render");
+        assert!(rendered.contains("PostUp = nft add table inet coffeeblack"));
         assert!(rendered.contains("10.8.0.0/24"));
         assert!(rendered.contains("51820"));
 
@@ -623,7 +623,7 @@ mod tests {
                 ipv6_cidr: "fdcc::/64".into(),
                 port: 51820,
             };
-            assert!(fw.render("awg0").is_err(), "should have rejected: {bad:?}");
+            assert!(fw.render("cb0").is_err(), "should have rejected: {bad:?}");
         }
     }
 
@@ -648,11 +648,11 @@ mod tests {
     fn conf_path_is_derived_from_the_fixed_interface() {
         let cfg = HelperConfig {
             socket_path: "/run/x.sock".into(),
-            interface: "awg0".into(),
-            conf_dir: "/etc/wireguard".into(),
+            interface: "cb0".into(),
+            conf_dir: "/etc/coffeeblack/conf".into(),
             allow_gid: None,
         };
-        assert_eq!(cfg.conf_path(), Path::new("/etc/wireguard/awg0.conf"));
+        assert_eq!(cfg.conf_path(), Path::new("/etc/coffeeblack/conf/cb0.conf"));
     }
 
     /// `serve()` must not touch the process umask — not even transiently.
@@ -672,7 +672,7 @@ mod tests {
         let before = unsafe { libc::umask(0o022) };
         unsafe { libc::umask(0o022) };
 
-        let base = std::env::temp_dir().join(format!("awg-umask-race-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("coffeeblack-umask-race-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
 
@@ -682,7 +682,7 @@ mod tests {
             sockets.push(socket.clone());
             let cfg = HelperConfig {
                 socket_path: socket,
-                interface: "awg0".into(),
+                interface: "cb0".into(),
                 conf_dir: base.join(format!("wg{i}")),
                 allow_gid: None,
             };

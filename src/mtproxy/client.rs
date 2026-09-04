@@ -257,7 +257,7 @@ async fn request(
         let mut head = String::new();
         head.push_str(&format!("{method} {path} HTTP/1.1\r\n"));
         head.push_str(&format!("Host: {TELEMT_API_HOST}:{TELEMT_API_PORT}\r\n"));
-        head.push_str("User-Agent: awg-easy-rs\r\n");
+        head.push_str("User-Agent: coffeeblack-vpn\r\n");
         head.push_str("Accept: application/json\r\n");
         // `Connection: close` — server flushes + closes after the
         // response; we read until EOF. No keep-alive, no chunked

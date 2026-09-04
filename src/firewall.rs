@@ -1,6 +1,6 @@
 //! Per-client firewall + DNS-leak prevention, native nftables.
 //!
-//! All our rules live inside one `inet awg-easy-rs` table — the same
+//! All our rules live inside one `inet coffeeblack` table — the same
 //! table the AmneziaWG PostUp hook creates for masquerade / accept rules.
 //! Sharing the table means we can rebuild *just* our chains atomically
 //! without disturbing the operator's NAT / forwarding setup.
@@ -8,12 +8,12 @@
 //! Layout we expect:
 //!
 //! ```text
-//! table inet awg-easy-rs {
+//! table inet coffeeblack {
 //!   chain forward {                          # owned by hooks
 //!     type filter hook forward priority filter; policy accept;
-//!     iifname "awg0" jump dns-lockdown       # only when dns_lockdown=true
-//!     iifname "awg0" jump wg-clients
-//!     oifname "awg0" jump wg-clients
+//!     iifname "cb0" jump dns-lockdown       # only when dns_lockdown=true
+//!     iifname "cb0" jump wg-clients
+//!     oifname "cb0" jump wg-clients
 //!   }
 //!   chain wg-clients {                       # owned by this module
 //!     # per-client rules, then a final `drop` (when firewall_enabled)
@@ -57,7 +57,7 @@ use anyhow::{anyhow, Result};
 /// Single source of truth for the table name. Hooks reference it from
 /// the DB-stored PostUp/PostDown templates; everything in this module
 /// references it from here.
-pub const TABLE: &str = "awg-easy-rs";
+pub const TABLE: &str = "coffeeblack";
 
 /// Per-client filtering chain. Lives inside `TABLE`.
 const CHAIN: &str = "wg-clients";
@@ -769,7 +769,7 @@ fn parse_handle(line: &str) -> Option<u64> {
 //
 // Modern hosts run `iptables-nft`, which writes to the same `nf_tables`
 // kernel backend our `nft` commands use. On those hosts our
-// `inet awg-easy-rs forward accept` and the operator's `ip filter forward`
+// `inet coffeeblack forward accept` and the operator's `ip filter forward`
 // rules (also nf_tables) compose cleanly: same backend, single hook chain
 // per priority, verdicts merge predictably.
 //
@@ -919,7 +919,7 @@ pub fn ensure_legacy_compat(iface: &str, port: i64, enable_ipv6: bool) -> Result
 }
 
 /// Best-effort cleanup. Called from the SIGTERM handler so a graceful
-/// shutdown doesn't leave orphaned `-i awg0 -j ACCEPT` rules in
+/// shutdown doesn't leave orphaned `-i cb0 -j ACCEPT` rules in
 /// iptables-legacy after the interface is gone. Errors swallowed —
 /// the process is on its way out anyway.
 pub fn remove_legacy_compat(iface: &str, port: i64, enable_ipv6: bool) {
@@ -1022,8 +1022,8 @@ mod tests {
 
     #[test]
     fn sanitize_iface_filters_special_chars() {
-        assert_eq!(sanitize_iface("awg0"), "awg0");
-        assert_eq!(sanitize_iface("awg0; rm -rf /"), "awg0rm-rf");
+        assert_eq!(sanitize_iface("cb0"), "cb0");
+        assert_eq!(sanitize_iface("cb0; rm -rf /"), "cb0rm-rf");
         // 16-char input gets clipped to 15.
         assert_eq!(sanitize_iface("0123456789abcdefg").len(), 15);
     }
@@ -1031,7 +1031,7 @@ mod tests {
     #[test]
     fn parse_handle_extracts_numeric_id() {
         assert_eq!(
-            parse_handle("\tiifname \"awg0\" jump wg-clients # handle 42"),
+            parse_handle("\tiifname \"cb0\" jump wg-clients # handle 42"),
             Some(42)
         );
         assert_eq!(parse_handle("no handle here"), None);
@@ -1074,10 +1074,10 @@ mod tests {
 
     #[test]
     fn dns_dnat_rules_v4_target_emits_v4_dnat_only() {
-        let rules = dns_dnat_rules("awg0", Family::V4, "10.2.0.100");
+        let rules = dns_dnat_rules("cb0", Family::V4, "10.2.0.100");
         assert_eq!(rules.len(), 2);
         for r in &rules {
-            assert!(r.contains("iifname \"awg0\""));
+            assert!(r.contains("iifname \"cb0\""));
             assert!(r.contains("meta nfproto ipv4"));
             assert!(r.contains("dnat ip to 10.2.0.100:53"));
             // dport set covers both classic DNS and DoT — operators who
@@ -1093,7 +1093,7 @@ mod tests {
 
     #[test]
     fn dns_dnat_rules_v6_target_is_bracketed() {
-        let rules = dns_dnat_rules("awg0", Family::V6, "fd00::53");
+        let rules = dns_dnat_rules("cb0", Family::V6, "fd00::53");
         for r in &rules {
             assert!(r.contains("meta nfproto ipv6"));
             // The v6 target MUST be bracketed so the `:53` port is
@@ -1161,7 +1161,7 @@ mod tests {
         // isn't a bare IP/CIDR (whitespace, newline, nft keywords) must be
         // rejected so a stored-but-unvalidated target can't inject statements.
         for bad in [
-            "1.1.1.1\nadd rule inet awg-easy-rs wg-clients accept",
+            "1.1.1.1\nadd rule inet coffeeblack wg-clients accept",
             "1.1.1.1 accept",
             "0.0.0.0/0 drop",
             "not-an-ip",
@@ -1174,16 +1174,16 @@ mod tests {
 
     #[test]
     fn legacy_compat_rule_set_covers_forward_and_input() {
-        let rules = legacy_compat_rule_set("awg0", "51820");
+        let rules = legacy_compat_rule_set("cb0", "51820");
         // Three rules: FORWARD-in, FORWARD-out, INPUT.
         assert_eq!(rules.len(), 3);
         assert_eq!(
             rules[0],
-            vec!["FORWARD", "-i", "awg0", "-j", "ACCEPT"]
+            vec!["FORWARD", "-i", "cb0", "-j", "ACCEPT"]
         );
         assert_eq!(
             rules[1],
-            vec!["FORWARD", "-o", "awg0", "-j", "ACCEPT"]
+            vec!["FORWARD", "-o", "cb0", "-j", "ACCEPT"]
         );
         assert_eq!(
             rules[2],
@@ -1201,9 +1201,9 @@ mod tests {
             return; // skip on hosts where xt_tables IS loaded
         }
         // Should be Ok and a no-op.
-        ensure_legacy_compat("awg0", 51820, true).unwrap();
+        ensure_legacy_compat("cb0", 51820, true).unwrap();
         // remove is fire-and-forget but still must not panic.
-        remove_legacy_compat("awg0", 51820, true);
+        remove_legacy_compat("cb0", 51820, true);
     }
 
     /// End-to-end: feed a representative transaction through `nft -c -f -`
@@ -1225,28 +1225,28 @@ mod tests {
         // AND the DNS-lockdown chains so a syntax regression in
         // dns_dnat_rules / dns_filter_rules surfaces here.
         let mut txn = String::new();
-        txn.push_str("add table inet awg-easy-rs-syntaxtest\n");
+        txn.push_str("add table inet coffeeblack-syntaxtest\n");
         txn.push_str(
-            "add chain inet awg-easy-rs-syntaxtest forward { type filter hook forward priority filter; policy accept; }\n",
+            "add chain inet coffeeblack-syntaxtest forward { type filter hook forward priority filter; policy accept; }\n",
         );
-        txn.push_str("add chain inet awg-easy-rs-syntaxtest wg-clients\n");
-        txn.push_str("add chain inet awg-easy-rs-syntaxtest dns-lockdown\n");
+        txn.push_str("add chain inet coffeeblack-syntaxtest wg-clients\n");
+        txn.push_str("add chain inet coffeeblack-syntaxtest dns-lockdown\n");
         txn.push_str(
-            "add chain inet awg-easy-rs-syntaxtest dns-prerouting { type nat hook prerouting priority dstnat; policy accept; }\n",
+            "add chain inet coffeeblack-syntaxtest dns-prerouting { type nat hook prerouting priority dstnat; policy accept; }\n",
         );
         // DNS lockdown rules — both families to catch v4/v6 syntax.
-        for r in dns_dnat_rules("awg0", Family::V4, "10.2.0.100") {
-            let r = r.replace("inet awg-easy-rs ", "inet awg-easy-rs-syntaxtest ");
+        for r in dns_dnat_rules("cb0", Family::V4, "10.2.0.100") {
+            let r = r.replace("inet coffeeblack ", "inet coffeeblack-syntaxtest ");
             txn.push_str(&r);
             txn.push('\n');
         }
-        for r in dns_dnat_rules("awg0", Family::V6, "fd00::53") {
-            let r = r.replace("inet awg-easy-rs ", "inet awg-easy-rs-syntaxtest ");
+        for r in dns_dnat_rules("cb0", Family::V6, "fd00::53") {
+            let r = r.replace("inet coffeeblack ", "inet coffeeblack-syntaxtest ");
             txn.push_str(&r);
             txn.push('\n');
         }
         for r in dns_filter_rules(Family::V4, "10.2.0.100") {
-            let r = r.replace("inet awg-easy-rs ", "inet awg-easy-rs-syntaxtest ");
+            let r = r.replace("inet coffeeblack ", "inet coffeeblack-syntaxtest ");
             txn.push_str(&r);
             txn.push('\n');
         }
@@ -1256,7 +1256,7 @@ mod tests {
             .into_iter()
             .chain(dns_leak_guard_rules(Family::V6))
         {
-            let r = r.replace("inet awg-easy-rs ", "inet awg-easy-rs-syntaxtest ");
+            let r = r.replace("inet coffeeblack ", "inet coffeeblack-syntaxtest ");
             txn.push_str(&r);
             txn.push('\n');
         }
@@ -1269,12 +1269,12 @@ mod tests {
         ];
         for batch in rules {
             for r in batch {
-                let r = r.replace("inet awg-easy-rs ", "inet awg-easy-rs-syntaxtest ");
+                let r = r.replace("inet coffeeblack ", "inet coffeeblack-syntaxtest ");
                 txn.push_str(&r);
                 txn.push('\n');
             }
         }
-        txn.push_str("add rule inet awg-easy-rs-syntaxtest wg-clients drop\n");
+        txn.push_str("add rule inet coffeeblack-syntaxtest wg-clients drop\n");
 
         // `nft -c` validates without applying. Doesn't need root.
         let mut child = std::process::Command::new("nft")

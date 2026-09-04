@@ -1,8 +1,8 @@
 #[cfg(test)]
 use bytes::{BufMut, BytesMut};
 
-use crate::proxy::config::AwgParams;
-use crate::proxy::responder::{classify_awg_packet, AwgPacketType, DnsEcho, Protocol};
+use crate::proxy::config::CbParams;
+use crate::proxy::responder::{classify_cb_packet, CbPacketType, DnsEcho, Protocol};
 
 /// Apply protocol-conformant padding transformation to an outgoing packet.
 ///
@@ -57,7 +57,7 @@ pub fn apply_padding(data: &mut [u8], pad_size: usize, proto: Protocol) {
 pub fn apply_quic_padding_typed(
     data: &mut [u8],
     pad_size: usize,
-    pkt_type: AwgPacketType,
+    pkt_type: CbPacketType,
 ) {
     if pad_size == 0 || pad_size >= data.len() {
         return;
@@ -76,10 +76,10 @@ pub fn apply_quic_padding_typed(
     // not Initial) — semantically incoherent and, as emitted before, malformed.
     // A uniform 1-RTT flow is coherent and never malformed.
     match pkt_type {
-        AwgPacketType::HandshakeInit
-        | AwgPacketType::TransportData
-        | AwgPacketType::HandshakeResponse
-        | AwgPacketType::CookieReply => apply_quic_padding_short(data, pad_size),
+        CbPacketType::HandshakeInit
+        | CbPacketType::TransportData
+        | CbPacketType::HandshakeResponse
+        | CbPacketType::CookieReply => apply_quic_padding_short(data, pad_size),
     }
 }
 
@@ -96,13 +96,13 @@ pub fn apply_quic_padding_typed(
 /// `dns_echo`, when present, is the most recent DNS query observed from this
 /// client; for `Protocol::Dns` it lets the response echo the query's QNAME,
 /// QTYPE, and transaction ID (ignored for other protocols).
-pub(crate) fn apply_awg_transform(
+pub(crate) fn apply_cb_transform(
     data: &mut [u8],
-    params: &AwgParams,
+    params: &CbParams,
     proto: Protocol,
     dns_echo: Option<&DnsEcho>,
 ) -> bool {
-    let pkt_type = match classify_awg_packet(data, params) {
+    let pkt_type = match classify_cb_packet(data, params) {
         Some(t) => t,
         None => return false,
     };
@@ -246,7 +246,7 @@ const DNS_OPT_UDP_SIZE: u16 = 1232;
 /// unknown options regardless of length, so this carries the ciphertext without
 /// the zero-content expectation that option code 12 (Padding, RFC 7830) implies.
 ///
-/// awg-easy-rs patch: rather than pin a single constant (upstream used a fixed
+/// coffeeblack-vpn patch: rather than pin a single constant (upstream used a fixed
 /// `0xFDE9`, which is a perfect one-rule cross-deployment DPI signature), the
 /// exact code is drawn per-packet from the payload-seeded transaction ID and
 /// stays inside the local-use range — so no single value identifies the tool.
@@ -648,7 +648,7 @@ fn apply_sip_padding(data: &mut [u8], pad_size: usize) {
     const STATUS: [&str; 3] = ["100 Trying", "180 Ringing", "200 OK"];
     const METHODS: [&str; 3] = ["INVITE", "OPTIONS", "REGISTER"];
     let status_idx = next!() as usize % STATUS.len();
-    // awg-easy-rs patch: build a plausible, non-reserved host per packet from
+    // coffeeblack-vpn patch: build a plausible, non-reserved host per packet from
     // the seed instead of fixed `*.example.*` literals (upstream), which are an
     // RFC-2606 substring signature. Label + numeric id + TLD, all seed-drawn.
     const SIP_LABELS: [&str; 8] = ["voip", "sip", "pbx", "call", "trunk", "edge", "rtc", "sbc"];
@@ -1492,8 +1492,8 @@ mod tests {
 
     // -- AWG-aware transform tests --
 
-    fn test_awg_params() -> AwgParams {
-        AwgParams {
+    fn test_cb_params() -> CbParams {
+        CbParams {
             jc: 5,
             jmin: 50,
             jmax: 1000,
@@ -1508,22 +1508,22 @@ mod tests {
         }
     }
 
-    fn awg_params_with_s(s: u32) -> AwgParams {
-        AwgParams {
+    fn cb_params_with_s(s: u32) -> CbParams {
+        CbParams {
             s1: s,
             s2: s,
             s3: s,
             s4: s,
-            ..test_awg_params()
+            ..test_cb_params()
         }
     }
 
-    fn build_awg_packet(pkt_type: AwgPacketType, params: &AwgParams) -> (Vec<u8>, usize, u32) {
+    fn build_cb_packet(pkt_type: CbPacketType, params: &CbParams) -> (Vec<u8>, usize, u32) {
         let (pad_size, header, body_len) = match pkt_type {
-            AwgPacketType::HandshakeInit => (params.s1 as usize, 150u32, 148 - 4),
-            AwgPacketType::HandshakeResponse => (params.s2 as usize, 350u32, 92 - 4),
-            AwgPacketType::CookieReply => (params.s3 as usize, 550u32, 64 - 4),
-            AwgPacketType::TransportData => (params.s4 as usize, 750u32, 32 - 4),
+            CbPacketType::HandshakeInit => (params.s1 as usize, 150u32, 148 - 4),
+            CbPacketType::HandshakeResponse => (params.s2 as usize, 350u32, 92 - 4),
+            CbPacketType::CookieReply => (params.s3 as usize, 550u32, 64 - 4),
+            CbPacketType::TransportData => (params.s4 as usize, 750u32, 32 - 4),
         };
 
         let mut pkt = vec![0xFF; pad_size];
@@ -1532,7 +1532,7 @@ mod tests {
         (pkt, pad_size, header)
     }
 
-    fn assert_protocol_prefix(proto: Protocol, pkt_type: AwgPacketType, data: &[u8], pad_size: usize) {
+    fn assert_protocol_prefix(proto: Protocol, pkt_type: CbPacketType, data: &[u8], pad_size: usize) {
         match proto {
             Protocol::Quic => {
                 // All AWG phases use a 1-RTT short header (form=0, fixed=1).
@@ -1560,20 +1560,20 @@ mod tests {
     }
 
     #[test]
-    fn awg_transform_supports_s1_s2_s3_s4_boundaries_for_all_protocols() {
+    fn cb_transform_supports_s1_s2_s3_s4_boundaries_for_all_protocols() {
         for s in [15u32, 64, 150] {
-            let params = awg_params_with_s(s);
+            let params = cb_params_with_s(s);
             for pkt_type in [
-                AwgPacketType::HandshakeInit,
-                AwgPacketType::HandshakeResponse,
-                AwgPacketType::CookieReply,
-                AwgPacketType::TransportData,
+                CbPacketType::HandshakeInit,
+                CbPacketType::HandshakeResponse,
+                CbPacketType::CookieReply,
+                CbPacketType::TransportData,
             ] {
                 for proto in [Protocol::Quic, Protocol::Dns, Protocol::Stun, Protocol::Sip] {
-                    let (mut pkt, pad_size, header) = build_awg_packet(pkt_type, &params);
+                    let (mut pkt, pad_size, header) = build_cb_packet(pkt_type, &params);
 
-                    assert_eq!(classify_awg_packet(&pkt, &params), Some(pkt_type));
-                    assert!(apply_awg_transform(&mut pkt, &params, proto, None));
+                    assert_eq!(classify_cb_packet(&pkt, &params), Some(pkt_type));
+                    assert!(apply_cb_transform(&mut pkt, &params, proto, None));
 
                     assert_protocol_prefix(proto, pkt_type, &pkt, pad_size);
                     assert_eq!(
@@ -1591,8 +1591,8 @@ mod tests {
     }
 
     #[test]
-    fn awg_transform_handshake_init_quic() {
-        let params = test_awg_params();
+    fn cb_transform_handshake_init_quic() {
+        let params = test_cb_params();
         // Build a packet: S1 prefix padding + H1-range header + 148-byte WG message
         let padding_original = [0xFF; 10]; // S1 = 10 bytes of random prefix padding
         let header = 150u32.to_le_bytes();
@@ -1603,7 +1603,7 @@ mod tests {
         pkt.extend_from_slice(&body);
         assert_eq!(pkt.len(), 10 + 148); // S1 + WG message size
 
-        let result = apply_awg_transform(&mut pkt, &params, Protocol::Quic, None);
+        let result = apply_cb_transform(&mut pkt, &params, Protocol::Quic, None);
         assert!(result);
 
         // Prefix padding (first 10 bytes): 1-RTT short header (form=0, fixed=1)
@@ -1617,8 +1617,8 @@ mod tests {
     }
 
     #[test]
-    fn awg_transform_transport_data_sip() {
-        let params = test_awg_params();
+    fn cb_transform_transport_data_sip() {
+        let params = test_cb_params();
         // S4 = 20 bytes prefix + H4-range header + body
         let padding_original = [0xFF; 20]; // S4 = 20
         let header = 750u32.to_le_bytes();
@@ -1628,7 +1628,7 @@ mod tests {
         pkt.extend_from_slice(&header);
         pkt.extend_from_slice(&body);
 
-        let result = apply_awg_transform(&mut pkt, &params, Protocol::Sip, None);
+        let result = apply_cb_transform(&mut pkt, &params, Protocol::Sip, None);
         assert!(result);
 
         // Prefix padding should contain a complete minimal SIP response.
@@ -1639,10 +1639,10 @@ mod tests {
     }
 
     #[test]
-    fn awg_transform_handshake_response_dns() {
+    fn cb_transform_handshake_response_dns() {
         // Use S2=40 (>= DNS_OPT_MIN=32) so the full EDNS OPT framing fits without
         // overlapping the AWG header that starts at offset 40.
-        let params = AwgParams { s2: 40, ..test_awg_params() };
+        let params = CbParams { s2: 40, ..test_cb_params() };
         let padding_original = [0xFF; 40]; // S2 = 40
         let header = 350u32.to_le_bytes();
         let body = [0xDD; 92 - 4];
@@ -1652,7 +1652,7 @@ mod tests {
         pkt.extend_from_slice(&body);
         assert_eq!(pkt.len(), 40 + 92); // total_len = 132
 
-        let result = apply_awg_transform(&mut pkt, &params, Protocol::Dns, None);
+        let result = apply_cb_transform(&mut pkt, &params, Protocol::Dns, None);
         assert!(result);
 
         // DNS header: QR=1, RD=1, RA=1, NODATA + OPT.
@@ -1673,8 +1673,8 @@ mod tests {
     }
 
     #[test]
-    fn awg_transform_handshake_response_quic_uses_short_header() {
-        let params = test_awg_params();
+    fn cb_transform_handshake_response_quic_uses_short_header() {
+        let params = test_cb_params();
         // S2 = 8 bytes padding + H2-range header (350) + 92-byte WG Handshake Response
         let mut pkt = Vec::new();
         pkt.extend_from_slice(&[0xFF; 8]);
@@ -1682,7 +1682,7 @@ mod tests {
         pkt.extend_from_slice(&[0xDD; 88]);
         assert_eq!(pkt.len(), 8 + 92);
 
-        let result = apply_awg_transform(&mut pkt, &params, Protocol::Quic, None);
+        let result = apply_cb_transform(&mut pkt, &params, Protocol::Quic, None);
         assert!(result);
 
         // S2/S3 now use a 1-RTT short header (form=0, fixed=1) like S1/S4 — a long
@@ -1694,15 +1694,15 @@ mod tests {
     }
 
     #[test]
-    fn awg_transform_transport_data_quic_uses_short_header() {
-        let params = test_awg_params();
+    fn cb_transform_transport_data_quic_uses_short_header() {
+        let params = test_cb_params();
         // S4 = 20 bytes padding + H4-range header (750) + 100-byte body
         let mut pkt = Vec::new();
         pkt.extend_from_slice(&[0xFF; 20]);
         pkt.extend_from_slice(&750u32.to_le_bytes());
         pkt.extend_from_slice(&[0xBB; 100]);
 
-        let result = apply_awg_transform(&mut pkt, &params, Protocol::Quic, None);
+        let result = apply_cb_transform(&mut pkt, &params, Protocol::Quic, None);
         assert!(result);
 
         // S4 padding must use 1-RTT short-header (form=0, fixed=1 => 0x40..0x7F)
@@ -1713,8 +1713,8 @@ mod tests {
     }
 
     #[test]
-    fn awg_transform_transport_data_stun() {
-        let params = test_awg_params();
+    fn cb_transform_transport_data_stun() {
+        let params = test_cb_params();
         let padding_original = [0xFF; 20];
         let header = 750u32.to_le_bytes();
         let body = [0xBB; 100];
@@ -1723,7 +1723,7 @@ mod tests {
         pkt.extend_from_slice(&header);
         pkt.extend_from_slice(&body);
 
-        let result = apply_awg_transform(&mut pkt, &params, Protocol::Stun, None);
+        let result = apply_cb_transform(&mut pkt, &params, Protocol::Stun, None);
         assert!(result);
 
         assert_eq!(&pkt[0..2], &0x0101u16.to_be_bytes());
@@ -1733,25 +1733,25 @@ mod tests {
     }
 
     #[test]
-    fn awg_transform_unknown_packet() {
-        let params = test_awg_params();
+    fn cb_transform_unknown_packet() {
+        let params = test_cb_params();
         let mut pkt = vec![0xFF; 50]; // No valid H-range header at any S offset
-        let result = apply_awg_transform(&mut pkt, &params, Protocol::Quic, None);
+        let result = apply_cb_transform(&mut pkt, &params, Protocol::Quic, None);
         assert!(!result);
         // Packet should be unchanged
         assert!(pkt.iter().all(|&b| b == 0xFF));
     }
 
     #[test]
-    fn awg_transform_padding_larger_than_packet() {
-        let params = AwgParams {
+    fn cb_transform_padding_larger_than_packet() {
+        let params = CbParams {
             s1: 100, // padding larger than packet
-            ..test_awg_params()
+            ..test_cb_params()
         };
         // Packet too short for S1(100) + 4 header bytes → can't classify
         let header = 150u32.to_le_bytes();
         let mut pkt = Vec::from(header); // only 4 bytes
-        let result = apply_awg_transform(&mut pkt, &params, Protocol::Quic, None);
+        let result = apply_cb_transform(&mut pkt, &params, Protocol::Quic, None);
         assert!(!result); // can't classify (too short for S1 offset)
     }
 }

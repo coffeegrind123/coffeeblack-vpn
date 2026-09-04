@@ -343,7 +343,7 @@ pub async fn create_session(
 
     // Build cookie
     let secure = !crate::config::CONFIG.insecure;
-    let cookie = Cookie::build(("awg_session", token))
+    let cookie = Cookie::build(("coffeeblack_session", token))
         .path("/")
         .http_only(true)
         .secure(secure)
@@ -404,7 +404,7 @@ pub async fn delete_session(
     jar: CookieJar,
 ) -> Result<(CookieJar, Json<Value>), (StatusCode, Json<Value>)> {
     // Remove session from store if cookie present
-    if let Some(cookie) = jar.get("awg_session") {
+    if let Some(cookie) = jar.get("coffeeblack_session") {
         let token = cookie.value().to_string();
         if let Ok(mut sessions) = state.sessions.lock() {
             sessions.remove(&token);
@@ -412,7 +412,7 @@ pub async fn delete_session(
     }
 
     // Clear the cookie
-    let jar = jar.remove(Cookie::from("awg_session"));
+    let jar = jar.remove(Cookie::from("coffeeblack_session"));
 
     Ok((jar, Json(json!({ "success": true }))))
 }

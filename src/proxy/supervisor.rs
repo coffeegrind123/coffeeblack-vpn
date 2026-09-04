@@ -24,14 +24,14 @@ use tokio::task::JoinHandle;
 
 use crate::config::CONFIG;
 use crate::db;
-use crate::proxy::config::{self as pconfig, AwgParams, ProxyConfig};
+use crate::proxy::config::{self as pconfig, CbParams, ProxyConfig};
 use crate::proxy::proxy::{Proxy, ShutdownHandle};
 
 /// What we keep while the proxy task is alive.
 struct Live {
     shutdown: ShutdownHandle,
     join: JoinHandle<()>,
-    /// Hash of the effective (ProxyConfig + AwgParams) inputs. When an
+    /// Hash of the effective (ProxyConfig + CbParams) inputs. When an
     /// `ensure_running` recomputes the same hash the task is left running
     /// untouched; a different hash triggers a stop+restart.
     cfg_hash: u64,
@@ -147,7 +147,7 @@ fn should_remain_disabled(settings: &db::ProxySettings, iface: &db::Interface) -
     // is much better to leave the proxy off (peers keep working on the
     // native port) than to front a port whose packets we would misread as
     // probes and answer with imitation traffic.
-    if let Some(reason) = crate::wg::awg3::proxy_conflict(
+    if let Some(reason) = crate::wg::cb3::proxy_conflict(
         &iface.header_protection_key,
         iface.random_trailers,
     ) {
@@ -156,7 +156,7 @@ fn should_remain_disabled(settings: &db::ProxySettings, iface: &db::Interface) -
     None
 }
 
-/// Build the proxy's `ProxyConfig` and `AwgParams` from DB state.
+/// Build the proxy's `ProxyConfig` and `CbParams` from DB state.
 ///
 /// The proxy always binds the interface's *public* port; AmneziaWG is
 /// reachable on `127.0.0.1:<backend_port>`. AWG obfuscation params are
@@ -167,7 +167,7 @@ fn should_remain_disabled(settings: &db::ProxySettings, iface: &db::Interface) -
 fn build_config(
     settings: &db::ProxySettings,
     iface: &db::Interface,
-) -> (ProxyConfig, Option<AwgParams>) {
+) -> (ProxyConfig, Option<CbParams>) {
     let public_port = iface.port;
     let backend_port = effective_backend_port(settings, iface.port);
 
@@ -201,8 +201,8 @@ fn build_config(
         cfg.dns_forward_enabled = false;
     }
 
-    let awg = build_awg_params(iface);
-    (cfg, awg)
+    let cb = build_cb_params(iface);
+    (cfg, cb)
 }
 
 /// Where the proxy writes its live-sessions JSON. Lives under the runtime
@@ -211,7 +211,7 @@ fn proxy_status_file() -> String {
     format!("{}/proxy/sessions.json", CONFIG.wg_conf_dir.trim_end_matches('/'))
 }
 
-fn build_awg_params(iface: &db::Interface) -> Option<AwgParams> {
+fn build_cb_params(iface: &db::Interface) -> Option<CbParams> {
     // Reuse the upstream INI parser (H-range parse + overlap/Jmin<=Jmax
     // validation). S3/S4 fall back to 0 for pre-2.0 interfaces that never
     // generated them.
@@ -222,7 +222,7 @@ fn build_awg_params(iface: &db::Interface) -> Option<AwgParams> {
         iface.j_c, iface.j_min, iface.j_max, iface.s1, iface.s2, s3, s4,
         norm_h(&iface.h1), norm_h(&iface.h2), norm_h(&iface.h3), norm_h(&iface.h4),
     );
-    match pconfig::parse_awg_config(&text) {
+    match pconfig::parse_cb_config(&text) {
         Ok(p) => Some(p),
         Err(e) => {
             crate::warn!(
@@ -238,13 +238,13 @@ fn build_awg_params(iface: &db::Interface) -> Option<AwgParams> {
 /// (single) or `min-max` (u32 pair) in **decimal only**. AmneziaWG /
 /// amnezia-client also accept `0x`-hex, and a blank field is possible.
 ///
-/// Audit finding F3: a hex H value would make `parse_awg_config` fail,
-/// which drops the proxy to `awg_params = None` and silently disables the
+/// Audit finding F3: a hex H value would make `parse_cb_config` fail,
+/// which drops the proxy to `cb_params = None` and silently disables the
 /// *entire* padding transform (global pass-through). We convert every hex
 /// token to decimal here so that never happens. A blank field maps to `0`
 /// (an all-zero range never matches → that type is pass-through, which is
 /// the correct fail-safe). If a token is genuinely unparseable it is left
-/// verbatim so `parse_awg_config` still surfaces a clear diagnostic.
+/// verbatim so `parse_cb_config` still surfaces a clear diagnostic.
 fn norm_h(h: &str) -> String {
     let h = h.trim();
     if h.is_empty() {
@@ -286,7 +286,7 @@ pub fn suppress_native_junk() -> bool {
     is_active()
 }
 
-fn hash_config(cfg: &ProxyConfig, awg: &Option<AwgParams>) -> u64 {
+fn hash_config(cfg: &ProxyConfig, cb: &Option<CbParams>) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     cfg.listen.hash(&mut hasher);
     cfg.backend.hash(&mut hasher);
@@ -295,12 +295,12 @@ fn hash_config(cfg: &ProxyConfig, awg: &Option<AwgParams>) -> u64 {
     cfg.quic_certificate_domain.hash(&mut hasher);
     cfg.dns_forward_enabled.hash(&mut hasher);
     cfg.dns_upstream.hash(&mut hasher);
-    if let Some(p) = awg {
+    if let Some(p) = cb {
         // Debug-format is stable for these plain-data structs and captures
         // every field that changes classification/padding behaviour.
         format!("{p:?}").hash(&mut hasher);
     } else {
-        "no-awg".hash(&mut hasher);
+        "no-cb".hash(&mut hasher);
     }
     hasher.finish()
 }
@@ -325,8 +325,8 @@ pub async fn ensure_running() -> Result<()> {
         return Ok(());
     }
 
-    let (cfg, awg) = build_config(&settings, &iface);
-    let cfg_hash = hash_config(&cfg, &awg);
+    let (cfg, cb) = build_config(&settings, &iface);
+    let cfg_hash = hash_config(&cfg, &cb);
 
     {
         let guard = lock_state().await;
@@ -342,10 +342,10 @@ pub async fn ensure_running() -> Result<()> {
 
     // Config differs (or not running) — stop any current task and start fresh.
     stop_if_running("reconfiguring").await;
-    start(cfg, awg, cfg_hash).await
+    start(cfg, cb, cfg_hash).await
 }
 
-async fn start(cfg: ProxyConfig, awg: Option<AwgParams>, cfg_hash: u64) -> Result<()> {
+async fn start(cfg: ProxyConfig, cb: Option<CbParams>, cfg_hash: u64) -> Result<()> {
     let listen = cfg.listen.clone();
     let backend = cfg.backend.clone();
     let protocol = cfg.imitate_protocol.clone();
@@ -373,7 +373,7 @@ async fn start(cfg: ProxyConfig, awg: Option<AwgParams>, cfg_hash: u64) -> Resul
         );
     }
 
-    let proxy = Proxy::bind(cfg, awg)
+    let proxy = Proxy::bind(cfg, cb)
         .await
         .with_context(|| format!("bind DPI proxy on {listen}"))?;
     let shutdown = proxy.shutdown_handle();
@@ -564,7 +564,7 @@ mod tests {
 
     fn iface(port: i64) -> db::Interface {
         db::Interface {
-            name: "awg0".into(),
+            name: "cb0".into(),
             device: "eth0".into(),
             port,
             private_key: "k".into(),
@@ -657,7 +657,7 @@ mod tests {
     }
 
     #[test]
-    fn hex_h_interface_still_parses_awg_params() {
+    fn hex_h_interface_still_parses_cb_params() {
         // An interface whose H fields are hex must still yield usable AWG
         // params (not None → which would globally disable the transform).
         let mut i = iface(51820);
@@ -665,8 +665,8 @@ mod tests {
         i.h2 = "0xc8-0x12c".into();
         i.h3 = "0x190-0x1f4".into();
         i.h4 = "0x258-0x2bc".into();
-        let awg = build_awg_params(&i);
-        assert!(awg.is_some(), "hex H must normalise to decimal and parse");
+        let cb = build_cb_params(&i);
+        assert!(cb.is_some(), "hex H must normalise to decimal and parse");
     }
 
     #[test]
@@ -727,11 +727,11 @@ mod tests {
         let s = settings();
         let i = iface(51820);
         assert!(should_remain_disabled(&s, &i).is_none());
-        let (cfg, awg) = build_config(&s, &i);
+        let (cfg, cb) = build_config(&s, &i);
         assert_eq!(cfg.listen, "0.0.0.0:51820");
         assert_eq!(cfg.backend, "127.0.0.1:51821");
         assert_eq!(cfg.imitate_protocol, "quic");
-        assert!(awg.is_some(), "2.0 params should parse");
+        assert!(cb.is_some(), "2.0 params should parse");
     }
 
     #[test]

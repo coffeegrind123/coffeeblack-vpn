@@ -134,7 +134,7 @@ jobs:
           tag="v$(date -u +%Y%m%d)-${short_hash}"
           echo "short_hash=${short_hash}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          binary="target/x86_64-unknown-linux-musl/release/awg-easy-rs"
+          binary="target/x86_64-unknown-linux-musl/release/coffeeblack-vpn"
           echo "binary_sha=$(sha256sum "$binary" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       # Bundle the static binary with its license attribution and the
@@ -143,23 +143,23 @@ jobs:
       - name: Package release archive
         id: package
         run: |
-          mkdir -p dist/awg-easy-rs
-          cp target/x86_64-unknown-linux-musl/release/awg-easy-rs dist/awg-easy-rs/awg-easy-rs
-          cp -r vendor/LICENSES dist/awg-easy-rs/LICENSES
-          cp README.md dist/awg-easy-rs/README.md
-          cp vendor/README.md dist/awg-easy-rs/VENDOR-README.md
+          mkdir -p dist/coffeeblack-vpn
+          cp target/x86_64-unknown-linux-musl/release/coffeeblack-vpn dist/coffeeblack-vpn/coffeeblack-vpn
+          cp -r vendor/LICENSES dist/coffeeblack-vpn/LICENSES
+          cp README.md dist/coffeeblack-vpn/README.md
+          cp vendor/README.md dist/coffeeblack-vpn/VENDOR-README.md
           # Tarball, then plain binary (for users who want to curl it
           # into a Dockerfile without untar).
-          tar -C dist -czf "awg-easy-rs-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz" awg-easy-rs
-          cp target/x86_64-unknown-linux-musl/release/awg-easy-rs awg-easy-rs
-          echo "tarball_sha=$(sha256sum awg-easy-rs-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          tar -C dist -czf "coffeeblack-vpn-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz" coffeeblack-vpn
+          cp target/x86_64-unknown-linux-musl/release/coffeeblack-vpn coffeeblack-vpn
+          echo "tarball_sha=$(sha256sum coffeeblack-vpn-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           # Publish the digests as a real artifact, not just as prose in the
           # release body. `scripts/install.sh` fetches this and verifies the
           # binary before running it as root; a digest a machine cannot read
           # is a digest that never gets checked.
           sha256sum \
-            "awg-easy-rs-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz" \
-            awg-easy-rs > SHA256SUMS
+            "coffeeblack-vpn-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz" \
+            coffeeblack-vpn > SHA256SUMS
 
       - name: Compute bundled-component versions
         id: components
@@ -198,10 +198,10 @@ jobs:
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
         with:
           tag: ${{ steps.version.outputs.tag }}
-          name: "awg-easy-rs ${{ steps.version.outputs.tag }}"
+          name: "coffeeblack-vpn ${{ steps.version.outputs.tag }}"
           artifacts: |
-            awg-easy-rs-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz
-            awg-easy-rs
+            coffeeblack-vpn-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz
+            coffeeblack-vpn
             SHA256SUMS
           body: |
             Statically linked **x86_64-linux** ELF — runs unchanged on
@@ -232,8 +232,8 @@ jobs:
 
             | File | Hash |
             |------|------|
-            | `awg-easy-rs` | `${{ steps.version.outputs.binary_sha }}` |
-            | `awg-easy-rs-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz` | `${{ steps.package.outputs.tarball_sha }}` |
+            | `coffeeblack-vpn` | `${{ steps.version.outputs.binary_sha }}` |
+            | `coffeeblack-vpn-${{ steps.version.outputs.tag }}-x86_64-linux-musl.tar.gz` | `${{ steps.package.outputs.tarball_sha }}` |
 
             ## Build info
 

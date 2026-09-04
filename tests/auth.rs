@@ -1,7 +1,7 @@
 //! Track 1: Unit tests for auth.rs — password hashing, verification, token
 //! generation, and SHA-256 hashing.
 
-use awg_easy_rs::auth;
+use coffeeblack_vpn::auth;
 
 // ---------------------------------------------------------------------------
 // hash_password

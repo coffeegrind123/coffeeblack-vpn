@@ -1,5 +1,6 @@
 {
-  "name": "WireGuard",
+  "name": "CoffeeBlack VPN",
+  "short_name": "CoffeeBlack",
   "display": "standalone",
   "background_color": "#fff",
   "icons": [

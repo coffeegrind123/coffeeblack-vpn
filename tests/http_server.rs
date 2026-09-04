@@ -10,7 +10,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use awg_easy_rs::http::{
+use coffeeblack_vpn::http::{
     routing::{get, post},
     Body, Json, Router,
 };
@@ -34,7 +34,7 @@ async fn start() -> (SocketAddr, tokio::sync::oneshot::Sender<()>) {
         .route(
             "/peer",
             get(
-                |awg_easy_rs::http::ConnectInfo(addr): awg_easy_rs::http::ConnectInfo<SocketAddr>| async move {
+                |coffeeblack_vpn::http::ConnectInfo(addr): coffeeblack_vpn::http::ConnectInfo<SocketAddr>| async move {
                     addr.to_string()
                 },
             ),
@@ -44,7 +44,7 @@ async fn start() -> (SocketAddr, tokio::sync::oneshot::Sender<()>) {
     let addr = listener.local_addr().unwrap();
     let (tx, rx) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let _ = awg_easy_rs::http::serve(listener, app, async {
+        let _ = coffeeblack_vpn::http::serve(listener, app, async {
             let _ = rx.await;
         })
         .await;

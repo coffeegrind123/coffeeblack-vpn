@@ -1,22 +1,22 @@
 # Bare-metal installation
 
-This guide covers installing **awg-easy-rs** directly on a host (no Docker), as a
+This guide covers installing **coffeeblack-vpn** directly on a host (no Docker), as a
 systemd service. For the container path see the top-level `README.md` and
 `docker-compose.yml`.
 
-awg-easy-rs is a single static-musl binary. On a bare-metal host the installer's
+coffeeblack-vpn is a single static-musl binary. On a bare-metal host the installer's
 job is small and specific:
 
 1. Install the **AmneziaWG kernel module + `amneziawg-tools`** so `awg` /
    `awg-quick` exist and the fast in-kernel data path is available.
-2. Install the **awg-easy-rs binary** as a systemd service.
+2. Install the **coffeeblack-vpn binary** as a systemd service.
 3. Enable host **IPv4/IPv6 forwarding** (sysctl).
 4. Seed the **first-run admin** (the `INIT_*` env vars) into an EnvironmentFile.
 
-> awg-easy-rs **owns the AmneziaWG interface lifecycle itself**: on startup it
-> runs `awg-quick up awg0` (writing `/etc/wireguard/awg0.conf`) and tears it down
-> on shutdown. There is therefore **no `awg-quick@awg0` service** to enable — the
-> awg-easy-rs service is the only unit you manage.
+> coffeeblack-vpn **owns the AmneziaWG interface lifecycle itself**: on startup it
+> runs `awg-quick up cb0` (writing `/etc/coffeeblack/conf/cb0.conf`) and tears it down
+> on shutdown. There is therefore **no `awg-quick@cb0` service** to enable — the
+> coffeeblack-vpn service is the only unit you manage.
 
 ---
 
@@ -81,7 +81,7 @@ reverts that afterwards.
 
 | Mode | Flag | Notes |
 |------|------|-------|
-| Download release (default) | *(none)* | `https://github.com/coffeegrind123/awg-easy-rs/releases/latest/download/awg-easy-rs`. A repo-local `target/x86_64-unknown-linux-musl/release/awg-easy-rs` is used if present. |
+| Download release (default) | *(none)* | `https://github.com/coffeegrind123/coffeeblack-vpn/releases/latest/download/coffeeblack-vpn`. A repo-local `target/x86_64-unknown-linux-musl/release/coffeeblack-vpn` is used if present. |
 | Pre-built binary | `--binary-src PATH` | Install a binary you already have (CI artifact, air-gapped copy). |
 | Build from source | `--build-from-source` | Runs `cargo build --release --target x86_64-unknown-linux-musl` in the repo. Add `--install-rust` to bootstrap rustup if `cargo` is missing. |
 
@@ -120,18 +120,18 @@ service unit, and restart. **Config and the database are left untouched.**
 ```bash
 sudo ./scripts/install.sh upgrade                     # latest release
 sudo ./scripts/install.sh upgrade --build-from-source # rebuild locally
-sudo ./scripts/install.sh upgrade --binary-src ./awg-easy-rs
+sudo ./scripts/install.sh upgrade --binary-src ./coffeeblack-vpn
 ```
 
 ### uninstall
 
-Stop/disable the service, bring `awg0` down, and remove the binary, unit, and
+Stop/disable the service, bring `cb0` down, and remove the binary, unit, and
 sysctl drop-in. Config and data are **kept** unless you ask otherwise.
 
 ```bash
 sudo ./scripts/install.sh uninstall                 # keep config + data
-sudo ./scripts/install.sh uninstall --purge-config  # also remove /etc/awg-easy-rs
-sudo ./scripts/install.sh uninstall --purge-data    # also remove /etc/wireguard (DB, awg0.conf)
+sudo ./scripts/install.sh uninstall --purge-config  # also remove /etc/coffeeblack
+sudo ./scripts/install.sh uninstall --purge-data    # also remove /etc/coffeeblack/conf (DB, cb0.conf)
 sudo ./scripts/install.sh uninstall --force         # no confirmation
 ```
 
@@ -179,8 +179,8 @@ First-run admin (install):
 --allowed-ips LIST       Default client AllowedIPs (default 0.0.0.0/0,::/0).
 
 uninstall:
---purge-config           Also delete /etc/awg-easy-rs.
---purge-data             Also delete /etc/wireguard (DB, awg0.conf, subprocess state).
+--purge-config           Also delete /etc/coffeeblack.
+--purge-data             Also delete /etc/coffeeblack/conf (DB, cb0.conf, subprocess state).
 ```
 
 ---
@@ -189,19 +189,44 @@ uninstall:
 
 | Path | Purpose |
 |------|---------|
-| `/usr/local/bin/awg-easy-rs` | The binary. |
-| `/etc/systemd/system/awg-easy-rs.service` | systemd unit. |
-| `/etc/awg-easy-rs/awg-easy-rs.env` | EnvironmentFile (mode 0600, root-only). |
-| `/etc/wireguard/` | Runtime root: `awg0.conf`, `wg-easy.db`, and the extracted subprocess working dirs (`xray/`, `mtproxy/`, `dns/`, `mdnsvpn/`). |
-| `/etc/sysctl.d/99-awg-easy-rs.conf` | IPv4/IPv6 forwarding. |
+| `/usr/local/bin/coffeeblack-vpn` | The binary. |
+| `/etc/systemd/system/coffeeblack-vpn.service` | systemd unit. |
+| `/etc/coffeeblack/coffeeblack.env` | EnvironmentFile (mode 0600, root-only). |
+| `/etc/coffeeblack/conf/` | Runtime root: `cb0.conf`, `coffeeblack.db`, and the extracted subprocess working dirs (`xray/`, `mtproxy/`, `dns/`, `mdnsvpn/`). |
+| `/etc/amnezia/amneziawg` | Symlink to `/etc/coffeeblack/conf`. See [Config bridge](#config-bridge). |
+| `/etc/sysctl.d/99-coffeeblack.conf` | IPv4/IPv6 forwarding. |
 | `/etc/modules-load.d/amneziawg.conf` | Autoload the module at boot. |
+
+### Config bridge
+
+`awg-quick` does **not** consult `COFFEEBLACK_CONF_DIR`. amneziawg-tools'
+`wg-quick/linux.bash` hardcodes the lookup when it is handed a bare interface
+name — which is what coffeeblack-vpn passes:
+
+```bash
+[[ $CONFIG_FILE =~ ^[a-zA-Z0-9_=+.-]{1,15}$ ]] && \
+    CONFIG_FILE="/etc/amnezia/amneziawg/$CONFIG_FILE.conf"
+```
+
+So `awg-quick up cb0` reads `/etc/amnezia/amneziawg/cb0.conf`, while
+coffeeblack-vpn writes `$COFFEEBLACK_CONF_DIR/cb0.conf`. The installer bridges
+the two with a symlink (the Docker image does the same thing at build time).
+If you set a custom `COFFEEBLACK_CONF_DIR`, repoint the symlink to match:
+
+```bash
+sudo ln -sfn "$COFFEEBLACK_CONF_DIR" /etc/amnezia/amneziawg
+```
+
+Symptom when it is missing or stale: `awg-quick` exits with
+`` `/etc/amnezia/amneziawg/cb0.conf' does not exist `` and Gaming mode never
+comes up, while the web UI still serves normally.
 
 ---
 
 ## Environment variables
 
-The service reads its configuration from `/etc/awg-easy-rs/awg-easy-rs.env`. The
-installer seeds it; edit it and `sudo systemctl restart awg-easy-rs` to change
+The service reads its configuration from `/etc/coffeeblack/coffeeblack.env`. The
+installer seeds it; edit it and `sudo systemctl restart coffeeblack-vpn` to change
 anything. The full list lives in the top-level `README.md`; the ones the
 installer writes:
 
@@ -212,8 +237,8 @@ installer writes:
 | `INSECURE` | `false` | Drop the `Secure` cookie flag (no-TLS LAN only). |
 | `DISABLE_IPV6` | `false` | Skip IPv6 in generated configs / firewall. |
 | `IN_MEMORY` | `false` | **Bare-metal is durable/on-disk.** The Docker image defaults to `true`. |
-| `WG_EASY_CONF_DIR` | `/etc/wireguard` | Runtime root. |
-| `WG_EASY_DB_PATH` | `/etc/wireguard/wg-easy.db` | SQLite database. |
+| `COFFEEBLACK_CONF_DIR` | `/etc/coffeeblack/conf` | Runtime root. |
+| `COFFEEBLACK_DB_PATH` | `/etc/coffeeblack/conf/coffeeblack.db` | SQLite database. |
 | `INIT_ENABLED` | `true` | Seed the first admin. Effective only while no admin exists (idempotent). |
 | `INIT_USERNAME` / `INIT_PASSWORD` | *(prompted)* | First admin credentials. The password must be ≥12 characters; a shorter one aborts startup. |
 | `INIT_HOST` | *(prompted / auto)* | Public WireGuard endpoint for client configs. |
@@ -231,13 +256,13 @@ installer writes:
 ## Service management
 
 ```bash
-sudo systemctl status awg-easy-rs        # state
-sudo journalctl -u awg-easy-rs -f         # follow logs
-sudo systemctl restart awg-easy-rs        # apply env changes
+sudo systemctl status coffeeblack-vpn        # state
+sudo journalctl -u coffeeblack-vpn -f         # follow logs
+sudo systemctl restart coffeeblack-vpn        # apply env changes
 ```
 
 The unit runs the binary as **root** with the `CAP_NET_ADMIN` and
-`CAP_SYS_MODULE` ambient capabilities it needs to create the `awg0` interface,
+`CAP_SYS_MODULE` ambient capabilities it needs to create the `cb0` interface,
 program the nftables/iptables firewall, and load the kernel module. It
 `ExecStartPre=-/sbin/modprobe amneziawg` best-effort (the `-` means a failure
 there is non-fatal — the binary retries and, failing that, still serves the web
@@ -288,17 +313,17 @@ on your firewall / cloud security group.
 
 AmneziaWG 2.0 added the `S3`/`S4` parameters and turned the scalar `H1`–`H4`
 header magics into `min-max` ranges. If you are moving an **existing pre-2.0
-AmneziaWG server** onto awg-easy-rs, migrate its `.conf` in place first:
+AmneziaWG server** onto coffeeblack-vpn, migrate its `.conf` in place first:
 
 ```bash
-# Auto-discover under /etc/wireguard and /etc/amnezia/amneziawg
+# Auto-discover under /etc/coffeeblack/conf and /etc/amnezia/amneziawg
 sudo ./scripts/migrate-pre2.sh
 
 # Or target one file
-sudo ./scripts/migrate-pre2.sh --config /etc/wireguard/awg0.conf
+sudo ./scripts/migrate-pre2.sh --config /etc/coffeeblack/conf/cb0.conf
 
 # See what would change without touching anything
-sudo ./scripts/migrate-pre2.sh --config /etc/wireguard/awg0.conf --dry-run
+sudo ./scripts/migrate-pre2.sh --config /etc/coffeeblack/conf/cb0.conf --dry-run
 
 # No prompt (also honoured via AUTO_INSTALL=y)
 sudo ./scripts/migrate-pre2.sh --force
@@ -314,21 +339,21 @@ The migrator:
 
 > After migration, **existing client configs are incompatible** and must be
 > regenerated so their `S3`/`S4`/`H1`–`H4` match the server. Do that from the
-> awg-easy-rs admin UI once the service is running.
+> coffeeblack-vpn admin UI once the service is running.
 
 ---
 
 ## Troubleshooting
 
 **Service is up but the VPN interface isn't.**
-awg-easy-rs still serves the web UI even if `awg-quick up awg0` fails, so you can
+coffeeblack-vpn still serves the web UI even if `awg-quick up cb0` fails, so you can
 fix the host and use *Restart Interface* in the admin panel. Check:
 
 ```bash
-sudo systemctl status awg-easy-rs
-sudo journalctl -u awg-easy-rs -e
+sudo systemctl status coffeeblack-vpn
+sudo journalctl -u coffeeblack-vpn -e
 lsmod | grep amneziawg          # module loaded?
-ip link show awg0               # interface present?
+ip link show cb0               # interface present?
 ```
 
 **`amneziawg` module missing after a kernel upgrade.**
@@ -340,7 +365,7 @@ run a self-repair pass (install matching headers → `dkms autoinstall` →
 sudo apt install -y "linux-headers-$(uname -r)"      # Debian/Ubuntu
 sudo dkms autoinstall -k "$(uname -r)" && sudo depmod -a
 sudo modprobe amneziawg
-sudo systemctl restart awg-easy-rs
+sudo systemctl restart coffeeblack-vpn
 ```
 
 **Package installs hang on a VPS.**

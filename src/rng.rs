@@ -153,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn large_exclusive_range_matches_awg_h_window() {
+    fn large_exclusive_range_matches_cb_h_window() {
         // The magic-header window uses 5..2_147_483_647; ensure the i128 span
         // math holds and outputs stay inside.
         const H_MIN: i64 = 5;

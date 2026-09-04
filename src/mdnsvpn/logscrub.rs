@@ -12,7 +12,7 @@
 //! `supervisor::spawn_log_pump` forwards the child's stdout/stderr verbatim
 //! into `tracing`. Without scrubbing, the tunnel's shared secret therefore
 //! lands in journald, `docker logs`, and any log shipper attached to
-//! awg-easy-rs — a direct key-disclosure path for a tool whose entire threat
+//! coffeeblack-vpn — a direct key-disclosure path for a tool whose entire threat
 //! model is a hostile network operator. There is no per-peer secret in
 //! MasterDnsVPN: whoever holds this one key can impersonate every peer and
 //! decrypt every tunnel, so it is the most sensitive value in the deployment.
@@ -226,7 +226,7 @@ mod tests {
         assert!(got.contains("[MasterDnsVPN Server] [INFO]"), "{got}");
 
         let path_line = "2026/08/07 04:23:08 [MasterDnsVPN Server] [INFO] \u{1F5C2} \
-                         Encryption Key Loaded, Path: /etc/awg/mdnsvpn/encrypt_key.txt";
+                         Encryption Key Loaded, Path: /etc/coffeeblack/mdnsvpn/encrypt_key.txt";
         assert_eq!(s.scrub(path_line), path_line);
     }
 
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn key_file_path_line_is_not_mangled() {
         let s = LogScrubber::new(KEY);
-        let line = "ENCRYPTION_KEY_FILE = /etc/awg/mdnsvpn/encrypt_key.txt";
+        let line = "ENCRYPTION_KEY_FILE = /etc/coffeeblack/mdnsvpn/encrypt_key.txt";
         assert_eq!(s.scrub(line), line);
     }
 

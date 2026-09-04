@@ -15,7 +15,7 @@
 //! * **Output shape.** `<rfc3339> <LEVEL> <target>: <message> k=v k=v`, the
 //!   same ordering `tracing_subscriber::fmt` produces.
 //! * **`RUST_LOG` semantics.** A bare level (`debug`), per-target directives
-//!   (`awg_easy_rs=debug,hyper=warn`), a bare target (trace for that target),
+//!   (`coffeeblack_vpn=debug,hyper=warn`), a bare target (trace for that target),
 //!   `off`, and longest-prefix-wins resolution. Default is `info`.
 //! * **`release_max_level_info`.** `debug!`/`trace!` compile out entirely in
 //!   release builds — the proxy data path logs per packet, and an accidental
@@ -152,7 +152,7 @@ fn parse_env_filter(spec: Option<&str>) -> Filter {
         }
     }
 
-    // Longest target first: `awg_easy_rs::proxy` must win over `awg_easy_rs`.
+    // Longest target first: `coffeeblack_vpn::proxy` must win over `coffeeblack_vpn`.
     directives.sort_by_key(|d| std::cmp::Reverse(d.target.len()));
 
     let max = directives
@@ -462,11 +462,11 @@ mod tests {
 
     #[test]
     fn parses_per_target_directives_most_specific_first() {
-        let f = parse_env_filter(Some("warn,awg_easy_rs=info,awg_easy_rs::proxy=trace"));
+        let f = parse_env_filter(Some("warn,coffeeblack_vpn=info,coffeeblack_vpn::proxy=trace"));
         assert_eq!(f.default, Level::Warn);
-        assert_eq!(f.directives[0].target, "awg_easy_rs::proxy");
+        assert_eq!(f.directives[0].target, "coffeeblack_vpn::proxy");
         assert_eq!(f.directives[0].level, Level::Trace);
-        assert_eq!(f.directives[1].target, "awg_easy_rs");
+        assert_eq!(f.directives[1].target, "coffeeblack_vpn");
     }
 
     #[test]
@@ -479,7 +479,7 @@ mod tests {
 
     #[test]
     fn unparsable_directives_are_skipped_not_fatal() {
-        let f = parse_env_filter(Some("awg_easy_rs=nonsense,info"));
+        let f = parse_env_filter(Some("coffeeblack_vpn=nonsense,info"));
         assert_eq!(f.default, Level::Info);
         assert!(f.directives.is_empty());
     }
@@ -507,10 +507,10 @@ mod tests {
 
     #[test]
     fn resolution_prefers_the_longest_matching_target() {
-        let f = parse_env_filter(Some("error,awg_easy_rs=info,awg_easy_rs::proxy=debug"));
-        assert!(resolve(&f, Level::Debug, "awg_easy_rs::proxy::session"));
-        assert!(!resolve(&f, Level::Debug, "awg_easy_rs::db"));
-        assert!(resolve(&f, Level::Info, "awg_easy_rs::db"));
+        let f = parse_env_filter(Some("error,coffeeblack_vpn=info,coffeeblack_vpn::proxy=debug"));
+        assert!(resolve(&f, Level::Debug, "coffeeblack_vpn::proxy::session"));
+        assert!(!resolve(&f, Level::Debug, "coffeeblack_vpn::db"));
+        assert!(resolve(&f, Level::Info, "coffeeblack_vpn::db"));
         assert!(!resolve(&f, Level::Info, "hyper::client"));
         assert!(resolve(&f, Level::Error, "hyper::client"));
     }

@@ -6,9 +6,9 @@
 
 mod common;
 
-use awg_easy_rs::{api, auth, db};
-use awg_easy_rs::http::Body;
-use awg_easy_rs::http::{header, Request, StatusCode};
+use coffeeblack_vpn::{api, auth, db};
+use coffeeblack_vpn::http::Body;
+use coffeeblack_vpn::http::{header, Request, StatusCode};
 use serde_json::{json, Value};
 use serial_test::serial;
 
@@ -20,11 +20,11 @@ fn seed() {
     common::seed();
 }
 
-fn router() -> awg_easy_rs::http::Router {
+fn router() -> coffeeblack_vpn::http::Router {
     api::build_router(api::AppState::new())
 }
 
-async fn login_get_cookie(app: &awg_easy_rs::http::Router, username: &str, password: &str) -> String {
+async fn login_get_cookie(app: &coffeeblack_vpn::http::Router, username: &str, password: &str) -> String {
     let body = json!({ "username": username, "password": password });
     let req = Request::builder()
         .method("POST")
@@ -41,9 +41,9 @@ async fn login_get_cookie(app: &awg_easy_rs::http::Router, username: &str, passw
         .collect();
     cookies
         .into_iter()
-        .find(|c| c.starts_with("awg_session="))
+        .find(|c| c.starts_with("coffeeblack_session="))
         .unwrap()
-        .strip_prefix("awg_session=")
+        .strip_prefix("coffeeblack_session=")
         .unwrap()
         .split(';')
         .next()
@@ -69,7 +69,7 @@ fn create_user(username: &str, password: &str, role: i64) -> i64 {
 fn create_client(user_id: Option<i64>, name: &str, ip: &str) -> i64 {
     db::create_client(&db::CreateClientParams {
         user_id,
-        interface_id: Some("awg0".into()),
+        interface_id: Some("cb0".into()),
         name: name.into(),
         ipv4_address: Some(ip.into()),
         ipv6_address: Some(format!("fdcc::{ip}")),
@@ -91,45 +91,45 @@ fn create_client(user_id: Option<i64>, name: &str, ip: &str) -> i64 {
     .unwrap()
 }
 
-async fn post(app: &awg_easy_rs::http::Router, path: &str, cookie: &str, body_val: &Value) -> (StatusCode, Value) {
+async fn post(app: &coffeeblack_vpn::http::Router, path: &str, cookie: &str, body_val: &Value) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("POST")
         .uri(path)
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::from(serde_json::to_vec(body_val).unwrap()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
+    let body_bytes = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
     (status, body)
 }
 
-async fn get_req(app: &awg_easy_rs::http::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
+async fn get_req(app: &coffeeblack_vpn::http::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("GET")
         .uri(path)
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
+    let body_bytes = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
     (status, body)
 }
 
-async fn delete_req(app: &awg_easy_rs::http::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
+async fn delete_req(app: &coffeeblack_vpn::http::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("DELETE")
         .uri(path)
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
+    let body_bytes = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
     (status, body)
 }
@@ -489,7 +489,7 @@ async fn validation_client_name_missing() {
         .method("POST")
         .uri("/api/client")
         .header(header::CONTENT_TYPE, "application/json")
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::from(serde_json::to_vec(&body).unwrap()))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -873,7 +873,7 @@ async fn login_missing_and_wrong_password_return_same_error() {
         .unwrap();
     let resp1 = app.clone().oneshot(req1).await.unwrap();
     let status1 = resp1.status();
-    let body1_bytes = awg_easy_rs::http::to_bytes(resp1.into_body(), 65536).unwrap();
+    let body1_bytes = coffeeblack_vpn::http::to_bytes(resp1.into_body(), 65536).unwrap();
     let body1_v: Value = serde_json::from_slice(&body1_bytes).unwrap();
 
     // Non-existent user.
@@ -886,7 +886,7 @@ async fn login_missing_and_wrong_password_return_same_error() {
         .unwrap();
     let resp2 = app.clone().oneshot(req2).await.unwrap();
     let status2 = resp2.status();
-    let body2_bytes = awg_easy_rs::http::to_bytes(resp2.into_body(), 65536).unwrap();
+    let body2_bytes = coffeeblack_vpn::http::to_bytes(resp2.into_body(), 65536).unwrap();
     let body2_v: Value = serde_json::from_slice(&body2_bytes).unwrap();
 
     assert_eq!(status1, StatusCode::UNAUTHORIZED);
@@ -1160,7 +1160,7 @@ async fn admin_interface_accepts_full_tag_grammar() {
 
 #[tokio::test]
 #[serial(db)]
-async fn admin_interface_awg3_defaults_are_all_off() {
+async fn admin_interface_cb3_defaults_are_all_off() {
     seed();
     create_user("admin", "adminpass", 1);
     let app = router();
@@ -1256,10 +1256,10 @@ async fn admin_interface_header_protection_key_round_trips_and_clears() {
 
     // Server-generated key: 32 bytes of base64, and it lands in the peer
     // configs (both ends must hold the same value or nothing decrypts).
-    let iface = awg_easy_rs::db::get_interface().unwrap();
+    let iface = coffeeblack_vpn::db::get_interface().unwrap();
     let key = iface.header_protection_key.clone();
     assert_eq!(key.len(), 44, "32 bytes of base64");
-    awg_easy_rs::wg::awg3::validate_header_protection_key(&key).unwrap();
+    coffeeblack_vpn::wg::cb3::validate_header_protection_key(&key).unwrap();
 
     // Toggling it on again must not silently rotate the key — that would
     // break every peer config already handed out.
@@ -1267,18 +1267,18 @@ async fn admin_interface_header_protection_key_round_trips_and_clears() {
     let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        awg_easy_rs::db::get_interface().unwrap().header_protection_key,
+        coffeeblack_vpn::db::get_interface().unwrap().header_protection_key,
         key,
         "re-enabling an already-enabled key must be a no-op"
     );
 
     // An explicit key wins over the toggle.
-    let explicit = awg_easy_rs::wg::awg3::generate_header_protection_key();
+    let explicit = coffeeblack_vpn::wg::cb3::generate_header_protection_key();
     let body = json!({ "headerProtectionKey": explicit });
     let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        awg_easy_rs::db::get_interface().unwrap().header_protection_key,
+        coffeeblack_vpn::db::get_interface().unwrap().header_protection_key,
         explicit
     );
 
@@ -1291,7 +1291,7 @@ async fn admin_interface_header_protection_key_round_trips_and_clears() {
     let body = json!({ "headerProtection": false });
     let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(awg_easy_rs::db::get_interface()
+    assert!(coffeeblack_vpn::db::get_interface()
         .unwrap()
         .header_protection_key
         .is_empty());
@@ -1299,7 +1299,7 @@ async fn admin_interface_header_protection_key_round_trips_and_clears() {
 
 #[tokio::test]
 #[serial(db)]
-async fn admin_interface_awg3_booleans_and_ranges_persist() {
+async fn admin_interface_cb3_booleans_and_ranges_persist() {
     seed();
     create_user("admin", "adminpass", 1);
     let app = router();
@@ -1333,7 +1333,7 @@ async fn admin_interface_awg3_booleans_and_ranges_persist() {
 
 #[tokio::test]
 #[serial(db)]
-async fn admin_interface_refuses_shape_changing_awg3_knobs_while_the_proxy_is_on() {
+async fn admin_interface_refuses_shape_changing_cb3_knobs_while_the_proxy_is_on() {
     seed();
     create_user("admin", "adminpass", 1);
     let app = router();
@@ -1343,9 +1343,9 @@ async fn admin_interface_refuses_shape_changing_awg3_knobs_while_the_proxy_is_on
     // DPI proxy rewrites exactly those bytes; random trailers break the
     // proxy's exact-length handshake classification. Both must bounce with
     // an explanation rather than producing a tunnel that passes no traffic.
-    let mut on = awg_easy_rs::db::UpdateMap::new();
+    let mut on = coffeeblack_vpn::db::UpdateMap::new();
     on.insert("enabled".into(), "1".into());
-    awg_easy_rs::db::update_proxy_settings(&on).unwrap();
+    coffeeblack_vpn::db::update_proxy_settings(&on).unwrap();
 
     let body = json!({ "s3": 20, "s4": 20, "headerProtection": true });
     let (status, resp) = post(&app, "/api/admin/interface", &cookie, &body).await;
@@ -1365,17 +1365,17 @@ async fn admin_interface_refuses_shape_changing_awg3_knobs_while_the_proxy_is_on
     // And the UI is told why, so it can disable the two controls instead of
     // letting the operator discover it by failing to save.
     let (_, resp) = get_req(&app, "/api/admin/interface", &cookie).await;
-    assert!(resp["awg3ProxyLock"].as_str().unwrap().contains("proxy"));
+    assert!(resp["cb3ProxyLock"].as_str().unwrap().contains("proxy"));
 
     // With the proxy off again they are accepted.
-    let mut off = awg_easy_rs::db::UpdateMap::new();
+    let mut off = coffeeblack_vpn::db::UpdateMap::new();
     off.insert("enabled".into(), "0".into());
-    awg_easy_rs::db::update_proxy_settings(&off).unwrap();
+    coffeeblack_vpn::db::update_proxy_settings(&off).unwrap();
     let body = json!({ "randomTrailers": true });
     let (status, _) = post(&app, "/api/admin/interface", &cookie, &body).await;
     assert_eq!(status, StatusCode::OK);
     let (_, resp) = get_req(&app, "/api/admin/interface", &cookie).await;
-    assert!(resp["awg3ProxyLock"].is_null());
+    assert!(resp["cb3ProxyLock"].is_null());
 }
 
 #[tokio::test]
@@ -1530,7 +1530,7 @@ async fn admin_can_toggle_advanced_security_off() {
     // loaded. CI runners (and this dev host) never have it, so pin Kernel
     // mode for this test. `#[serial(db)]` keeps the override from racing
     // other tests; restore it before returning.
-    use awg_easy_rs::wg::kernel::{set_mode_override, GamingMode};
+    use coffeeblack_vpn::wg::kernel::{set_mode_override, GamingMode};
     set_mode_override(Some(GamingMode::Kernel));
     let admin_id = create_user("admin", "adminpass", 1);
     let cid = create_client(Some(admin_id), "p1", "10.8.0.10");
@@ -1605,12 +1605,12 @@ async fn server_config_emits_advanced_security_for_each_peer() {
     let iface = db::get_interface().unwrap();
     let hooks = db::get_hooks().unwrap();
     let mut server_cfg =
-        awg_easy_rs::wg::config_gen::generate_server_interface(&iface, &hooks).unwrap();
+        coffeeblack_vpn::wg::config_gen::generate_server_interface(&iface, &hooks).unwrap();
     for client in db::get_all_clients().unwrap() {
         if client.enabled {
             server_cfg.push_str("\n\n");
             server_cfg.push_str(
-                &awg_easy_rs::wg::config_gen::generate_server_peer(&client).unwrap(),
+                &coffeeblack_vpn::wg::config_gen::generate_server_peer(&client).unwrap(),
             );
         }
     }
@@ -1642,7 +1642,7 @@ async fn client_config_always_marks_server_as_advanced() {
     let iface = db::get_interface().unwrap();
     let uc = db::get_user_config().unwrap();
     let c = db::get_client(cid).unwrap();
-    let cfg = awg_easy_rs::wg::config_gen::generate_client_config(&iface, &uc, &c).unwrap();
+    let cfg = coffeeblack_vpn::wg::config_gen::generate_client_config(&iface, &uc, &c).unwrap();
     // Pure-AmneziaWG: client-side [Peer] always marks the server as
     // advanced (default-on, kernel auto-detect would also work but we
     // make it explicit).
@@ -1748,15 +1748,15 @@ async fn cron_disables_expired_client() {
     let cid = create_client(Some(admin_id), "exp", "10.8.0.10");
 
     // Stamp an expiry one hour in the past, then run the expiry cron.
-    let past = awg_easy_rs::datetime::to_rfc3339(
-        awg_easy_rs::datetime::now_utc() - time::Duration::hours(1),
+    let past = coffeeblack_vpn::datetime::to_rfc3339(
+        coffeeblack_vpn::datetime::now_utc() - time::Duration::hours(1),
     );
     let mut f = db::UpdateMap::new();
     f.insert("expires_at".into(), past);
     db::update_client(cid, &f).unwrap();
     assert!(db::get_client(cid).unwrap().enabled);
 
-    awg_easy_rs::wg::cron_job().unwrap();
+    coffeeblack_vpn::wg::cron_job().unwrap();
     assert!(
         !db::get_client(cid).unwrap().enabled,
         "expired client should be disabled by the cron"
@@ -1770,13 +1770,13 @@ async fn cron_disables_expired_client() {
 /// Record `hits` ticks for a client on today's UTC day, into the in-memory
 /// activity store (the history never touches the DB — see `src/activity.rs`).
 fn seed_activity(client_id: i64, hits: usize, bytes_per_tick: i64) {
-    let day = awg_easy_rs::datetime::today_utc();
-    let now = awg_easy_rs::datetime::now_rfc3339();
+    let day = coffeeblack_vpn::datetime::today_utc();
+    let now = coffeeblack_vpn::datetime::now_rfc3339();
     for i in 0..hits {
-        awg_easy_rs::activity::record_samples(
+        coffeeblack_vpn::activity::record_samples(
             &day,
             &now,
-            &[awg_easy_rs::activity::ActivitySample {
+            &[coffeeblack_vpn::activity::ActivitySample {
                 client_id,
                 rx_total: bytes_per_tick * (i as i64 + 1),
                 tx_total: bytes_per_tick * (i as i64 + 1),
@@ -1787,9 +1787,9 @@ fn seed_activity(client_id: i64, hits: usize, bytes_per_tick: i64) {
 
 /// True if the store holds any day bucket at all.
 fn any_activity_recorded() -> bool {
-    awg_easy_rs::activity::client_ids()
+    coffeeblack_vpn::activity::client_ids()
         .into_iter()
-        .filter_map(awg_easy_rs::activity::client_activity)
+        .filter_map(coffeeblack_vpn::activity::client_activity)
         .any(|a| !a.days.is_empty())
 }
 
@@ -1817,7 +1817,7 @@ async fn heatmap_returns_aligned_series() {
 
     let days = body["days"].as_array().unwrap();
     assert_eq!(days.len(), 7);
-    assert_eq!(days[6].as_str().unwrap(), awg_easy_rs::datetime::today_utc());
+    assert_eq!(days[6].as_str().unwrap(), coffeeblack_vpn::datetime::today_utc());
 
     let clients = body["clients"].as_array().unwrap();
     assert_eq!(clients.len(), 1);
@@ -1920,7 +1920,7 @@ async fn activity_purge_is_admin_only() {
     let (status, _) = delete_req(&app, "/api/activity", &admin_cookie).await;
     assert_eq!(status, StatusCode::OK);
     assert!(!any_activity_recorded());
-    let recorded = awg_easy_rs::activity::client_activity(cid).unwrap_or_default();
+    let recorded = coffeeblack_vpn::activity::client_activity(cid).unwrap_or_default();
     assert_eq!(recorded.total_rx_bytes, 0);
     assert!(recorded.last_seen_at.is_none());
 }
@@ -2026,7 +2026,7 @@ async fn re_display_is_refused_when_the_key_was_not_retained() {
         let req = Request::builder()
             .method("GET")
             .uri(&path)
-            .header(header::COOKIE, format!("awg_session={cookie}"))
+            .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
             .body(Body::empty())
             .unwrap();
         let resp = app.clone().oneshot(req).await.unwrap();
@@ -2066,7 +2066,7 @@ async fn plaintext_mode_retains_and_re_displays() {
         let req = Request::builder()
             .method("GET")
             .uri(&path)
-            .header(header::COOKIE, format!("awg_session={cookie}"))
+            .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
             .body(Body::empty())
             .unwrap();
         assert_eq!(
@@ -2244,21 +2244,21 @@ async fn retention_mode_is_validated() {
 
 /// Fetch a path and return its response headers.
 async fn headers_for(
-    app: &awg_easy_rs::http::Router,
+    app: &coffeeblack_vpn::http::Router,
     path: &str,
     cookie: &str,
-) -> (StatusCode, awg_easy_rs::http::HeaderMap) {
+) -> (StatusCode, coffeeblack_vpn::http::HeaderMap) {
     let req = Request::builder()
         .method("GET")
         .uri(path)
-        .header(header::COOKIE, format!("awg_session={cookie}"))
+        .header(header::COOKIE, format!("coffeeblack_session={cookie}"))
         .body(Body::empty())
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     (resp.status(), resp.headers().clone())
 }
 
-fn assert_no_store(headers: &awg_easy_rs::http::HeaderMap, path: &str) {
+fn assert_no_store(headers: &coffeeblack_vpn::http::HeaderMap, path: &str) {
     let cc = headers
         .get(header::CACHE_CONTROL)
         .unwrap_or_else(|| panic!("{path}: no Cache-Control header"))

@@ -2,7 +2,7 @@
 
 mod common;
 
-use awg_easy_rs::{db, init_setup};
+use coffeeblack_vpn::{db, init_setup};
 use serial_test::serial;
 
 fn params<'a>(

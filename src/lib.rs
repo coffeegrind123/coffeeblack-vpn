@@ -1,4 +1,4 @@
-//! awg-easy-rs — Standalone AmneziaWG VPN manager with Web UI.
+//! coffeeblack-vpn — Standalone AmneziaWG VPN manager with Web UI.
 //!
 //! This library crate exposes all modules for both the binary and integration
 //! tests.

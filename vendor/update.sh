@@ -130,7 +130,7 @@ main() {
 
     require_cmd curl gzip sha256sum file tar
 
-    WORK_DIR="$(mktemp -d -t awg-easy-rs-vendor-XXXXXX)"
+    WORK_DIR="$(mktemp -d -t coffeeblack-vpn-vendor-XXXXXX)"
     log "work dir: $WORK_DIR"
 
     case "$binary" in
@@ -529,7 +529,7 @@ strip src/app/tor
 # clean shutdown on docker rm -f.
 exec sleep infinity
 "
-    docker_build_to_file alpine:3.20 "awg-tor-build-$$" "$script" \
+    docker_build_to_file alpine:3.20 "coffeeblack-tor-build-$$" "$script" \
         "/tmp/tor-${version}/src/app/tor" "$WORK_DIR/tor"
 
     verify_static "$WORK_DIR/tor" "tor"

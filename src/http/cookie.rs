@@ -300,16 +300,16 @@ mod tests {
 
     #[test]
     fn parses_a_single_pair() {
-        let jar = jar_with("awg_session=abc123");
-        assert_eq!(jar.get("awg_session").unwrap().value(), "abc123");
+        let jar = jar_with("coffeeblack_session=abc123");
+        assert_eq!(jar.get("coffeeblack_session").unwrap().value(), "abc123");
         assert!(jar.get("other").is_none());
     }
 
     #[test]
     fn parses_multiple_pairs_and_trims_whitespace() {
-        let jar = jar_with("a=1; awg_session=tok ;b=2");
+        let jar = jar_with("a=1; coffeeblack_session=tok ;b=2");
         assert_eq!(jar.get("a").unwrap().value(), "1");
-        assert_eq!(jar.get("awg_session").unwrap().value(), "tok");
+        assert_eq!(jar.get("coffeeblack_session").unwrap().value(), "tok");
         assert_eq!(jar.get("b").unwrap().value(), "2");
     }
 
@@ -323,8 +323,8 @@ mod tests {
 
     #[test]
     fn unquotes_values() {
-        let jar = jar_with("awg_session=\"quoted\"");
-        assert_eq!(jar.get("awg_session").unwrap().value(), "quoted");
+        let jar = jar_with("coffeeblack_session=\"quoted\"");
+        assert_eq!(jar.get("coffeeblack_session").unwrap().value(), "quoted");
     }
 
     #[test]
@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn added_cookie_renders_every_attribute() {
         let jar = CookieJar::default().add(
-            Cookie::build(("awg_session", "tok"))
+            Cookie::build(("coffeeblack_session", "tok"))
                 .path("/")
                 .http_only(true)
                 .secure(true)
@@ -351,7 +351,7 @@ mod tests {
         let values = set_cookie_values(&jar);
         assert_eq!(values.len(), 1);
         let v = &values[0];
-        assert!(v.starts_with("awg_session=tok"), "{v}");
+        assert!(v.starts_with("coffeeblack_session=tok"), "{v}");
         assert!(v.contains("; Path=/"), "{v}");
         assert!(v.contains("; Max-Age=2592000"), "{v}");
         assert!(v.contains("; HttpOnly"), "{v}");
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn a_session_cookie_omits_max_age() {
         let jar = CookieJar::default().add(
-            Cookie::build(("awg_session", "tok"))
+            Cookie::build(("coffeeblack_session", "tok"))
                 .path("/")
                 .http_only(true)
                 .secure(false)
@@ -376,14 +376,14 @@ mod tests {
 
     #[test]
     fn removal_expires_the_cookie_on_the_right_path() {
-        let jar = jar_with("awg_session=tok").remove(Cookie::from("awg_session"));
+        let jar = jar_with("coffeeblack_session=tok").remove(Cookie::from("coffeeblack_session"));
         let v = &set_cookie_values(&jar)[0];
-        assert!(v.starts_with("awg_session=;"), "{v}");
+        assert!(v.starts_with("coffeeblack_session=;"), "{v}");
         assert!(v.contains("Path=/"), "{v}");
         assert!(v.contains("Max-Age=0"), "{v}");
         assert!(v.contains("Expires=Thu, 01 Jan 1970"), "{v}");
         // And the jar itself no longer reports the cookie.
-        assert!(jar.get("awg_session").is_none());
+        assert!(jar.get("coffeeblack_session").is_none());
     }
 
     #[test]
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn incoming_cookies_are_not_echoed_back() {
-        let jar = jar_with("awg_session=tok; other=1");
+        let jar = jar_with("coffeeblack_session=tok; other=1");
         assert!(set_cookie_values(&jar).is_empty());
     }
 }

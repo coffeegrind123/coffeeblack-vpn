@@ -56,7 +56,7 @@ extractor to detect cache-staleness) is recorded in `XRAY_VERSION`.
 
 Xray-core is distributed under the
 [Mozilla Public License 2.0](https://github.com/XTLS/Xray-core/blob/main/LICENSE).
-Redistribution of the binary as part of awg-easy-rs is permitted under
+Redistribution of the binary as part of coffeeblack-vpn is permitted under
 MPL-2.0 §3.3 — the upstream source remains available at
 <https://github.com/XTLS/Xray-core/tree/v26.3.27>.
 
@@ -120,7 +120,7 @@ For each binary the script:
    out-of-band verification.
 3. Confirms the resulting ELF is fully static (`file` reports
    `statically linked` or `static-pie`, no dynamic interpreter).
-   Aborts if anything is dynamically linked — `awg-easy-rs` is
+   Aborts if anything is dynamically linked — `coffeeblack-vpn` is
    distro-agnostic and a non-static dependency would regress that.
 4. SHA-256-hashes the uncompressed ELF, gzips at level 9 into
    `vendor/<name>-linux-amd64.gz`.
@@ -234,7 +234,7 @@ The bundle is opt-in at runtime. Even with `cfg(dns_bundled)` set:
 | `webtunnel` | BSD-3-Clause |
 
 All five are permissive licenses that allow redistribution of the
-unmodified binary as part of awg-easy-rs.
+unmodified binary as part of coffeeblack-vpn.
 
 ---
 
@@ -260,7 +260,7 @@ extracted from the tarball and re-compressed with `gzip -9`.
 Decompressed-ELF SHA-256 (used by the runtime extractor to detect
 cache-staleness): `a284ffe3df5d2fd23f96ba52aebc4e08529dda92add9fecedffd58cf8c85731e` — recorded in `TELEMT_VERSION`.
 
-The 3.4 → 3.5 bump was checked against the control plane awg-easy-rs
+The 3.4 → 3.5 bump was checked against the control plane coffeeblack-vpn
 actually drives, not just the changelog: the generated `config.toml` was
 loaded by the 3.5.5 binary and every endpoint in `src/mtproxy/client.rs`
 (`/v1/health`, user create/read/patch/delete, `rotate-secret`,
@@ -276,7 +276,7 @@ Apache-License-2.0–derived permissive license. The full text is mirrored
 at [`vendor/LICENSES/TELEMT-LICENSE.md`](LICENSES/TELEMT-LICENSE.md);
 upstream copy at <https://github.com/telemt/telemt/blob/main/LICENSE>.
 
-Redistribution of the unmodified binary as part of awg-easy-rs is
+Redistribution of the unmodified binary as part of coffeeblack-vpn is
 permitted under the TPL 3, provided that all copyright notices, license
 terms, and conditions in the License are preserved — `vendor/LICENSES/`
 is exactly that preservation.
@@ -341,7 +341,7 @@ circumvention is opt-in, never on out of the box.
 MasterDnsVPN is distributed under the **MIT License**. The full text is
 mirrored at [`vendor/LICENSES/MDNSVPN-LICENSE.md`](LICENSES/MDNSVPN-LICENSE.md);
 upstream copy at <https://github.com/masterking32/MasterDnsVPN/blob/main/LICENSE>.
-Redistribution of the unmodified (modulo strip) binary as part of awg-easy-rs is
+Redistribution of the unmodified (modulo strip) binary as part of coffeeblack-vpn is
 permitted under the MIT terms, provided the copyright notice and license remain
 preserved — `vendor/LICENSES/MDNSVPN-LICENSE.md` is exactly that preservation.
 

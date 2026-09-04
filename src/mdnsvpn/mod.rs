@@ -9,7 +9,7 @@
 //! decrypts, reassembles, and forwards the inner TCP either directly (acting
 //! as a SOCKS5 proxy) or to a fixed upstream (`PROTOCOL_TYPE = TCP`).
 //!
-//! awg-easy-rs ships a pinned static ELF (vendored at build time, see
+//! coffeeblack-vpn ships a pinned static ELF (vendored at build time, see
 //! `vendor/`) and supervises it the same way Xray and telemt are
 //! supervised — Rust never speaks the DNS-tunnel wire protocol itself.
 //!
@@ -30,7 +30,7 @@
 //! * `supervisor` — own the mdnsvpn child process. No HTTP control plane
 //!   to reconcile (mdnsvpn has no live API for users — every client
 //!   shares the singleton encryption key, so changing the user roster
-//!   is purely awg-easy-rs DB bookkeeping).
+//!   is purely coffeeblack-vpn DB bookkeeping).
 //!
 //! ## Default posture
 //!
@@ -51,7 +51,7 @@
 //! ## User store of record
 //!
 //! `mdnsvpn_clients_table` is the durable source of truth for the
-//! client list — but unlike telemt, awg-easy-rs has no API to
+//! client list — but unlike telemt, coffeeblack-vpn has no API to
 //! reconcile this into the mdnsvpn process. mdnsvpn doesn't track
 //! per-user secrets; the singleton `encryption_key` authenticates every
 //! tunnel. Per-client rows are pure UX state (share-link slot, expiry,
@@ -71,11 +71,11 @@ pub mod supervisor;
 /// Embedded MasterDnsVPN release tag, surfaced via `vendor/MDNSVPN_VERSION`.
 /// Always populated (even on un-bundled builds) so `/about` and the admin
 /// UI can show what would have shipped.
-pub const MDNSVPN_VERSION: &str = env!("AWG_EASY_MDNSVPN_VERSION");
+pub const MDNSVPN_VERSION: &str = env!("COFFEEBLACK_MDNSVPN_VERSION");
 
 /// SHA-256 of the *uncompressed* MasterDnsVPN ELF, surfaced via
 /// `vendor/MDNSVPN_VERSION`. Blank on un-bundled targets.
-pub const MDNSVPN_SHA256: &str = env!("AWG_EASY_MDNSVPN_SHA256");
+pub const MDNSVPN_SHA256: &str = env!("COFFEEBLACK_MDNSVPN_SHA256");
 
 /// True when the build embedded the mdnsvpn ELF for the current
 /// architecture. False on unsupported targets — the admin UI uses this

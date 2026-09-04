@@ -46,8 +46,8 @@ fn expand(template: &str, device: &str, port: &str, v4: &str, v6: &str) -> Strin
 /// nothing at all when no AWG 3 knob is set, which is the default — an
 /// upgraded deployment renders byte-identical configs until an operator
 /// turns one on.
-fn awg3_lines(iface: &db::Interface) -> Vec<String> {
-    crate::wg::awg3::config_lines(
+fn cb3_lines(iface: &db::Interface) -> Vec<String> {
+    crate::wg::cb3::config_lines(
         &iface.header_protection_key,
         &[
             ("ContentPaddingAddition", &iface.content_padding_addition),
@@ -73,25 +73,25 @@ pub fn generate_server_interface(iface: &db::Interface, hooks: &db::Hooks) -> Re
         format!("{}, {}", v4, v6)
     };
 
-    let mut awg = vec![
+    let mut cb = vec![
         format!("Jc = {}", iface.j_c),
         format!("Jmin = {}", iface.j_min),
         format!("Jmax = {}", iface.j_max),
         format!("S1 = {}", iface.s1),
         format!("S2 = {}", iface.s2),
     ];
-    if let Some(v) = iface.s3 { if v > 0 { awg.push(format!("S3 = {}", v)); } }
-    if let Some(v) = iface.s4 { if v > 0 { awg.push(format!("S4 = {}", v)); } }
-    if !iface.h1.is_empty() { awg.push(format!("H1 = {}", iface.h1)); }
-    if !iface.h2.is_empty() { awg.push(format!("H2 = {}", iface.h2)); }
-    if !iface.h3.is_empty() { awg.push(format!("H3 = {}", iface.h3)); }
-    if !iface.h4.is_empty() { awg.push(format!("H4 = {}", iface.h4)); }
-    if !iface.i1.is_empty() { awg.push(format!("I1 = {}", iface.i1)); }
-    if !iface.i2.is_empty() { awg.push(format!("I2 = {}", iface.i2)); }
-    if !iface.i3.is_empty() { awg.push(format!("I3 = {}", iface.i3)); }
-    if !iface.i4.is_empty() { awg.push(format!("I4 = {}", iface.i4)); }
-    if !iface.i5.is_empty() { awg.push(format!("I5 = {}", iface.i5)); }
-    awg.extend(awg3_lines(iface));
+    if let Some(v) = iface.s3 { if v > 0 { cb.push(format!("S3 = {}", v)); } }
+    if let Some(v) = iface.s4 { if v > 0 { cb.push(format!("S4 = {}", v)); } }
+    if !iface.h1.is_empty() { cb.push(format!("H1 = {}", iface.h1)); }
+    if !iface.h2.is_empty() { cb.push(format!("H2 = {}", iface.h2)); }
+    if !iface.h3.is_empty() { cb.push(format!("H3 = {}", iface.h3)); }
+    if !iface.h4.is_empty() { cb.push(format!("H4 = {}", iface.h4)); }
+    if !iface.i1.is_empty() { cb.push(format!("I1 = {}", iface.i1)); }
+    if !iface.i2.is_empty() { cb.push(format!("I2 = {}", iface.i2)); }
+    if !iface.i3.is_empty() { cb.push(format!("I3 = {}", iface.i3)); }
+    if !iface.i4.is_empty() { cb.push(format!("I4 = {}", iface.i4)); }
+    if !iface.i5.is_empty() { cb.push(format!("I5 = {}", iface.i5)); }
+    cb.extend(cb3_lines(iface));
 
     // Free-form append (mirrors amnezia-client's additionalServerConfig).
     // Lives at the bottom of the [Interface] block, just before [Peer]s
@@ -136,12 +136,12 @@ pub fn generate_server_interface(iface: &db::Interface, hooks: &db::Hooks) -> Re
          Address = {addr}\n\
          ListenPort = {port}\n\
          MTU = {mtu}\n\
-         {awg}{hooks}{extra}",
+         {cb_lines}{hooks}{extra}",
         pk = iface.private_key,
         addr = addr,
         port = iface.port,
         mtu = iface.mtu,
-        awg = awg.join("\n"),
+        cb_lines = cb.join("\n"),
         hooks = hooks_block,
         extra = extra_block,
     ))
@@ -240,32 +240,32 @@ pub fn generate_client_config(
     let jmin = client.j_min.unwrap_or(iface.j_min);
     let jmax = client.j_max.unwrap_or(iface.j_max);
 
-    let mut awg = vec![
+    let mut cb = vec![
         format!("Jc = {}", jc),
         format!("Jmin = {}", jmin),
         format!("Jmax = {}", jmax),
         format!("S1 = {}", iface.s1),
         format!("S2 = {}", iface.s2),
     ];
-    if let Some(v) = iface.s3 { if v > 0 { awg.push(format!("S3 = {}", v)); } }
-    if let Some(v) = iface.s4 { if v > 0 { awg.push(format!("S4 = {}", v)); } }
-    if !iface.h1.is_empty() { awg.push(format!("H1 = {}", iface.h1)); }
-    if !iface.h2.is_empty() { awg.push(format!("H2 = {}", iface.h2)); }
-    if !iface.h3.is_empty() { awg.push(format!("H3 = {}", iface.h3)); }
-    if !iface.h4.is_empty() { awg.push(format!("H4 = {}", iface.h4)); }
+    if let Some(v) = iface.s3 { if v > 0 { cb.push(format!("S3 = {}", v)); } }
+    if let Some(v) = iface.s4 { if v > 0 { cb.push(format!("S4 = {}", v)); } }
+    if !iface.h1.is_empty() { cb.push(format!("H1 = {}", iface.h1)); }
+    if !iface.h2.is_empty() { cb.push(format!("H2 = {}", iface.h2)); }
+    if !iface.h3.is_empty() { cb.push(format!("H3 = {}", iface.h3)); }
+    if !iface.h4.is_empty() { cb.push(format!("H4 = {}", iface.h4)); }
 
-    if let Some(ref s) = client.i1 { if !s.is_empty() { awg.push(format!("I1 = {}", s)); } }
-    if let Some(ref s) = client.i2 { if !s.is_empty() { awg.push(format!("I2 = {}", s)); } }
-    if let Some(ref s) = client.i3 { if !s.is_empty() { awg.push(format!("I3 = {}", s)); } }
-    if let Some(ref s) = client.i4 { if !s.is_empty() { awg.push(format!("I4 = {}", s)); } }
-    if let Some(ref s) = client.i5 { if !s.is_empty() { awg.push(format!("I5 = {}", s)); } }
+    if let Some(ref s) = client.i1 { if !s.is_empty() { cb.push(format!("I1 = {}", s)); } }
+    if let Some(ref s) = client.i2 { if !s.is_empty() { cb.push(format!("I2 = {}", s)); } }
+    if let Some(ref s) = client.i3 { if !s.is_empty() { cb.push(format!("I3 = {}", s)); } }
+    if let Some(ref s) = client.i4 { if !s.is_empty() { cb.push(format!("I4 = {}", s)); } }
+    if let Some(ref s) = client.i5 { if !s.is_empty() { cb.push(format!("I5 = {}", s)); } }
     // AWG 3 device knobs are rendered from the interface for the client too.
     // `HeaderProtectionKey` has to match on both ends or nothing decrypts;
     // `ContentPaddingAddition` is documented as best set on both; and the
     // timers are the operator's intent for the tunnel as a whole, so a peer
     // that silently kept protocol defaults would drift from the server's
     // rekey schedule. There is no per-client override for any of them.
-    awg.extend(awg3_lines(iface));
+    cb.extend(cb3_lines(iface));
     // J1/J2/J3/Itime intentionally not emitted — see note in
     // generate_server_interface() above.
 
@@ -298,7 +298,7 @@ pub fn generate_client_config(
          Address = {addr}\n\
          MTU = {mtu}{dns}\n\
          {hooks}\
-         {awg}{extra_iface}\n\
+         {cb_lines}{extra_iface}\n\
          [Peer]\n\
          PublicKey = {srv_pubkey}\n\
          PresharedKey = {psk}\n\
@@ -310,7 +310,7 @@ pub fn generate_client_config(
         mtu = client.mtu,
         dns = dns_line,
         hooks = if hooks.is_empty() { String::new() } else { format!("{}\n", hooks.join("\n")) },
-        awg = awg.join("\n"),
+        cb_lines = cb.join("\n"),
         extra_iface = extra_iface,
         srv_pubkey = iface.public_key,
         psk = psk,
@@ -329,7 +329,7 @@ mod tests {
 
     fn iface_fixture() -> db::Interface {
         db::Interface {
-            name: "awg0".into(),
+            name: "cb0".into(),
             device: "eth0".into(),
             port: 51820,
             private_key: "SRV_PRIV".into(),
@@ -370,11 +370,11 @@ mod tests {
     /// are omitted from the rendered config entirely.
     fn hooks_fixture() -> db::Hooks {
         db::Hooks {
-            id: "awg0".into(),
+            id: "cb0".into(),
             pre_up: String::new(),
-            post_up: "nft add table inet awg-easy-rs".into(),
+            post_up: "nft add table inet coffeeblack".into(),
             pre_down: String::new(),
-            post_down: "nft delete table inet awg-easy-rs".into(),
+            post_down: "nft delete table inet coffeeblack".into(),
             created_at: "now".into(),
             updated_at: "now".into(),
         }
@@ -393,7 +393,7 @@ mod tests {
 
     fn user_config_fixture() -> db::UserConfig {
         db::UserConfig {
-            id: "awg0".into(),
+            id: "cb0".into(),
             default_mtu: 1420,
             default_persistent_keepalive: 25,
             default_dns: r#"["1.1.1.1"]"#.into(),
@@ -412,7 +412,7 @@ mod tests {
         db::Client {
             id: 1,
             user_id: None,
-            interface_id: Some("awg0".into()),
+            interface_id: Some("cb0".into()),
             name: "alice".into(),
             ipv4_address: Some("10.8.0.2".into()),
             ipv6_address: Some("fdcc::cafe:2".into()),
@@ -465,9 +465,9 @@ mod tests {
     #[test]
     fn server_interface_emits_only_the_hooks_that_have_commands() {
         let mut hooks = empty_hooks_fixture();
-        hooks.post_up = "nft add table inet awg-easy-rs".into();
+        hooks.post_up = "nft add table inet coffeeblack".into();
         let cfg = generate_server_interface(&iface_fixture(), &hooks).unwrap();
-        assert!(cfg.contains("PostUp = nft add table inet awg-easy-rs"));
+        assert!(cfg.contains("PostUp = nft add table inet coffeeblack"));
         for key in ["PreUp", "PreDown", "PostDown"] {
             assert!(!cfg.contains(key), "{key} should be omitted:\n{cfg}");
         }
@@ -490,7 +490,7 @@ mod tests {
 
     /// Set every AWG 3 knob on a fixture, with S1-S4 legal for header
     /// protection.
-    fn awg3_iface() -> db::Interface {
+    fn cb3_iface() -> db::Interface {
         let mut i = iface_fixture();
         i.s3 = Some(20);
         i.s4 = Some(20);
@@ -507,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn awg3_emits_nothing_when_unset() {
+    fn cb3_emits_nothing_when_unset() {
         // The default fixture has no AWG 3 field set — the whole feature has
         // to be invisible in the rendered config, or every existing
         // deployment's wire format changes on upgrade.
@@ -537,8 +537,8 @@ mod tests {
     }
 
     #[test]
-    fn awg3_server_config_renders_every_set_knob() {
-        let conf = generate_server_interface(&awg3_iface(), &hooks_fixture()).unwrap();
+    fn cb3_server_config_renders_every_set_knob() {
+        let conf = generate_server_interface(&cb3_iface(), &hooks_fixture()).unwrap();
         for line in [
             "HeaderProtectionKey = aGVhZGVyLXByb3RlY3Rpb24ta2V5LTMyLWJ5dGVzISE=",
             "ContentPaddingAddition = 10-40",
@@ -560,12 +560,12 @@ mod tests {
     }
 
     #[test]
-    fn awg3_client_config_carries_the_same_device_values() {
+    fn cb3_client_config_carries_the_same_device_values() {
         // HeaderProtectionKey has to match on both ends or nothing
         // decrypts, so a client config that omitted it would hand the
         // operator a peer that silently never connects.
         let conf = generate_client_config(
-            &awg3_iface(),
+            &cb3_iface(),
             &user_config_fixture(),
             &client_fixture(),
         )
@@ -586,11 +586,11 @@ mod tests {
     }
 
     #[test]
-    fn awg3_off_switches_render_no_line_at_all() {
+    fn cb3_off_switches_render_no_line_at_all() {
         // `RandomTrailers = off` is the device default. Emitting it would
         // change nothing on AWG 3 and abort interface bring-up on AWG 2,
         // so an off switch has to be silent rather than explicit.
-        let mut i = awg3_iface();
+        let mut i = cb3_iface();
         i.random_trailers = false;
         i.disable_cookies = false;
         let conf = generate_server_interface(&i, &hooks_fixture()).unwrap();

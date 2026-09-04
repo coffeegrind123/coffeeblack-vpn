@@ -31,7 +31,7 @@ pub struct Config {
     pub xray_dir: String,
     /// Operator escape hatch: when set, the Xray supervisor uses this path
     /// instead of extracting the bundled binary. Lets advanced operators
-    /// track upstream Xray independently of awg-easy-rs releases.
+    /// track upstream Xray independently of coffeeblack-vpn releases.
     pub xray_binary_override: Option<String>,
     /// Directory where the bundled DNS-stack ELFs (dnscrypt-proxy, tor,
     /// lyrebird, snowflake, webtunnel) are extracted, plus generated
@@ -136,24 +136,24 @@ impl Config {
                     .collect()
             });
 
-        let db_path = get_env("WG_EASY_DB_PATH", "/etc/wireguard/wg-easy.db");
-        let wg_conf_dir = get_env("WG_EASY_CONF_DIR", "/etc/wireguard");
+        let db_path = get_env("COFFEEBLACK_DB_PATH", "/etc/coffeeblack/conf/coffeeblack.db");
+        let wg_conf_dir = get_env("COFFEEBLACK_CONF_DIR", "/etc/coffeeblack/conf");
         let xray_dir =
-            env::var("WG_EASY_XRAY_DIR").unwrap_or_else(|_| format!("{}/xray", wg_conf_dir));
+            env::var("COFFEEBLACK_XRAY_DIR").unwrap_or_else(|_| format!("{}/xray", wg_conf_dir));
         let xray_binary_override = env::var("XRAY_BIN_PATH").ok().filter(|s| !s.is_empty());
         let dns_dir =
-            env::var("WG_EASY_DNS_DIR").unwrap_or_else(|_| format!("{}/dns", wg_conf_dir));
-        let mtproxy_dir = env::var("WG_EASY_MTPROXY_DIR")
+            env::var("COFFEEBLACK_DNS_DIR").unwrap_or_else(|_| format!("{}/dns", wg_conf_dir));
+        let mtproxy_dir = env::var("COFFEEBLACK_MTPROXY_DIR")
             .unwrap_or_else(|_| format!("{}/mtproxy", wg_conf_dir));
-        let mdnsvpn_dir = env::var("WG_EASY_MDNSVPN_DIR")
+        let mdnsvpn_dir = env::var("COFFEEBLACK_MDNSVPN_DIR")
             .unwrap_or_else(|_| format!("{}/mdnsvpn", wg_conf_dir));
 
         // Default ON: the data plane is RAM-resident unless the operator
         // explicitly opts back into a durable on-disk database with
         // IN_MEMORY=false.
         let in_memory = get_env("IN_MEMORY", "true").to_lowercase() != "false";
-        let persist_db_path = env::var("WG_EASY_PERSIST_DB").ok().filter(|s| !s.is_empty());
-        let persist_interval_secs = env::var("WG_EASY_PERSIST_INTERVAL")
+        let persist_db_path = env::var("COFFEEBLACK_PERSIST_DB").ok().filter(|s| !s.is_empty());
+        let persist_interval_secs = env::var("COFFEEBLACK_PERSIST_INTERVAL")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(30);

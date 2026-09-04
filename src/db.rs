@@ -513,7 +513,7 @@ pub struct QqdnsSettings {
     pub h_in_address: String,
     /// AmneziaWG UDP port decoded traffic is delivered to on loopback. `0` =
     /// auto (the interface's own `ListenPort`).
-    pub awg_target_port: i64,
+    pub cb_target_port: i64,
     /// Max final domain length without trailing dot (≤253). Set to the lowest
     /// value all listed resolvers tolerate.
     pub max_domain_len: i64,
@@ -647,7 +647,7 @@ pub struct MtproxyInbound {
 
 /// One MTProxy user. `username` is the key telemt's HTTP API uses;
 /// `secret_hex` is the 32-character lowercase-hex secret that becomes
-/// the `ee<…>` link suffix. Awg-easy-rs is the durable source of truth;
+/// the `ee<…>` link suffix. Coffeeblack-vpn is the durable source of truth;
 /// the supervisor reconciles this table into telemt via `POST /v1/users`
 /// on startup, so a telemt state-file wipe doesn't lose the operator's
 /// roster.
@@ -751,7 +751,7 @@ pub struct MdnsvpnInbound {
 }
 
 /// One MasterDnsVPN client (peer). Bookkeeping for the share-link UX —
-/// awg-easy-rs maintains the per-client roster so the admin UI can show
+/// coffeeblack-vpn maintains the per-client roster so the admin UI can show
 /// "expires", "enabled", and stable download URLs even though MasterDnsVPN
 /// itself has no per-user concept (every client uses the singleton
 /// `encryption_key`).
@@ -1249,7 +1249,7 @@ impl QqdnsSettings {
             receive_interface_ip: row.get("receive_interface_ip")?,
             receive_port: row.get("receive_port")?,
             h_in_address: row.get("h_in_address")?,
-            awg_target_port: row.get("awg_target_port")?,
+            cb_target_port: row.get("cb_target_port")?,
             max_domain_len: row.get("max_domain_len")?,
             max_sub_len: row.get("max_sub_len")?,
             retries: row.get("retries")?,
@@ -1482,7 +1482,7 @@ CREATE TABLE IF NOT EXISTS clients_table (
     -- here. Per-peer connection history never enters the schema, because
     -- everything in the schema is written to disk when `IN_MEMORY=false`,
     -- and is copied verbatim into the durable snapshot when
-    -- `WG_EASY_PERSIST_DB` is set. That history lives in process memory
+    -- `COFFEEBLACK_PERSIST_DB` is set. That history lives in process memory
     -- only — see `src/activity.rs`.
     created_at          TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1666,7 +1666,7 @@ CREATE TABLE IF NOT EXISTS qqdns_settings_table (
     receive_interface_ip        TEXT NOT NULL DEFAULT '0.0.0.0',
     receive_port                INTEGER NOT NULL DEFAULT 53,
     h_in_address                TEXT NOT NULL DEFAULT '127.0.0.1:10443',
-    awg_target_port             INTEGER NOT NULL DEFAULT 0,
+    cb_target_port             INTEGER NOT NULL DEFAULT 0,
     max_domain_len              INTEGER NOT NULL DEFAULT 253,
     max_sub_len                 INTEGER NOT NULL DEFAULT 63,
     retries                     INTEGER NOT NULL DEFAULT 1,
@@ -1835,7 +1835,7 @@ CREATE TABLE IF NOT EXISTS mdnsvpn_clients_table (
 // Hook templates
 // ---------------------------------------------------------------------------
 
-// Native nftables hooks. All rules live inside one `inet awg-easy-rs`
+// Native nftables hooks. All rules live inside one `inet coffeeblack`
 // table so PostDown can wipe everything atomically with a single
 // `nft delete table`. Per-client filtering rules go into the empty
 // `wg-clients` chain — those are populated separately by `firewall.rs`
@@ -1847,14 +1847,14 @@ CREATE TABLE IF NOT EXISTS mdnsvpn_clients_table (
 // accept rules or the final `drop`, and only returns to forward (and
 // thus the accept policy) for explicitly-allowed flows.
 pub(crate) const POST_UP_TEMPLATE: &str = concat!(
-    "nft add table inet awg-easy-rs;",
-    " nft 'add chain inet awg-easy-rs forward { type filter hook forward priority filter; policy accept; }';",
-    " nft 'add chain inet awg-easy-rs nat-postrouting { type nat hook postrouting priority srcnat; }';",
-    " nft 'add chain inet awg-easy-rs filter-input { type filter hook input priority filter; policy accept; }';",
-    " nft 'add chain inet awg-easy-rs wg-clients';",
-    " nft add rule inet awg-easy-rs nat-postrouting ip saddr {{ipv4Cidr}} oifname \"{{device}}\" masquerade;",
-    " nft add rule inet awg-easy-rs nat-postrouting ip6 saddr {{ipv6Cidr}} oifname \"{{device}}\" masquerade;",
-    " nft add rule inet awg-easy-rs filter-input udp dport {{port}} accept;",
+    "nft add table inet coffeeblack;",
+    " nft 'add chain inet coffeeblack forward { type filter hook forward priority filter; policy accept; }';",
+    " nft 'add chain inet coffeeblack nat-postrouting { type nat hook postrouting priority srcnat; }';",
+    " nft 'add chain inet coffeeblack filter-input { type filter hook input priority filter; policy accept; }';",
+    " nft 'add chain inet coffeeblack wg-clients';",
+    " nft add rule inet coffeeblack nat-postrouting ip saddr {{ipv4Cidr}} oifname \"{{device}}\" masquerade;",
+    " nft add rule inet coffeeblack nat-postrouting ip6 saddr {{ipv6Cidr}} oifname \"{{device}}\" masquerade;",
+    " nft add rule inet coffeeblack filter-input udp dport {{port}} accept;",
 );
 
 // One-line teardown: deleting the table atomically removes every chain
@@ -1863,7 +1863,7 @@ pub(crate) const POST_UP_TEMPLATE: &str = concat!(
 // from aborting interface bring-down if the table is already gone
 // (e.g. after a host reboot where state is lost but PostDown still runs).
 pub(crate) const POST_DOWN_TEMPLATE: &str =
-    "nft delete table inet awg-easy-rs 2>/dev/null || true";
+    "nft delete table inet coffeeblack 2>/dev/null || true";
 
 // ---------------------------------------------------------------------------
 // Initialisation
@@ -1893,7 +1893,7 @@ fn create_tables(conn: &Connection) -> Result<()> {
 }
 
 /// Apply additive schema migrations needed for upgrading from an older
-/// awg-easy-rs / awg-easy DB. Each migration is idempotent — checking column
+/// coffeeblack-vpn / awg-easy DB. Each migration is idempotent — checking column
 /// existence via `PRAGMA table_info` before issuing ALTER TABLE.
 fn apply_migrations(conn: &Connection) -> Result<()> {
     if !column_exists(conn, "clients_table", "advanced_security")? {
@@ -2069,14 +2069,14 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
     let needs_nft_hooks: bool = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM hooks_table \
-             WHERE id = 'awg0' AND post_up LIKE '%iptables%')",
+             WHERE id = 'cb0' AND post_up LIKE '%iptables%')",
             [],
             |r| r.get::<_, i64>(0).map(|v| v != 0),
         )
         .unwrap_or(false);
     if needs_nft_hooks {
         conn.execute(
-            "UPDATE hooks_table SET post_up = ?1, post_down = ?2 WHERE id = 'awg0'",
+            "UPDATE hooks_table SET post_up = ?1, post_down = ?2 WHERE id = 'cb0'",
             params![POST_UP_TEMPLATE, POST_DOWN_TEMPLATE],
         )?;
         crate::info!(
@@ -2285,7 +2285,7 @@ fn seed_if_empty(conn: &Connection) -> Result<()> {
          (name, device, port, private_key, public_key, ipv4_cidr, ipv6_cidr, mtu, enabled) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
-            "awg0",
+            "cb0",
             "eth0",
             51820,
             "---default---",
@@ -2313,7 +2313,7 @@ fn seed_if_empty(conn: &Connection) -> Result<()> {
         "INSERT OR IGNORE INTO hooks_table \
          (id, pre_up, post_up, pre_down, post_down) \
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        params!["awg0", "", POST_UP_TEMPLATE, "", POST_DOWN_TEMPLATE],
+        params!["cb0", "", POST_UP_TEMPLATE, "", POST_DOWN_TEMPLATE],
     )?;
 
     // user_configs_table default
@@ -2322,7 +2322,7 @@ fn seed_if_empty(conn: &Connection) -> Result<()> {
          (id, default_mtu, default_persistent_keepalive, default_dns, default_allowed_ips, host, port) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
-            "awg0",
+            "cb0",
             1420,
             0,
             r#"["1.1.1.1","2606:4700:4700::1111"]"#,
@@ -2435,7 +2435,7 @@ pub fn init_db() -> Result<()> {
 }
 
 /// Open the database purely in RAM (`:memory:`) so no query ever touches a
-/// block device. When `WG_EASY_PERSIST_DB` is set and a snapshot already
+/// block device. When `COFFEEBLACK_PERSIST_DB` is set and a snapshot already
 /// exists there, the RAM database is seeded from it via SQLite's online
 /// restore — that is the only time the durable file is read, and it happens
 /// before the server starts serving. Schema migrations then run against the
@@ -2501,7 +2501,7 @@ fn init_in_memory_db() -> Result<()> {
         ),
         None => crate::info!(
             "Database ready in RAM (in-memory mode); no persistence configured \
-             (WG_EASY_PERSIST_DB unset) — state is lost on restart"
+             (COFFEEBLACK_PERSIST_DB unset) — state is lost on restart"
         ),
     }
     Ok(())
@@ -2737,7 +2737,7 @@ pub fn get_interface() -> Result<Interface> {
     let c = conn();
     let iface = c
         .query_row(
-            "SELECT * FROM interfaces_table WHERE name = 'awg0'",
+            "SELECT * FROM interfaces_table WHERE name = 'cb0'",
             [],
             Interface::from_row,
         )
@@ -2762,7 +2762,7 @@ pub fn update_interface(fields: &UpdateMap) -> Result<()> {
     exec_update(
         "interfaces_table",
         "name",
-        WhereVal::Str("awg0"),
+        WhereVal::Str("cb0"),
         fields,
         VALID_INTERFACE_COLUMNS,
         &["name"],
@@ -2783,7 +2783,7 @@ pub fn update_cidr(v4: &str, v6: &str) -> Result<()> {
     update_interface(&fields)
 }
 
-pub fn update_interface_awg_params(params: &crate::wg::params::AwgParams) -> Result<()> {
+pub fn update_interface_cb_params(params: &crate::wg::params::CbParams) -> Result<()> {
     let mut fields = UpdateMap::new();
     fields.insert("j_c".into(), params.jc.to_string());
     fields.insert("j_min".into(), params.jmin.to_string());
@@ -3273,7 +3273,7 @@ pub fn update_password(id: i64, hash: &str) -> Result<()> {
 pub fn get_user_config() -> Result<UserConfig> {
     let c = conn();
     c.query_row(
-        "SELECT * FROM user_configs_table WHERE id = 'awg0'",
+        "SELECT * FROM user_configs_table WHERE id = 'cb0'",
         [],
         UserConfig::from_row,
     )
@@ -3292,7 +3292,7 @@ pub fn update_user_config(fields: &UpdateMap) -> Result<()> {
     exec_update(
         "user_configs_table",
         "id",
-        WhereVal::Str("awg0"),
+        WhereVal::Str("cb0"),
         fields,
         VALID_USER_CONFIG_COLUMNS,
         &["id"],
@@ -3313,7 +3313,7 @@ pub fn update_host_port(host: &str, port: i64) -> Result<()> {
 pub fn get_hooks() -> Result<Hooks> {
     let c = conn();
     c.query_row(
-        "SELECT * FROM hooks_table WHERE id = 'awg0'",
+        "SELECT * FROM hooks_table WHERE id = 'cb0'",
         [],
         Hooks::from_row,
     )
@@ -3326,7 +3326,7 @@ pub fn update_hooks(data: &UpdateMap) -> Result<()> {
     exec_update(
         "hooks_table",
         "id",
-        WhereVal::Str("awg0"),
+        WhereVal::Str("cb0"),
         data,
         VALID_HOOKS_COLUMNS,
         &["id"],
@@ -3591,7 +3591,7 @@ const VALID_QQDNS_SETTINGS_COLUMNS: &[&str] = &[
     "receive_interface_ip",
     "receive_port",
     "h_in_address",
-    "awg_target_port",
+    "cb_target_port",
     "max_domain_len",
     "max_sub_len",
     "retries",
@@ -4052,7 +4052,7 @@ mod migration_tests {
     }
 
     #[test]
-    fn awg3_columns_are_added_to_a_pre_awg3_interfaces_table() {
+    fn cb3_columns_are_added_to_a_pre_cb3_interfaces_table() {
         // The upgrade path that matters: a DB written by the previous
         // release has none of these columns, and every one must arrive with
         // a default that renders no config line — otherwise upgrading would
@@ -4060,7 +4060,7 @@ mod migration_tests {
         let conn = Connection::open_in_memory().expect("open in-memory");
         create_tables(&conn).expect("create_tables");
 
-        let awg3_cols = [
+        let cb3_cols = [
             "header_protection_key",
             "content_padding_addition",
             "rekey_after_time",
@@ -4071,7 +4071,7 @@ mod migration_tests {
             "random_trailers",
             "disable_cookies",
         ];
-        for col in awg3_cols {
+        for col in cb3_cols {
             conn.execute_batch(&format!(
                 "ALTER TABLE interfaces_table DROP COLUMN {col};"
             ))
@@ -4080,7 +4080,7 @@ mod migration_tests {
         }
 
         apply_migrations(&conn).expect("apply_migrations re-adds the AWG 3 columns");
-        for col in awg3_cols {
+        for col in cb3_cols {
             assert!(
                 column_exists(&conn, "interfaces_table", col).unwrap(),
                 "expected interfaces_table.{col} after migration"
@@ -4092,12 +4092,12 @@ mod migration_tests {
         conn.execute_batch(
             "INSERT OR REPLACE INTO interfaces_table \
              (name, device, port, private_key, public_key, ipv4_cidr, ipv6_cidr) \
-             VALUES ('awg0', 'eth0', 51820, '', 'PUB', '10.8.0.0/24', 'fdcc::/112')",
+             VALUES ('cb0', 'eth0', 51820, '', 'PUB', '10.8.0.0/24', 'fdcc::/112')",
         )
         .expect("seed interface row");
         let iface = conn
             .query_row(
-                "SELECT * FROM interfaces_table WHERE name = 'awg0'",
+                "SELECT * FROM interfaces_table WHERE name = 'cb0'",
                 [],
                 Interface::from_row,
             )
@@ -4154,7 +4154,7 @@ mod snapshot_tests {
 
         // Persist it to a durable file via SQLite online backup.
         let tmp = std::env::temp_dir().join(format!(
-            "awg-snap-{}-{}.db",
+            "coffeeblack-snap-{}-{}.db",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4179,9 +4179,9 @@ mod snapshot_tests {
     /// `snapshot_is_restorable` must report it as "nothing to restore".
     #[test]
     fn missing_or_empty_snapshot_is_not_restorable() {
-        assert!(!snapshot_is_restorable("/no/such/awg-snapshot.db"));
+        assert!(!snapshot_is_restorable("/no/such/coffeeblack-snapshot.db"));
 
-        let empty = std::env::temp_dir().join(format!("awg-empty-{}.db", std::process::id()));
+        let empty = std::env::temp_dir().join(format!("coffeeblack-empty-{}.db", std::process::id()));
         std::fs::write(&empty, b"").expect("write empty file");
         assert!(!snapshot_is_restorable(empty.to_str().unwrap()));
         let _ = std::fs::remove_file(&empty);

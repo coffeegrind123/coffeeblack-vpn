@@ -36,7 +36,7 @@ pub async fn get_settings(
     let iface = db::get_interface().ok();
     let effective_target = iface
         .as_ref()
-        .map(|i| qconfig::effective_awg_target(&s, i.port));
+        .map(|i| qconfig::effective_cb_target(&s, i.port));
     let disabled_reason = iface
         .as_ref()
         .and_then(|i| qconfig::should_remain_disabled(&s, i));
@@ -51,8 +51,8 @@ pub async fn get_settings(
         "receiveInterfaceIp": s.receive_interface_ip,
         "receivePort": s.receive_port,
         "hInAddress": s.h_in_address,
-        "awgTargetPort": s.awg_target_port,
-        "effectiveAwgTargetPort": effective_target,
+        "cbTargetPort": s.cb_target_port,
+        "effectiveCbTargetPort": effective_target,
         "publicPort": iface.as_ref().map(|i| i.port),
         "maxDomainLen": s.max_domain_len,
         "maxSubLen": s.max_sub_len,
@@ -98,7 +98,7 @@ pub async fn update_settings(
             ("receiveInterfaceIp", "receive_interface_ip"),
             ("receivePort", "receive_port"),
             ("hInAddress", "h_in_address"),
-            ("awgTargetPort", "awg_target_port"),
+            ("cbTargetPort", "cb_target_port"),
             ("maxDomainLen", "max_domain_len"),
             ("maxSubLen", "max_sub_len"),
             ("retries", "retries"),
@@ -119,10 +119,10 @@ pub async fn update_settings(
         if let Some(v) = fields.get("receive_port") {
             reject_unless_range(v, 1, 65535, "receivePort")?;
         }
-        if let Some(v) = fields.get("awg_target_port") {
+        if let Some(v) = fields.get("cb_target_port") {
             // 0 = auto (interface port); otherwise a real port.
             if v != "0" {
-                reject_unless_range(v, 1, 65535, "awgTargetPort")?;
+                reject_unless_range(v, 1, 65535, "cbTargetPort")?;
             }
         }
         if let Some(v) = fields.get("max_domain_len") {

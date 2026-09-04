@@ -5,7 +5,7 @@
 //! `#[serial(db)]` for the same reason the DB tests are: one shared global,
 //! reset between tests.
 
-use awg_easy_rs::{activity, datetime, db};
+use coffeeblack_vpn::{activity, datetime, db};
 use serial_test::serial;
 
 fn seed() {
@@ -53,7 +53,7 @@ fn cells_since(from_day: &str) -> Vec<Cell> {
 fn make_client(name: &str, ip: &str) -> i64 {
     db::create_client(&db::CreateClientParams {
         user_id: None,
-        interface_id: Some("awg0".into()),
+        interface_id: Some("cb0".into()),
         name: name.into(),
         ipv4_address: Some(ip.into()),
         ipv6_address: None,
@@ -441,7 +441,7 @@ fn history_never_reaches_the_database() {
 
     // Nothing may name activity in the schema. A table added later would be
     // persisted to disk under IN_MEMORY=false and copied into the snapshot
-    // under WG_EASY_PERSIST_DB, which is exactly what this feature must not
+    // under COFFEEBLACK_PERSIST_DB, which is exactly what this feature must not
     // do — so assert on the schema itself rather than on today's code paths.
     let tables = db::table_names().unwrap();
     for t in &tables {

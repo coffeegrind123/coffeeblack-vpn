@@ -1,6 +1,6 @@
 [Unit]
-Description=awg-easy-rs — AmneziaWG VPN + proxy manager with web UI
-Documentation=https://github.com/coffeegrind123/awg-easy-rs
+Description=coffeeblack-vpn — AmneziaWG VPN + proxy manager with web UI
+Documentation=https://github.com/coffeegrind123/coffeeblack-vpn
 After=network-online.target
 Wants=network-online.target
 
@@ -10,10 +10,10 @@ Restart=on-failure
 RestartSec=5s
 
 # --- Run as root ------------------------------------------------------------
-# awg-easy-rs owns the AmneziaWG interface lifecycle itself: on startup it runs
-# `awg-quick up awg0` (writing /etc/wireguard/awg0.conf), and on shutdown it
+# coffeeblack-vpn owns the AmneziaWG interface lifecycle itself: on startup it runs
+# `awg-quick up cb0` (writing /etc/coffeeblack/conf/cb0.conf), and on shutdown it
 # tears the interface down. That requires:
-#   * CAP_NET_ADMIN  — create/configure the awg0 interface, program routes and
+#   * CAP_NET_ADMIN  — create/configure the cb0 interface, program routes and
 #                      the nftables/iptables firewall.
 #   * CAP_SYS_MODULE — load the amneziawg kernel module on demand.
 # The simplest correct model (and the one upstream's Docker image uses) is to
@@ -21,16 +21,16 @@ RestartSec=5s
 # intent is documented and so a future move to a non-root User= keeps working.
 #
 # --- Optional: privilege separation ------------------------------------------
-# With `awg-easy-rs-helper.service` running, this process needs NO capabilities
+# With `coffeeblack-vpn-helper.service` running, this process needs NO capabilities
 # at all: every `awg-quick` / `awg` / `nft` call and the interface config write
 # go over the helper's Unix socket instead. To switch:
 #
-#   1. systemctl enable --now awg-easy-rs-helper.service
-#   2. useradd --system --no-create-home --shell /usr/sbin/nologin awg-easy
-#   3. set WG_EASY_HELPER_GID in the helper unit to that user's gid
+#   1. systemctl enable --now coffeeblack-vpn-helper.service
+#   2. useradd --system --no-create-home --shell /usr/sbin/nologin coffeeblack
+#   3. set COFFEEBLACK_HELPER_GID in the helper unit to that user's gid
 #   4. uncomment the SIX lines below and comment out User=root/Group=root,
 #      both capability lines, and the NoNewPrivileges line further down
-#   5. systemctl daemon-reload && systemctl restart awg-easy-rs
+#   5. systemctl daemon-reload && systemctl restart coffeeblack-vpn
 #
 # The capability and NoNewPrivileges parts of step 4 are not optional polish.
 # The root-mode bounding set below carries CAP_SETUID, CAP_SETGID,
@@ -44,9 +44,9 @@ RestartSec=5s
 # Note the bundled transports that bind low ports (Xray on 443, MasterDnsVPN
 # on 53) still need CAP_NET_BIND_SERVICE — add it back if you enable those.
 #
-#User=awg-easy
-#Group=awg-easy
-#Environment=WG_EASY_HELPER_SOCKET=/run/awg-easy-rs/helper.sock
+#User=coffeeblack
+#Group=coffeeblack
+#Environment=COFFEEBLACK_HELPER_SOCKET=/run/coffeeblack/helper.sock
 #AmbientCapabilities=
 #CapabilityBoundingSet=
 #NoNewPrivileges=yes
@@ -57,7 +57,7 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_MODULE
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_MODULE CAP_NET_RAW CAP_NET_BIND_SERVICE CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SETUID CAP_SETGID CAP_SYS_ADMIN
 
 # --- Binary and configuration ------------------------------------------------
-ExecStart=/usr/local/bin/awg-easy-rs
+ExecStart=/usr/local/bin/coffeeblack-vpn
 
 # --- Secret encryption key (optional but recommended) ------------------------
 # Encrypts secrets at rest (TOTP seeds) so a stolen database or backup yields
@@ -65,13 +65,13 @@ ExecStart=/usr/local/bin/awg-easy-rs
 #
 #   openssl rand -base64 32 \
 #     | systemd-ask-password --no-tty -n \
-#     | systemd-creds encrypt --name=SECRET_KEY - /etc/awg-easy-rs/secret.cred
+#     | systemd-creds encrypt --name=SECRET_KEY - /etc/coffeeblack/secret.cred
 #
 # or more simply:
 #
 #   openssl rand -base64 32 > /tmp/k && \
 #     systemd-creds encrypt --name=SECRET_KEY /tmp/k \
-#       /etc/awg-easy-rs/secret.cred && shred -u /tmp/k
+#       /etc/coffeeblack/secret.cred && shred -u /tmp/k
 #
 # then uncomment both lines. systemd decrypts it into a tmpfs at start, so the
 # plaintext key never touches disk. Without it the service still runs and logs
@@ -79,12 +79,12 @@ ExecStart=/usr/local/bin/awg-easy-rs
 #
 # NOTE: this protects the database at rest. It does not protect a live
 # compromise — the running process necessarily holds the key.
-#LoadCredentialEncrypted=SECRET_KEY:/etc/awg-easy-rs/secret.cred
-#Environment=WG_EASY_SECRET_KEY_PATH=%d/SECRET_KEY
+#LoadCredentialEncrypted=SECRET_KEY:/etc/coffeeblack/secret.cred
+#Environment=COFFEEBLACK_SECRET_KEY_PATH=%d/SECRET_KEY
 
 # EnvironmentFile is optional (leading '-'): the binary has working defaults and
 # the setup wizard can seed the first admin if the file is absent.
-EnvironmentFile=-/etc/awg-easy-rs/awg-easy-rs.env
+EnvironmentFile=-/etc/coffeeblack/coffeeblack.env
 
 # Best-effort module load before the binary starts. The leading '-' means a
 # failure here (e.g. module built into the kernel, or not yet built after a
@@ -103,9 +103,9 @@ KillMode=mixed
 LimitNOFILE=65536
 
 # --- Hardening ---------------------------------------------------------------
-# Kept deliberately moderate. awg-easy-rs shells out to `awg-quick`, which in
+# Kept deliberately moderate. coffeeblack-vpn shells out to `awg-quick`, which in
 # turn runs `ip`, `iptables`/`nft`, and `sysctl`, and writes generated configs
-# under /etc/wireguard. Over-tight sandboxing breaks those, so the directives
+# under /etc/coffeeblack/conf. Over-tight sandboxing breaks those, so the directives
 # below are the strongest set that still lets the interface come up.
 #
 # Do NOT add any of the following — each one would break a required operation:
@@ -131,20 +131,20 @@ RestrictSUIDSGID=yes
 RestrictRealtime=yes
 
 # ProtectSystem=full makes /etc read-only; carve out the paths the service must
-# write. WG_EASY_CONF_DIR (default /etc/wireguard) holds awg0.conf, the SQLite
+# write. COFFEEBLACK_CONF_DIR (default /etc/coffeeblack/conf) holds cb0.conf, the SQLite
 # DB (durable, IN_MEMORY=false on bare metal), and the extracted subprocess
 # working dirs (xray/, mtproxy/, dns/, mdnsvpn/).
-ReadWritePaths=/etc/wireguard
-ReadWritePaths=-/etc/awg-easy-rs
-ReadWritePaths=-/var/lib/awg-easy-rs
+ReadWritePaths=/etc/coffeeblack/conf
+ReadWritePaths=-/etc/coffeeblack
+ReadWritePaths=-/var/lib/coffeeblack
 ReadWritePaths=-/proc/sys/net
 
 # --- Environment defaults ----------------------------------------------------
 # Bare-metal durable install: keep the roster on disk rather than in RAM.
 # Anything set in EnvironmentFile overrides these.
 Environment=IN_MEMORY=false
-Environment=WG_EASY_CONF_DIR=/etc/wireguard
-Environment=WG_EASY_DB_PATH=/etc/wireguard/wg-easy.db
+Environment=COFFEEBLACK_CONF_DIR=/etc/coffeeblack/conf
+Environment=COFFEEBLACK_DB_PATH=/etc/coffeeblack/conf/coffeeblack.db
 Environment=PORT=51821
 Environment=HOST=0.0.0.0
 

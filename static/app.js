@@ -1073,7 +1073,7 @@ async function loadClientEdit(id) {
       <div class="danger-zone" style="margin-top:18px">
         <div class="danger-zone-text">
           <b>Delete peer</b>
-          <span>Removes <span class="mono">${esc(c.name || '')}</span> from <span class="mono">awg0</span>, revokes its keys, and frees the address. Cannot be undone.</span>
+          <span>Removes <span class="mono">${esc(c.name || '')}</span> from <span class="mono">cb0</span>, revokes its keys, and frees the address. Cannot be undone.</span>
         </div>
         <button class="btn btn--danger" onclick="confirmDelete(${id}, '${escAttrJs(c.name || '')}')"><svg><use href="#i-trash"/></svg> Delete peer</button>
       </div>
@@ -1488,26 +1488,26 @@ async function showAdminTab(tab, e) {
             <div class="card-head">
               <div>
                 <div class="card-title">AmneziaWG 3 <span class="opt">${
-                  iface.awg3Supported === true ? '<span class="pill pill--ok">supported</span>'
-                  : iface.awg3Supported === false ? '<span class="pill pill--err">awg is pre-3.x</span>'
+                  iface.cb3Supported === true ? '<span class="pill pill--ok">supported</span>'
+                  : iface.cb3Supported === false ? '<span class="pill pill--err">awg is pre-3.x</span>'
                   : '<span class="pill">version unknown</span>'
                 }</span></div>
                 <div class="card-sub">Optional AWG 3 device knobs, all off by default — leave a field empty and no config line is written. Timers and padding take a single number or an <span class="mono">N-M</span> range (0-65535).${
-                  iface.awg3Supported === false
+                  iface.cb3Supported === false
                     ? ' <strong>The installed awg predates AWG 3 and will refuse to bring the interface up if you set any of these.</strong>'
                     : ''
                 }</div>
               </div>
             </div>
             <div class="card-body">
-              ${iface.awg3ProxyLock ? `<div class="notice notice--warn" style="margin-bottom:14px">
+              ${iface.cb3ProxyLock ? `<div class="notice notice--warn" style="margin-bottom:14px">
                 <svg><use href="#i-alert"/></svg>
-                <div>${esc(iface.awg3ProxyLock)}</div>
+                <div>${esc(iface.cb3ProxyLock)}</div>
               </div>` : ''}
               <div class="stack">
                 <div class="field field--inline">
                   <label class="toggle ${iface.headerProtection ? 'is-on' : ''}">
-                    <input type="checkbox" id="adm-if-hpk" ${iface.headerProtection ? 'checked' : ''} ${iface.awg3ProxyLock ? 'disabled' : ''}>
+                    <input type="checkbox" id="adm-if-hpk" ${iface.headerProtection ? 'checked' : ''} ${iface.cb3ProxyLock ? 'disabled' : ''}>
                     <span class="toggle-track"></span>
                   </label>
                   <div>
@@ -1517,7 +1517,7 @@ async function showAdminTab(tab, e) {
                 </div>
                 <div class="field field--inline">
                   <label class="toggle ${iface.randomTrailers ? 'is-on' : ''}">
-                    <input type="checkbox" id="adm-if-rndtrail" ${iface.randomTrailers ? 'checked' : ''} ${iface.awg3ProxyLock ? 'disabled' : ''}>
+                    <input type="checkbox" id="adm-if-rndtrail" ${iface.randomTrailers ? 'checked' : ''} ${iface.cb3ProxyLock ? 'disabled' : ''}>
                     <span class="toggle-track"></span>
                   </label>
                   <div>
@@ -1586,7 +1586,7 @@ async function showAdminTab(tab, e) {
           <div class="save-bar">
             <span class="changed">Changes need a restart</span>
             <div class="save-bar-spacer"></div>
-            <button type="button" class="btn btn--ghost" onclick="restartWG()"><svg><use href="#i-refresh"/></svg> Restart awg0</button>
+            <button type="button" class="btn btn--ghost" onclick="restartWG()"><svg><use href="#i-refresh"/></svg> Restart cb0</button>
             <button type="submit" class="btn btn--primary">Save changes</button>
           </div>
         </form>`;
@@ -1620,7 +1620,7 @@ async function showAdminTab(tab, e) {
                   <textarea id="adm-hook-predown" rows="3" placeholder="(empty)">${esc(hooks.preDown || '')}</textarea>
                 </div>
                 <div class="field">
-                  <label class="field-label" for="adm-hook-postdown" title="Commands run AFTER the interface goes down. Default deletes the inet awg-easy-rs nftables table (atomic teardown of all NAT, forwarding, and per-client rules)">PostDown</label>
+                  <label class="field-label" for="adm-hook-postdown" title="Commands run AFTER the interface goes down. Default deletes the inet coffeeblack nftables table (atomic teardown of all NAT, forwarding, and per-client rules)">PostDown</label>
                   <textarea id="adm-hook-postdown" rows="4">${esc(hooks.postDown || '')}</textarea>
                 </div>
               </div>
@@ -1657,7 +1657,7 @@ async function showAdminTab(tab, e) {
                 <div class="card-title">Reality inbound</div>
                 <div class="card-sub">Single TCP/443 listener. Clients send ClientHello with SNI = the first server name; if it matches the dest's leaf cert, Xray transparently proxies to the real site.</div>
               </div>
-              <label class="toggle ${inbound.enabled ? 'is-on' : ''}" title="Master switch — turning this off stops the supervisor and tears down /etc/wireguard/xray/server.json">
+              <label class="toggle ${inbound.enabled ? 'is-on' : ''}" title="Master switch — turning this off stops the supervisor and tears down /etc/coffeeblack/conf/xray/server.json">
                 <input type="checkbox" id="adm-xr-enabled" ${inbound.enabled ? 'checked' : ''}>
                 <span class="toggle-track"><span class="toggle-thumb"></span></span>
                 <span class="toggle-label">Enabled</span>

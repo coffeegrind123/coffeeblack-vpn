@@ -24,14 +24,14 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use awg_easy_rs::db::MtproxyInbound;
-use awg_easy_rs::mtproxy::config;
+use coffeeblack_vpn::db::MtproxyInbound;
+use coffeeblack_vpn::mtproxy::config;
 
 #[test]
 #[ignore = "spawns real telemt subprocess; needs vendor/telemt-linux-amd64.gz on disk"]
 fn generated_config_parses_and_telemt_starts() {
     let dir = format!(
-        "/tmp/awg-easy-rs-mtproxy-cfg-smoke-{}-{}",
+        "/tmp/coffeeblack-vpn-mtproxy-cfg-smoke-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

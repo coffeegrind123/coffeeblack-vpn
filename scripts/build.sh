@@ -12,7 +12,7 @@
 #      to the pinned SHA, so a re-run after a partial failure picks
 #      up where the previous run left off (this matters: the tor
 #      build alone takes ~10 minutes).
-#   3. Builds awg-easy-rs as a fully static x86_64-linux-musl ELF
+#   3. Builds coffeeblack-vpn as a fully static x86_64-linux-musl ELF
 #      that runs unchanged on glibc, musl, or any other libc — see
 #      Dockerfile for the same RUSTFLAGS triple.
 #
@@ -45,7 +45,7 @@
 #
 # Output (on full success):
 #
-#   target/x86_64-unknown-linux-musl/release/awg-easy-rs
+#   target/x86_64-unknown-linux-musl/release/coffeeblack-vpn
 #       — statically linked, stripped, ready to ship
 #
 # Exit codes:
@@ -226,7 +226,7 @@ fetch_vendor_blobs() {
 # ---------------------------------------------------------------------------
 build_release_binary() {
     local target="x86_64-unknown-linux-musl"
-    local out_path="$REPO_ROOT/target/$target/release/awg-easy-rs"
+    local out_path="$REPO_ROOT/target/$target/release/coffeeblack-vpn"
 
     # Same RUSTFLAGS the Dockerfile uses. Documented there in detail —
     # short version: +crt-static + static relocations → truly static, no
@@ -275,7 +275,7 @@ On Alpine the system cc already targets musl and no extra package is needed."
 # ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
-printf '%s======== awg-easy-rs build ========%s\n' "$C_BOLD" "$C_RESET" >&2
+printf '%s======== coffeeblack-vpn build ========%s\n' "$C_BOLD" "$C_RESET" >&2
 
 case "$MODE" in
     full|vendor-only)

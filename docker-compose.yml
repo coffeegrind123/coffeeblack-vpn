@@ -1,5 +1,5 @@
 # Runs entirely in RAM (IN_MEMORY=true, baked into the image):
-#  - /etc/wireguard is a tmpfs, so the SQLite WAL siblings (unused in memory
+#  - /etc/coffeeblack/conf is a tmpfs, so the SQLite WAL siblings (unused in memory
 #    mode), generated subprocess configs, the AmneziaWG .conf, tor's data dir,
 #    and the extracted PT plugins all live in RAM.
 #  - The bundled subprocess ELFs are exec'd from anonymous memfds (no FS entry).
@@ -8,15 +8,15 @@
 #    A failing disk degrades this to "no fresh snapshot" — it never stalls or
 #    crashes the data plane.
 volumes:
-  awg_data:
+  coffeeblack_data:
 
 services:
-  awg-easy:
+  coffeeblack-vpn:
     build: .
-    container_name: awg-easy
+    container_name: coffeeblack-vpn
     volumes:
       # Durable, RAM-independent: only the DB snapshot lands here.
-      - awg_data:/data
+      - coffeeblack_data:/data
       # NOTE: the /lib/modules mount was removed alongside the SYS_MODULE
       # capability (see cap_drop below). amneziawg-go is a userspace WireGuard
       # implementation that only needs /dev/net/tun (passed through under
@@ -27,7 +27,7 @@ services:
       # directory, and the on-disk PT plugins (lyrebird/snowflake/webtunnel,
       # only materialised when a tor pluggable transport is enabled). mode=0700
       # because it holds the generated AmneziaWG .conf and subprocess configs.
-      - /etc/wireguard:rw,size=256m,mode=0700
+      - /etc/coffeeblack/conf:rw,size=256m,mode=0700
     ports:
       - "51820:51820/udp"
       - "51821:51821/tcp"
@@ -57,22 +57,22 @@ services:
       - PORT=51821
       - HOST=0.0.0.0
       # In-memory mode (also the image default). Set IN_MEMORY=false to fall
-      # back to a durable on-disk database under /etc/wireguard.
+      # back to a durable on-disk database under /etc/coffeeblack/conf.
       - IN_MEMORY=true
-      - WG_EASY_PERSIST_DB=/data/wg-easy.db
+      - COFFEEBLACK_PERSIST_DB=/data/coffeeblack.db
       # Seconds between RAM→disk snapshots. 0 disables periodic snapshots
       # (shutdown still snapshots). Raise it to write the disk less often.
-      - WG_EASY_PERSIST_INTERVAL=30
-      # Encrypt secrets at rest (TOTP seeds) so a stolen wg-easy.db — the
+      - COFFEEBLACK_PERSIST_INTERVAL=30
+      # Encrypt secrets at rest (TOTP seeds) so a stolen coffeeblack.db — the
       # snapshot above is a real file on the host — yields nothing usable.
       # Generate once with: openssl rand -base64 32
       # Unset means plaintext storage, with a warning at startup.
-      # - WG_EASY_SECRET_KEY=<base64 32 bytes>
+      # - COFFEEBLACK_SECRET_KEY=<base64 32 bytes>
       #
       # Route privileged work through a helper so this container needs no
-      # CAP_NET_ADMIN. Requires running `awg-easy-rs --privileged-helper` on
+      # CAP_NET_ADMIN. Requires running `coffeeblack-vpn --privileged-helper` on
       # the host (or in a sidecar) and sharing the socket directory.
-      # - WG_EASY_HELPER_SOCKET=/run/awg-easy-rs/helper.sock
+      # - COFFEEBLACK_HELPER_SOCKET=/run/coffeeblack/helper.sock
       #
       # Uncomment for automatic initial setup:
       # - INIT_ENABLED=true

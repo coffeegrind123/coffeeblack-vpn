@@ -3,7 +3,7 @@
 Most of this directory is a **vendored mirror** of the `src/` tree of the
 [`amneziawg-proxy`](https://github.com/wiresock/amneziawg-install/tree/main/amneziawg-proxy)
 crate (part of `wiresock/amneziawg-install`), brought in-process so
-awg-easy-rs ships a single static binary with no subprocess and no blob.
+coffeeblack-vpn ships a single static binary with no subprocess and no blob.
 
 The only mechanical change applied to upstream is rehoming the crate paths:
 
@@ -17,7 +17,7 @@ sed 's/crate::/crate::proxy::/g'
 |------|--------|-------|
 | `backend.rs`, `config.rs`, `errors.rs`, `metrics.rs`, `proxy.rs`, `quic_handshake.rs`, `responder.rs`, `session.rs`, `transform.rs` | **Vendored** from upstream (post-`sed`) | ❌ never edit by hand — edits are overwritten on the next sync and will fail `verify` |
 | `mod.rs` | **Ours** — module declarations, doc, and the vendored-lint `#![allow(...)]` scope | ✅ |
-| `supervisor.rs` | **Ours** — the awg-easy-rs glue: builds `ProxyConfig`/`AwgParams` from the DB, drives the proxy as a Tokio task, orchestrates the AmneziaWG loopback rebind + firewall lockdown | ✅ |
+| `supervisor.rs` | **Ours** — the coffeeblack-vpn glue: builds `ProxyConfig`/`CbParams` from the DB, drives the proxy as a Tokio task, orchestrates the AmneziaWG loopback rebind + firewall lockdown | ✅ |
 | `patches/*.patch` | **Ours** — local security patches re-applied on top of the upstream mirror on every sync (see [`patches/README.md`](./patches/README.md)) | ✅ |
 | `VENDOR.lock` | Auto-generated pin + per-file & per-patch `sha256` | ❌ generated |
 | `VENDOR.md` | This file | ✅ |
@@ -77,7 +77,7 @@ The proxy's model of the AmneziaWG wire format (packet classification and the
 S1–S4 padding transform) was audited against the real `amneziawg-go` and
 `amneziawg-linux-kernel-module` sources. The load-bearing invariants
 (`[S-junk][LE u32 H-header][WG body]`, `H1→init … H4→transport`, `S4` on every
-data packet, overwrite-only-`[0..S]`) match. Two awg-easy-rs-side mitigations
+data packet, overwrite-only-`[0..S]`) match. Two coffeeblack-vpn-side mitigations
 came out of that audit and live in `supervisor.rs` / `wg/mod.rs`, not in the
 vendored code (so they survive a sync):
 

@@ -87,7 +87,7 @@ pub async fn information() -> Result<Json<Value>, (StatusCode, Json<Value>)> {
         "defaultConfig": iface.ipv4_cidr,
         "latestRelease": null,
         "setupNeeded": setup_step != 0 || user_count == 0,
-        "isAwg": true,
+        "isCb": true,
         "firewallEnabled": iface.firewall_enabled,
     })))
 }
@@ -100,7 +100,7 @@ pub async fn interface_info() -> Result<Json<Value>, (StatusCode, Json<Value>)> 
     let iface = db::get_interface().map_err(map_err)?;
 
     Ok(Json(json!({
-        "isAwg": true,
+        "isCb": true,
         "firewallEnabled": iface.firewall_enabled,
     })))
 }

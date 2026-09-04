@@ -52,7 +52,7 @@ fn is_valid_magic_header(s: &str) -> bool {
     }
 }
 
-fn validate_awg_params(map: &serde_json::Map<String, Value>) -> Result<(), (StatusCode, Json<Value>)> {
+fn validate_cb_params(map: &serde_json::Map<String, Value>) -> Result<(), (StatusCode, Json<Value>)> {
     let jc = get_i64(map, "jC").or_else(|| get_i64(map, "jc"));
     let jmin = get_i64(map, "jMin").or_else(|| get_i64(map, "jmin"));
     let jmax = get_i64(map, "jMax").or_else(|| get_i64(map, "jmax"));
@@ -186,7 +186,7 @@ fn validate_awg_params(map: &serde_json::Map<String, Value>) -> Result<(), (Stat
 /// Reads the *stored* proxy switch rather than whether the proxy task
 /// happens to be running, so the answer doesn't flicker while the
 /// supervisor is starting or backing off after a crash.
-fn awg3_proxy_lock_reason() -> Option<String> {
+fn cb3_proxy_lock_reason() -> Option<String> {
     let settings = db::get_proxy_settings().ok()?;
     if !settings.enabled {
         return None;
@@ -201,16 +201,16 @@ fn awg3_proxy_lock_reason() -> Option<String> {
 
 /// Validate the AmneziaWG 3 half of an interface update.
 ///
-/// Split from [`validate_awg_params`] because it needs the *merged* view —
+/// Split from [`validate_cb_params`] because it needs the *merged* view —
 /// several rules span fields the request may not have sent (header
 /// protection depends on S1–S4, the proxy interlock on a different table),
 /// so it reads the stored row for anything absent from the body.
-fn validate_awg3_params(
+fn validate_cb3_params(
     map: &serde_json::Map<String, Value>,
 ) -> Result<(), (StatusCode, Json<Value>)> {
-    use crate::wg::awg3;
+    use crate::wg::cb3;
 
-    let touches_awg3 = [
+    let touches_cb3 = [
         "headerProtection",
         "headerProtectionKey",
         "contentPaddingAddition",
@@ -224,7 +224,7 @@ fn validate_awg3_params(
     ]
     .iter()
     .any(|k| map.contains_key(*k));
-    if !touches_awg3 {
+    if !touches_cb3 {
         return Ok(());
     }
 
@@ -237,13 +237,13 @@ fn validate_awg3_params(
         ("maxHandshakeAttempts", "MaxHandshakeAttempts"),
     ] {
         if let Some(v) = map.get(json_key).and_then(value_to_string) {
-            if let Err(e) = awg3::validate_range(config_key, &v) {
+            if let Err(e) = cb3::validate_range(config_key, &v) {
                 return Err(api_err(StatusCode::BAD_REQUEST, &format!("{e}")));
             }
         }
     }
     if let Some(v) = map.get("headerProtectionKey").and_then(|v| v.as_str()) {
-        if let Err(e) = awg3::validate_header_protection_key(v) {
+        if let Err(e) = cb3::validate_header_protection_key(v) {
             return Err(api_err(StatusCode::BAD_REQUEST, &format!("{e}")));
         }
     }
@@ -267,7 +267,7 @@ fn validate_awg3_params(
         let s2 = get_i64(map, "s2").unwrap_or(stored.s2);
         let s3 = get_i64(map, "s3").or(stored.s3);
         let s4 = get_i64(map, "s4").or(stored.s4);
-        if let Err(e) = awg3::check_header_protection_paddings(s1, s2, s3, s4) {
+        if let Err(e) = cb3::check_header_protection_paddings(s1, s2, s3, s4) {
             return Err(api_err(StatusCode::BAD_REQUEST, &format!("{e}")));
         }
     }
@@ -276,8 +276,8 @@ fn validate_awg3_params(
     // refuses to start against a conflicting interface, but an operator who
     // sets the knob here would otherwise only find out when the proxy went
     // quiet.
-    if (want_header_protection || want_random_trailers) && awg3_proxy_lock_reason().is_some() {
-        let conflict = awg3::proxy_conflict(
+    if (want_header_protection || want_random_trailers) && cb3_proxy_lock_reason().is_some() {
+        let conflict = cb3::proxy_conflict(
             if want_header_protection { "set" } else { "" },
             want_random_trailers,
         )
@@ -790,11 +790,11 @@ pub async fn get_interface(
         // probe couldn't tell (no awg on PATH, unrecognised banner) — the
         // UI shows the section without a confirmation rather than hiding a
         // feature that may well work.
-        "awg3Supported": crate::wg::awg3::tools_support_awg3(),
+        "cb3Supported": crate::wg::cb3::tools_support_cb3(),
         // Set when the DPI-imitation proxy is on, naming the AWG 3 knobs it
         // cannot carry, so the UI can disable those two controls with the
         // reason instead of letting the operator discover it via a 400.
-        "awg3ProxyLock": awg3_proxy_lock_reason(),
+        "cb3ProxyLock": cb3_proxy_lock_reason(),
         "firewallEnabled": iface.firewall_enabled,
         // DNS-leak prevention. Three independent fields so the UI can
         // expose the master switch separately from the redirect target
@@ -828,8 +828,8 @@ pub async fn update_interface(
 
     // Validate AWG params
     if let Value::Object(ref map) = body {
-        validate_awg_params(map)?;
-        validate_awg3_params(map)?;
+        validate_cb_params(map)?;
+        validate_cb3_params(map)?;
     }
 
     let mut fields = db::UpdateMap::new();
@@ -900,7 +900,7 @@ pub async fn update_interface(
             if enable && !already_set {
                 fields.insert(
                     "header_protection_key".into(),
-                    crate::wg::awg3::generate_header_protection_key(),
+                    crate::wg::cb3::generate_header_protection_key(),
                 );
             } else if !enable && already_set {
                 fields.insert("header_protection_key".into(), String::new());

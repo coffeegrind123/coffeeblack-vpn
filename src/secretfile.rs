@@ -122,7 +122,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("awg-secretfile-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("coffeeblack-secretfile-{name}-{}", std::process::id()));
         std::fs::remove_dir_all(&d).ok();
         d
     }

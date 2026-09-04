@@ -244,7 +244,7 @@ Hash32: kKpGT8TO6gx4yAy_viz6-kU-uCIjGN3TzJJArIx_EEA
     /// when a future Xray bump changes the label set.
     ///
     /// Shares the `xray_e2e_env` serial key with the config_gen e2e
-    /// tests — they all mutate the process-wide `WG_EASY_XRAY_DIR` and
+    /// tests — they all mutate the process-wide `COFFEEBLACK_XRAY_DIR` and
     /// race during binary extraction otherwise.
     #[cfg(xray_bundled)]
     #[tokio::test]
@@ -253,14 +253,14 @@ Hash32: kKpGT8TO6gx4yAy_viz6-kU-uCIjGN3TzJJArIx_EEA
     async fn end_to_end_x25519_against_bundled_binary() {
         // Use a unique XRAY_DIR so we don't fight other tests.
         let dir = format!(
-            "/tmp/awg-easy-rs-keys-test-{}-{}",
+            "/tmp/coffeeblack-vpn-keys-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.subsec_nanos())
                 .unwrap_or(0),
         );
-        std::env::set_var("WG_EASY_XRAY_DIR", &dir);
+        std::env::set_var("COFFEEBLACK_XRAY_DIR", &dir);
         // CONFIG is a LazyLock so the env var must be set before the
         // first runtime::resolve_binary() call. In this test process
         // that's our first call.

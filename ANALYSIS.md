@@ -13,8 +13,8 @@ with a web-based admin UI.
 Docker Container
 ├── Node.js Nitro Server (port 51821)
 │   ├── API routes (file-based, Nitro)
-│   ├── Database: SQLite at /etc/wireguard/wg-easy.db
-│   ├── WireGuard config at /etc/wireguard/wg0.conf
+│   ├── Database: SQLite at /etc/coffeeblack/conf/coffeeblack.db
+│   ├── WireGuard config at /etc/coffeeblack/conf/wg0.conf
 │   └── Frontend: Vue 3 SPA (server-rendered)
 ├── awg/wg CLI tools (amneziawg-tools)
 ├── amneziawg-go (userspace WireGuard for Amnezia)
@@ -44,7 +44,7 @@ Docker Container
 
 ## Database Schema (SQLite)
 
-File: `/etc/wireguard/wg-easy.db`
+File: `/etc/coffeeblack/conf/coffeeblack.db`
 
 ### interfaces_table
 | Column | Type | Notes |
@@ -171,7 +171,7 @@ File: `/etc/wireguard/wg-easy.db`
 
 ## WireGuard/AmneziaWG Config Generation
 
-### Server Config (`/etc/wireguard/wg0.conf`)
+### Server Config (`/etc/coffeeblack/conf/wg0.conf`)
 ```
 [Interface]
 PrivateKey = <server_private_key>

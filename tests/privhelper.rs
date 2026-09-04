@@ -13,13 +13,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
-use awg_easy_rs::privhelper::{self, HelperConfig, Request, Response};
+use coffeeblack_vpn::privhelper::{self, HelperConfig, Request, Response};
 use serial_test::serial;
 
 /// Spawn a helper on a fresh socket and return its path plus the conf dir it
 /// is pinned to. The thread is left running; the process exits at test end.
 fn start_helper(name: &str) -> (PathBuf, PathBuf) {
-    let base = std::env::temp_dir().join(format!("awg-helper-test-{name}-{}", std::process::id()));
+    let base = std::env::temp_dir().join(format!("coffeeblack-helper-test-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&base).unwrap();
     let socket = base.join("helper.sock");
     let conf_dir = base.join("wg");
@@ -27,7 +27,7 @@ fn start_helper(name: &str) -> (PathBuf, PathBuf) {
 
     let cfg = HelperConfig {
         socket_path: socket.clone(),
-        interface: "awg0".to_string(),
+        interface: "cb0".to_string(),
         conf_dir: conf_dir.clone(),
         allow_gid: None,
     };
@@ -107,7 +107,7 @@ fn extra_request_fields_cannot_redirect_an_operation() {
     // path from its own fixed interface + conf dir, so the extra fields are
     // inert — the write lands where the helper decided, never where the
     // request asked.
-    let escape = "/tmp/awg-helper-escape-target.conf";
+    let escape = "/tmp/coffeeblack-helper-escape-target.conf";
     std::fs::remove_file(escape).ok();
     let resp = raw(
         &socket,
@@ -123,7 +123,7 @@ fn extra_request_fields_cannot_redirect_an_operation() {
         "helper must not write to a path supplied in the request"
     );
     assert!(
-        conf_dir.join("awg0.conf").exists(),
+        conf_dir.join("cb0.conf").exists(),
         "helper should have written its own fixed path"
     );
 }
@@ -135,7 +135,7 @@ fn written_config_is_owner_only() {
         &socket,
         r#"{"op":"wg_sync","config":"[Interface]\nPrivateKey = secret\n"}"#,
     );
-    let path = conf_dir.join("awg0.conf");
+    let path = conf_dir.join("cb0.conf");
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     // The file carries the server private key.
     assert_eq!(mode, 0o600, "conf mode was {mode:o}");
@@ -172,14 +172,14 @@ fn helper_survives_a_malformed_connection() {
     assert!(resp.ok, "helper must still serve after a malformed request");
 }
 
-// These two mutate WG_EASY_HELPER_SOCKET, which `is_enabled()` reads live, so
+// These two mutate COFFEEBLACK_HELPER_SOCKET, which `is_enabled()` reads live, so
 // they must not run alongside each other.
 #[test]
 #[serial(helper_env)]
 fn client_is_disabled_unless_the_socket_env_var_is_set() {
     // The default must remain the original single-process behaviour: an
     // upgrade should change nothing until the operator opts in.
-    std::env::remove_var("WG_EASY_HELPER_SOCKET");
+    std::env::remove_var("COFFEEBLACK_HELPER_SOCKET");
     assert!(!privhelper::is_enabled());
     assert!(privhelper::socket_path().is_none());
 }
@@ -188,14 +188,14 @@ fn client_is_disabled_unless_the_socket_env_var_is_set() {
 #[serial(helper_env)]
 fn typed_client_round_trips_against_a_real_helper() {
     let (socket, _) = start_helper("client");
-    std::env::set_var("WG_EASY_HELPER_SOCKET", &socket);
+    std::env::set_var("COFFEEBLACK_HELPER_SOCKET", &socket);
     assert!(privhelper::is_enabled());
     let out = privhelper::call(&Request::Ping).expect("ping via typed client");
     assert_eq!(out, "pong");
 
     // A failing op surfaces as an Err, not a silent empty success.
     assert!(privhelper::call(&Request::NftList).is_err());
-    std::env::remove_var("WG_EASY_HELPER_SOCKET");
+    std::env::remove_var("COFFEEBLACK_HELPER_SOCKET");
 }
 
 #[test]
@@ -225,7 +225,7 @@ fn config_is_owner_only_regardless_of_ambient_umask() {
     // create-then-fix sequence to have a window in the first place.
     let (socket, conf_dir) = start_helper("confumask");
     raw(&socket, r#"{"op":"wg_sync","config":"[Interface]\nPrivateKey = k\n"}"#);
-    let mode = std::fs::metadata(conf_dir.join("awg0.conf"))
+    let mode = std::fs::metadata(conf_dir.join("cb0.conf"))
         .unwrap()
         .permissions()
         .mode()

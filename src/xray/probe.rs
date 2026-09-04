@@ -4,7 +4,7 @@
 //!
 //! 1. Accept inbound TLS on the configured port (typically 443).
 //! 2. Negotiate TLS 1.3 — Reality's TLS-in-TLS splicing relies on it.
-//! 3. Present a valid certificate whose SAN matches the SNI awg-easy-rs
+//! 3. Present a valid certificate whose SAN matches the SNI coffeeblack-vpn
 //!    will tell clients to send (`serverNames[0]`).
 //! 4. Ideally support HTTP/2 in ALPN — that's what real CDN traffic
 //!    looks like to a DPI box, so it's the more convincing fall-through.

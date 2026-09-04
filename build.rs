@@ -20,7 +20,7 @@
 //!   socks5/forwarder. Pinned in `vendor/MDNSVPN_VERSION`.
 //!
 //! All three bundles surface their version + per-binary SHA-256 to the
-//! rest of the crate via `cargo:rustc-env=AWG_EASY_*` constants so the
+//! rest of the crate via `cargo:rustc-env=COFFEEBLACK_*` constants so the
 //! runtime extractor can verify-on-extract and the `/about` page can
 //! display what shipped.
 
@@ -97,11 +97,11 @@ fn process_xray_bundle(
     };
 
     let Some((blob_name, sha_key)) = bundle else {
-        println!("cargo:rustc-env=AWG_EASY_XRAY_VERSION={xray_version}");
-        println!("cargo:rustc-env=AWG_EASY_XRAY_SHA256=");
+        println!("cargo:rustc-env=COFFEEBLACK_XRAY_VERSION={xray_version}");
+        println!("cargo:rustc-env=COFFEEBLACK_XRAY_SHA256=");
         println!(
             "cargo:warning=Xray bundled mode is not available for target {target_os}-{target_arch}; \
-             awg-easy-rs will build without Browsing-mode support."
+             coffeeblack-vpn will build without Browsing-mode support."
         );
         return;
     };
@@ -115,8 +115,8 @@ fn process_xray_bundle(
     // without the bundle so contributors can still `cargo check`,
     // mirroring the DNS bundle's missing-blob tolerance.
     if !blob_src.is_file() || expected_sha.is_empty() {
-        println!("cargo:rustc-env=AWG_EASY_XRAY_VERSION={xray_version}");
-        println!("cargo:rustc-env=AWG_EASY_XRAY_SHA256=");
+        println!("cargo:rustc-env=COFFEEBLACK_XRAY_VERSION={xray_version}");
+        println!("cargo:rustc-env=COFFEEBLACK_XRAY_SHA256=");
         println!(
             "cargo:warning=Xray blob missing ({}) — building without xray_bundled. \
              Run scripts/build.sh to materialise it from the pinned version.",
@@ -130,8 +130,8 @@ fn process_xray_bundle(
         panic!("copy {} → {}: {e}", blob_src.display(), blob_dst.display())
     });
 
-    println!("cargo:rustc-env=AWG_EASY_XRAY_VERSION={xray_version}");
-    println!("cargo:rustc-env=AWG_EASY_XRAY_SHA256={expected_sha}");
+    println!("cargo:rustc-env=COFFEEBLACK_XRAY_VERSION={xray_version}");
+    println!("cargo:rustc-env=COFFEEBLACK_XRAY_SHA256={expected_sha}");
     println!("cargo:rustc-cfg=xray_bundled");
 }
 
@@ -166,10 +166,10 @@ fn process_dns_bundle(
                 e
             );
             for bin in DNS_BUNDLE_BINARIES {
-                println!("cargo:rustc-env=AWG_EASY_DNS_{}_VERSION=", bin.env_prefix);
-                println!("cargo:rustc-env=AWG_EASY_DNS_{}_SHA256=", bin.env_prefix);
+                println!("cargo:rustc-env=COFFEEBLACK_DNS_{}_VERSION=", bin.env_prefix);
+                println!("cargo:rustc-env=COFFEEBLACK_DNS_{}_SHA256=", bin.env_prefix);
             }
-            println!("cargo:rustc-env=AWG_EASY_DNS_BUNDLE_INCOMPLETE=DNS_BUNDLE_VERSION missing");
+            println!("cargo:rustc-env=COFFEEBLACK_DNS_BUNDLE_INCOMPLETE=DNS_BUNDLE_VERSION missing");
             return;
         }
     };
@@ -185,14 +185,14 @@ fn process_dns_bundle(
     let Some((file_arch, sha_arch)) = arch else {
         println!(
             "cargo:warning=DNS bundle is not available for target {target_os}-{target_arch}; \
-             awg-easy-rs will build without bundled DNS support."
+             coffeeblack-vpn will build without bundled DNS support."
         );
         for bin in DNS_BUNDLE_BINARIES {
-            println!("cargo:rustc-env=AWG_EASY_DNS_{}_VERSION=", bin.env_prefix);
-            println!("cargo:rustc-env=AWG_EASY_DNS_{}_SHA256=", bin.env_prefix);
+            println!("cargo:rustc-env=COFFEEBLACK_DNS_{}_VERSION=", bin.env_prefix);
+            println!("cargo:rustc-env=COFFEEBLACK_DNS_{}_SHA256=", bin.env_prefix);
         }
         println!(
-            "cargo:rustc-env=AWG_EASY_DNS_BUNDLE_INCOMPLETE=unsupported target \
+            "cargo:rustc-env=COFFEEBLACK_DNS_BUNDLE_INCOMPLETE=unsupported target \
 {target_os}-{target_arch}"
         );
         return;
@@ -242,15 +242,15 @@ fn process_dns_bundle(
                 .get(&format!("{}_{}_SHA256", bin.env_prefix, sha_arch))
                 .cloned()
                 .unwrap_or_default();
-            println!("cargo:rustc-env=AWG_EASY_DNS_{}_VERSION={ver}", bin.env_prefix);
-            println!("cargo:rustc-env=AWG_EASY_DNS_{}_SHA256={sha}", bin.env_prefix);
+            println!("cargo:rustc-env=COFFEEBLACK_DNS_{}_VERSION={ver}", bin.env_prefix);
+            println!("cargo:rustc-env=COFFEEBLACK_DNS_{}_SHA256={sha}", bin.env_prefix);
         }
         // The pins alone don't decide `dns_bundled` — the blobs have to be
         // on disk too, and they're CI artifacts (vendor/*.gz is untracked).
         // Surface *why* the bundle is off so the DNS bundle API (and the
         // tests) can tell a deliberate no-bundle build from a broken pin.
         println!(
-            "cargo:rustc-env=AWG_EASY_DNS_BUNDLE_INCOMPLETE={}",
+            "cargo:rustc-env=COFFEEBLACK_DNS_BUNDLE_INCOMPLETE={}",
             missing.join(", ")
         );
         return;
@@ -273,10 +273,10 @@ fn process_dns_bundle(
 
         let ver = &kv[&format!("{}_VERSION", bin.env_prefix)];
         let sha = &kv[&format!("{}_{}_SHA256", bin.env_prefix, sha_arch)];
-        println!("cargo:rustc-env=AWG_EASY_DNS_{}_VERSION={ver}", bin.env_prefix);
-        println!("cargo:rustc-env=AWG_EASY_DNS_{}_SHA256={sha}", bin.env_prefix);
+        println!("cargo:rustc-env=COFFEEBLACK_DNS_{}_VERSION={ver}", bin.env_prefix);
+        println!("cargo:rustc-env=COFFEEBLACK_DNS_{}_SHA256={sha}", bin.env_prefix);
     }
-    println!("cargo:rustc-env=AWG_EASY_DNS_BUNDLE_INCOMPLETE=");
+    println!("cargo:rustc-env=COFFEEBLACK_DNS_BUNDLE_INCOMPLETE=");
     println!("cargo:rustc-cfg=dns_bundled");
 }
 
@@ -309,11 +309,11 @@ fn process_telemt_bundle(
     };
 
     let Some((blob_name, sha_key)) = bundle else {
-        println!("cargo:rustc-env=AWG_EASY_TELEMT_VERSION={telemt_version}");
-        println!("cargo:rustc-env=AWG_EASY_TELEMT_SHA256=");
+        println!("cargo:rustc-env=COFFEEBLACK_TELEMT_VERSION={telemt_version}");
+        println!("cargo:rustc-env=COFFEEBLACK_TELEMT_SHA256=");
         println!(
             "cargo:warning=telemt bundled mode is not available for target {target_os}-{target_arch}; \
-             awg-easy-rs will build without Telegram MTProxy support."
+             coffeeblack-vpn will build without Telegram MTProxy support."
         );
         return;
     };
@@ -322,8 +322,8 @@ fn process_telemt_bundle(
     let expected_sha = kv.get(sha_key).map(String::as_str).unwrap_or("");
 
     if !blob_src.is_file() || expected_sha.is_empty() {
-        println!("cargo:rustc-env=AWG_EASY_TELEMT_VERSION={telemt_version}");
-        println!("cargo:rustc-env=AWG_EASY_TELEMT_SHA256=");
+        println!("cargo:rustc-env=COFFEEBLACK_TELEMT_VERSION={telemt_version}");
+        println!("cargo:rustc-env=COFFEEBLACK_TELEMT_SHA256=");
         println!(
             "cargo:warning=telemt blob missing ({}) — building without telemt_bundled. \
              Run scripts/build.sh to materialise it from the pinned version.",
@@ -337,8 +337,8 @@ fn process_telemt_bundle(
         panic!("copy {} → {}: {e}", blob_src.display(), blob_dst.display())
     });
 
-    println!("cargo:rustc-env=AWG_EASY_TELEMT_VERSION={telemt_version}");
-    println!("cargo:rustc-env=AWG_EASY_TELEMT_SHA256={expected_sha}");
+    println!("cargo:rustc-env=COFFEEBLACK_TELEMT_VERSION={telemt_version}");
+    println!("cargo:rustc-env=COFFEEBLACK_TELEMT_SHA256={expected_sha}");
     println!("cargo:rustc-cfg=telemt_bundled");
 }
 
@@ -371,11 +371,11 @@ fn process_mdnsvpn_bundle(
     };
 
     let Some((blob_name, sha_key)) = bundle else {
-        println!("cargo:rustc-env=AWG_EASY_MDNSVPN_VERSION={mdnsvpn_version}");
-        println!("cargo:rustc-env=AWG_EASY_MDNSVPN_SHA256=");
+        println!("cargo:rustc-env=COFFEEBLACK_MDNSVPN_VERSION={mdnsvpn_version}");
+        println!("cargo:rustc-env=COFFEEBLACK_MDNSVPN_SHA256=");
         println!(
             "cargo:warning=MasterDnsVPN bundled mode is not available for target {target_os}-{target_arch}; \
-             awg-easy-rs will build without DNS-tunnel support."
+             coffeeblack-vpn will build without DNS-tunnel support."
         );
         return;
     };
@@ -384,8 +384,8 @@ fn process_mdnsvpn_bundle(
     let expected_sha = kv.get(sha_key).map(String::as_str).unwrap_or("");
 
     if !blob_src.is_file() || expected_sha.is_empty() {
-        println!("cargo:rustc-env=AWG_EASY_MDNSVPN_VERSION={mdnsvpn_version}");
-        println!("cargo:rustc-env=AWG_EASY_MDNSVPN_SHA256=");
+        println!("cargo:rustc-env=COFFEEBLACK_MDNSVPN_VERSION={mdnsvpn_version}");
+        println!("cargo:rustc-env=COFFEEBLACK_MDNSVPN_SHA256=");
         println!(
             "cargo:warning=MasterDnsVPN blob missing ({}) — building without mdnsvpn_bundled. \
              Run scripts/build.sh to materialise it from the pinned version.",
@@ -399,8 +399,8 @@ fn process_mdnsvpn_bundle(
         panic!("copy {} → {}: {e}", blob_src.display(), blob_dst.display())
     });
 
-    println!("cargo:rustc-env=AWG_EASY_MDNSVPN_VERSION={mdnsvpn_version}");
-    println!("cargo:rustc-env=AWG_EASY_MDNSVPN_SHA256={expected_sha}");
+    println!("cargo:rustc-env=COFFEEBLACK_MDNSVPN_VERSION={mdnsvpn_version}");
+    println!("cargo:rustc-env=COFFEEBLACK_MDNSVPN_SHA256={expected_sha}");
     println!("cargo:rustc-cfg=mdnsvpn_bundled");
 }
 

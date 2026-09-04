@@ -1,4 +1,4 @@
-# awg-easy-rs
+# CoffeeBlack VPN
 
 A standalone, single-binary VPN + censorship-resistant proxy manager with a built-in web UI. Pure Rust port of [wg-easy](https://github.com/wg-easy/wg-easy) / [awg-easy](https://github.com/coffeegrind123/awg-easy) — no Node.js, no npm, no JS toolchain in the container.
 
@@ -17,7 +17,7 @@ Four transports + an optional bundled resolver, all sharing one admin UI, user a
 
 - **~20 MB stripped release binary** (musl-static, distro-agnostic — runs unchanged on glibc, musl, or any other libc x86_64 host). Bundled Xray accounts for ~13 MB; telemt adds ~6 MB; MasterDnsVPN adds ~2 MB; the DNS bundle adds another ~20 MB when curated.
 - **800+ unit + integration tests** (DB, auth, security, API, activity accounting + retention, AmneziaWG kernel-parity, Xray Reality e2e, telemt + MasterDnsVPN config-gen smoke, plus parity suites pinning every in-house replacement against the crate it replaced — QR symbols, gzip blobs, the QUIC flight, HTTP wire behaviour).
-- **Native nftables firewall** — single `inet awg-easy-rs` table with atomic transactions. Transparent compat shim for hosts still on `iptables-legacy`: detected at startup, three FORWARD/INPUT accept rules mirrored into the legacy backend, removed on graceful shutdown.
+- **Native nftables firewall** — single `inet coffeeblack` table with atomic transactions. Transparent compat shim for hosts still on `iptables-legacy`: detected at startup, three FORWARD/INPUT accept rules mirrored into the legacy backend, removed on graceful shutdown.
 
 ---
 
@@ -27,7 +27,7 @@ Four transports + an optional bundled resolver, all sharing one admin UI, user a
 |---|---|
 | **AmneziaWG 2.0 (Gaming)** | Full obfuscation set: `Jc / Jmin / Jmax`, `S1‑S4`, `H1‑H4` (with non-overlapping ranges), `I1‑I5` (with CPS tag-grammar validation: `<b 0xHEX>`, `<r N>`, `<rc N>`, `<rd N>`, `<t>`, `<c>`). Per-peer `AdvancedSecurity` opt-in (on / off / auto-detect from H1 magic header). **AmneziaWG 3** (built into the image as amneziawg-go v3.1.20260828 + amneziawg-tools v3.1.20260812): header protection (server-generated key, never displayed; enforces the S1–S4 ≥ 12 nonce floor upstream requires), `ContentPaddingAddition`, the `RekeyAfterTime` / `RekeyTimeout` / `RejectAfterTime` / `KeepaliveTimeout` / `MaxHandshakeAttempts` timers (single value or `N-M` range), `RandomTrailers` and `DisableCookies` — all off by default, and an unset knob emits no config line, so an upgraded deployment's wire format is unchanged until you turn one on. Header protection and random trailers are mutually exclusive with the DPI-imitation proxy and the admin API refuses the combination from either side — see [AmneziaWG 3](#amneziawg-3). |
 | **Xray VLESS+Reality+Vision (Browsing)** | Bundled Xray-core v26.3.27 ELF (vendored, gzipped, SHA-verified, ~13 MB compressed). Vision flow hardcoded. Per-client UUID **and** per-client `shortId` (revocable individually). TLS 1.3 dest probe with SAN-match enforcement (rejects burned-IP / private-CN destinations before save). Tokio-supervised subprocess: SIGHUP reload, SIGTERM+10s grace shutdown, capped exponential backoff on crash. Free-form `additional_config` JSON deep-merged into the inbound. |
-| **Telegram MTProxy** | Bundled [telemt](https://github.com/telemt/telemt) v3.5.5 ELF (vendored, gzipped, SHA-verified, ~6 MB compressed). Fake-TLS / SNI fronting (`secret=ee<…>` link variant), per-user 32-hex secrets, optional `dd`-prefix and classic modes, traffic masking. Tokio-supervised subprocess; users live durably in the awg-easy-rs DB and reconcile into telemt's `127.0.0.1:9091` HTTP control plane after every spawn so a telemt state-file wipe doesn't lose the operator's roster. `tg://proxy?…` share links rendered server-side, QR via `qr.rs`. |
+| **Telegram MTProxy** | Bundled [telemt](https://github.com/telemt/telemt) v3.5.5 ELF (vendored, gzipped, SHA-verified, ~6 MB compressed). Fake-TLS / SNI fronting (`secret=ee<…>` link variant), per-user 32-hex secrets, optional `dd`-prefix and classic modes, traffic masking. Tokio-supervised subprocess; users live durably in the coffeeblack-vpn DB and reconcile into telemt's `127.0.0.1:9091` HTTP control plane after every spawn so a telemt state-file wipe doesn't lose the operator's roster. `tg://proxy?…` share links rendered server-side, QR via `qr.rs`. |
 | **MasterDnsVPN (DNS-tunnel)** | Bundled [MasterDnsVPN](https://github.com/masterking32/MasterDnsVPN) v2026.06.13 ELF (vendored, gzipped, SHA-verified, ~2 MB compressed). Encryption: XOR / ChaCha20 / AES-128/192/256-GCM (selectable). SOCKS5 or fixed-TCP forwarding. Per-client bookkeeping (display name, custom resolver list, local SOCKS5 port, expiry) — but every client uses the same singleton encryption key (a property of the underlying protocol). Share format: downloadable `client_config.toml` + `client_resolvers.txt`, plus a `mdnsvpn://b64?<base64>` single-string variant for `mdnsvpn -json_base64`. **Requires** the operator to own a domain and create an `NS` delegation to this server. |
 | **DNS bundle (optional)** | Bundled `dnscrypt-proxy` 2.1.18 + `tor` 0.4.9.11 + `lyrebird` 0.8.1 (obfs4) + `snowflake` v2.14.1 + `webtunnel` v0.0.6 — ~20 MB additional, curated as static-musl ELFs. Off by default; tor stays off independent of the dnscrypt-proxy master switch. Pairs with an nftables `dns-prerouting` chain that DNATs every peer `:53/:853` UDP+TCP packet to the configured resolver, plus an optional `dns-lockdown` filter chain that drops residual external DNS — gives belt-and-braces leak prevention even when the WireGuard `DNS = …` line is honored only loosely by the client. |
 | **Build & release** | Vendored binary blobs (`vendor/*.gz`) are CI artifacts, **not committed**. `vendor/*_VERSION` pin files (versions + SHA-256) are the audited spec. `scripts/build.sh` materialises the blobs from the pin files and produces a fully static `x86_64-unknown-linux-musl` ELF locally; `.github/workflows/build-release.yml` runs the same flow in CI on every push to `main` (or manually) and publishes a release with the binary, SHA-256, and a per-component versions table. |
@@ -36,16 +36,16 @@ Four transports + an optional bundled resolver, all sharing one admin UI, user a
 | **Share formats** | AmneziaWG: `.conf` file, QR, one-time link. Xray: `vless://` URL (with both `spx` and `spiderX` for max compat), QR, native Amnezia-format JSON. Telegram: `tg://proxy?…&secret=ee<…>` link (Fake-TLS) + `dd`-prefix and classic variants for the same user, QR. MasterDnsVPN: downloadable `client_config.toml` + `client_resolvers.txt`, JSON, `mdnsvpn://b64?<base64>` single-string blob (for `mdnsvpn -json_base64`), QR. |
 | **Peer key handling** | Private keys are **issued once and not stored** by default (`private_key_retention = never`): the config + QR come back in the create response and can never be re-displayed, so a compromise of the database yields no peer keys. Optional `plaintext` mode restores upstream re-display behaviour behind a permanent admin banner; switching back purges. Peers may also **bring their own public key**, so the server never sees a private half at all. `rotateKey` is the recovery and revocation path. See [Peer private keys](#peer-private-keys-issued-once-not-stored). |
 | **Auth** | Argon2id password hashing, server-side session cookies (`SameSite=Strict`, `HttpOnly`, `Secure` unless `INSECURE=true`). Per-username (10/min) **and** per-source-IP (50/min) login rate limit. Constant-time username-not-found path (no enumeration via timing). |
-| **Secrets at rest** | Every stored credential is AES-256-GCM encrypted **when `WG_EASY_SECRET_KEY` (or `WG_EASY_SECRET_KEY_PATH`) is set** — it is not set by the shipped `docker-compose.yml`, and without it these columns are stored in cleartext with a warning at startup — peer private and pre-shared keys, the server's WireGuard key, the Reality key, VLESS UUIDs/shortIds, MTProxy secrets, the DNS-tunnel key, TOTP seeds — with the full list in one auditable registry. One-time-link tokens are stored as SHA-256 digests. Generated transport configs are written `0600` in `0700` dirs (they were world-readable). See [Generated config files](#generated-config-files) and [Secret encryption](#secret-encryption-at-rest). |
+| **Secrets at rest** | Every stored credential is AES-256-GCM encrypted **when `COFFEEBLACK_SECRET_KEY` (or `COFFEEBLACK_SECRET_KEY_PATH`) is set** — it is not set by the shipped `docker-compose.yml`, and without it these columns are stored in cleartext with a warning at startup — peer private and pre-shared keys, the server's WireGuard key, the Reality key, VLESS UUIDs/shortIds, MTProxy secrets, the DNS-tunnel key, TOTP seeds — with the full list in one auditable registry. One-time-link tokens are stored as SHA-256 digests. Generated transport configs are written `0600` in `0700` dirs (they were world-readable). See [Generated config files](#generated-config-files) and [Secret encryption](#secret-encryption-at-rest). |
 | **2FA / TOTP** | Server-generated 20-byte secrets, **encrypted at rest** (AES-256-GCM, key supplied out of band via systemd credentials or env — see [Secret encryption](#secret-encryption-at-rest)), RFC 6238 verification, separate 5/5min rate limit on TOTP code attempts. `setup` / `create` / `delete` API contract. |
 | **Setup wizard** | 4-step first-run flow. `INIT_ENABLED` env-var auto-setup for Kubernetes/CI deployments. |
 | **DPI-imitation proxy** | In-process async UDP proxy (ported from [amneziawg-proxy](https://github.com/wiresock/amneziawg-install)) fronting the AmneziaWG port. Protocol modes `quic` / `dns` / `stun` / `sip` / `auto`; per-packet S1–S4 padding transform driven by the interface's live S/H params; active-probe responders including a stateful `quinn-proto` QUIC/TLS-1.3 handshake responder (self-signed per-SNI cert) and a stateful SIP dialog machine; optional real DNS-upstream forwarding. Supervised as a Tokio task (no subprocess, no blob). Enabling it rebinds AmneziaWG onto a loopback backend port + an nftables `proxy-lockdown` input chain confining that port to `lo`; client `Endpoint` lines are untouched. |
-| **Per-client firewall** | Native nftables `wg-clients` chain inside the `inet awg-easy-rs` table. `IP:port[/tcp\|udp]` rules, default-deny, atomic rebuild via a single `nft -f -` transaction. (AmneziaWG side only; Xray, telemt, and MasterDnsVPN multiplex through one socket each, so per-peer L3/L4 filtering doesn't compose with VLESS UUIDs / MTProxy secrets / DNS-tunnel envelopes.) |
+| **Per-client firewall** | Native nftables `wg-clients` chain inside the `inet coffeeblack` table. `IP:port[/tcp\|udp]` rules, default-deny, atomic rebuild via a single `nft -f -` transaction. (AmneziaWG side only; Xray, telemt, and MasterDnsVPN multiplex through one socket each, so per-peer L3/L4 filtering doesn't compose with VLESS UUIDs / MTProxy secrets / DNS-tunnel envelopes.) |
 | **Metrics** | `/metrics/json` and `/metrics/prometheus`, gated by hashed Bearer token (when `metricsPassword` is set). Exposes per-peer rx/tx, last-handshake, online state, plus the poller's `wireguard_peer_total_rx_bytes` / `_total_tx_bytes` counters (unaffected by the interface restarts that zero the raw ones) and `wireguard_peer_last_seen`. |
-| **Activity history (RAM-only)** | 30 s poller folds `awg show dump` into monotonic per-peer lifetime totals (immune to the counter reset an interface restart causes) and a bounded one-bucket-per-peer-per-UTC-day rollup. Drives a GitHub-contribution-style heatmap on the clients page — shaded by time connected or by traffic volume, 30/60/90-day windows. **None of it enters SQLite**: connection history is held in process memory, so no `IN_MEMORY=false` or `WG_EASY_PERSIST_DB` setting can turn it into an on-disk record. The peer's **source address is never recorded** — the live endpoint is shown straight from the kernel but never accumulated into history. Retention is operator-set (default 30 days); `0` disables collection **and** purges, plus an explicit *Erase activity history* action. See [Activity history](#activity-history-and-the-connection-heatmap). |
+| **Activity history (RAM-only)** | 30 s poller folds `awg show dump` into monotonic per-peer lifetime totals (immune to the counter reset an interface restart causes) and a bounded one-bucket-per-peer-per-UTC-day rollup. Drives a GitHub-contribution-style heatmap on the clients page — shaded by time connected or by traffic volume, 30/60/90-day windows. **None of it enters SQLite**: connection history is held in process memory, so no `IN_MEMORY=false` or `COFFEEBLACK_PERSIST_DB` setting can turn it into an on-disk record. The peer's **source address is never recorded** — the live endpoint is shown straight from the kernel but never accumulated into history. Retention is operator-set (default 30 days); `0` disables collection **and** purges, plus an explicit *Erase activity history* action. See [Activity history](#activity-history-and-the-connection-heatmap). |
 | **Privilege separation** | Optional `--privileged-helper` mode: a root helper on a Unix socket serving a **fixed six-operation allowlist** as argument vectors, with the interface name and all paths fixed at startup and never read from a request. The web process then runs unprivileged with no `CAP_NET_ADMIN`, so an RCE in the HTTP layer no longer means root. Ported from [islandr-proxy](https://github.com/chriscohnen/islandr)'s model. See [Privilege separation](#privilege-separation-optional). |
 | **Operational** | Background cron expires clients/one-time-links every 60 s. `/health` endpoint (always 200). Persistent SQLite (WAL mode, foreign keys on). Idempotent schema migrations. |
-| **Run-in-RAM mode** | `IN_MEMORY=true` (default in the Docker image): `:memory:` SQLite + every bundled subprocess ELF exec'd from an anonymous, sealed `memfd` — nothing on the request path or `exec` path touches disk. Optional async snapshot/restore (`WG_EASY_PERSIST_DB`) keeps the roster across restarts without ever blocking the data plane on a failing disk. See [Run entirely in memory](#run-entirely-in-memory). |
+| **Run-in-RAM mode** | `IN_MEMORY=true` (default in the Docker image): `:memory:` SQLite + every bundled subprocess ELF exec'd from an anonymous, sealed `memfd` — nothing on the request path or `exec` path touches disk. Optional async snapshot/restore (`COFFEEBLACK_PERSIST_DB`) keeps the roster across restarts without ever blocking the data plane on a failing disk. See [Run entirely in memory](#run-entirely-in-memory). |
 
 ---
 
@@ -61,23 +61,23 @@ Open `https://YOUR_HOST:51821/` (place a reverse proxy in front — see [TLS](#t
 
 ### Prebuilt binary
 
-Each push to `main` produces a tagged release with a fully-static `awg-easy-rs` ELF on the [Releases page](https://github.com/coffeegrind123/awg-easy-rs/releases). The binary runs on any x86_64 Linux distro — no glibc / musl mismatch:
+Each push to `main` produces a tagged release with a fully-static `coffeeblack-vpn` ELF on the [Releases page](https://github.com/coffeegrind123/coffeeblack-vpn/releases). The binary runs on any x86_64 Linux distro — no glibc / musl mismatch:
 
 ```bash
-curl -fsSL -o /usr/local/bin/awg-easy-rs \
-  https://github.com/coffeegrind123/awg-easy-rs/releases/latest/download/awg-easy-rs
-chmod +x /usr/local/bin/awg-easy-rs
-sudo /usr/local/bin/awg-easy-rs
+curl -fsSL -o /usr/local/bin/coffeeblack-vpn \
+  https://github.com/coffeegrind123/coffeeblack-vpn/releases/latest/download/coffeeblack-vpn
+chmod +x /usr/local/bin/coffeeblack-vpn
+sudo /usr/local/bin/coffeeblack-vpn
 ```
 
 The release page lists SHA-256 hashes and the version of every bundled component (Xray, telemt, dnscrypt-proxy, tor, etc.) sourced from the `vendor/*_VERSION` pin files at build time.
 
 ### Bare-metal install (systemd)
 
-For a host install without Docker, `scripts/install.sh` provisions the AmneziaWG kernel module (DKMS via the distro's package repos), installs the `awg-easy-rs` binary, and runs it as a systemd service:
+For a host install without Docker, `scripts/install.sh` provisions the AmneziaWG kernel module (DKMS via the distro's package repos), installs the `coffeeblack-vpn` binary, and runs it as a systemd service:
 
 ```bash
-curl -O https://raw.githubusercontent.com/coffeegrind123/awg-easy-rs/main/scripts/install.sh
+curl -O https://raw.githubusercontent.com/coffeegrind123/coffeeblack-vpn/main/scripts/install.sh
 chmod +x install.sh
 sudo ./install.sh              # guided; or: sudo AUTO_INSTALL=y ./install.sh
 ```
@@ -111,32 +111,32 @@ All configuration is via environment variables.
 | `HOST` | `0.0.0.0` | Web UI bind address |
 | `INSECURE` | `false` | If `true`, drops the `Secure` flag from the session cookie. **Only set this when running on a trusted local network without TLS.** Production deployments should leave this `false` and terminate TLS upstream. |
 | `DISABLE_IPV6` | `false` | Skip IPv6 in generated configs / firewall rules |
-| `WG_EASY_DB_PATH` | `/etc/wireguard/wg-easy.db` | SQLite database path |
-| `WG_EASY_HELPER_SOCKET` | — | Path to the privileged helper's Unix socket. Set it and this process routes every `awg`/`nft` call and the interface config write through the helper, needing no capabilities itself. Unset means execute directly (the original behaviour). |
-| `WG_EASY_HELPER_INTERFACE` | `awg0` | Helper only: the one interface it will act on. Never read from a request. |
-| `WG_EASY_HELPER_GID` | — | Helper only: gid allowed to connect. Sets the socket to 0660 and chowns it to that group; unset leaves it 0600 (root only). |
-| `WG_EASY_SECRET_KEY_PATH` | — | Path to a file holding the base64 AES-256 key used to encrypt secrets at rest (TOTP seeds). Intended for `LoadCredentialEncrypted=` under systemd. Takes precedence over `WG_EASY_SECRET_KEY`. |
-| `WG_EASY_SECRET_KEY` | — | The base64 AES-256 key itself (32 bytes: `openssl rand -base64 32`). For Docker/dev. Unset means secrets are stored in plaintext, with a startup warning. |
-| `WG_EASY_CONF_DIR` | `/etc/wireguard` | Where the generated `awg0.conf` is written |
-| `WG_EASY_XRAY_DIR` | `<WG_EASY_CONF_DIR>/xray` | Where the bundled Xray ELF is extracted and `server.json` written. Persist this on a docker volume so the binary doesn't re-extract on every restart. |
-| `XRAY_BIN_PATH` | — | If set, the supervisor uses this `xray` binary instead of extracting the bundled one. Useful for operators tracking upstream Xray independently of awg-easy-rs releases. |
-| `WG_EASY_MTPROXY_DIR` | `<WG_EASY_CONF_DIR>/mtproxy` | Where the bundled `telemt` ELF is extracted, plus the generated `config.toml`, telemt's PID file, and the `tlsfront` cache (real TLS records fetched from the masking domain). Persist on a docker volume to avoid re-extraction + tlsfront rebuilds across restarts. |
-| `WG_EASY_DNS_DIR` | `<WG_EASY_CONF_DIR>/dns` | Where the bundled DNS-stack ELFs (dnscrypt-proxy, tor, lyrebird, snowflake, webtunnel) are extracted, plus generated configs (`dnscrypt-proxy.toml`, `torrc`, etc.) and tor's data directory. Persist to keep tor's onion descriptors / consensus across restarts. |
-| `WG_EASY_MDNSVPN_DIR` | `<WG_EASY_CONF_DIR>/mdnsvpn` | Where the bundled MasterDnsVPN ELF is extracted, plus the generated `server_config.toml` and the singleton `encrypt_key.txt`. Persist on a docker volume to avoid re-extraction across restarts. |
+| `COFFEEBLACK_DB_PATH` | `/etc/coffeeblack/conf/coffeeblack.db` | SQLite database path |
+| `COFFEEBLACK_HELPER_SOCKET` | — | Path to the privileged helper's Unix socket. Set it and this process routes every `awg`/`nft` call and the interface config write through the helper, needing no capabilities itself. Unset means execute directly (the original behaviour). |
+| `COFFEEBLACK_HELPER_INTERFACE` | `cb0` | Helper only: the one interface it will act on. Never read from a request. |
+| `COFFEEBLACK_HELPER_GID` | — | Helper only: gid allowed to connect. Sets the socket to 0660 and chowns it to that group; unset leaves it 0600 (root only). |
+| `COFFEEBLACK_SECRET_KEY_PATH` | — | Path to a file holding the base64 AES-256 key used to encrypt secrets at rest (TOTP seeds). Intended for `LoadCredentialEncrypted=` under systemd. Takes precedence over `COFFEEBLACK_SECRET_KEY`. |
+| `COFFEEBLACK_SECRET_KEY` | — | The base64 AES-256 key itself (32 bytes: `openssl rand -base64 32`). For Docker/dev. Unset means secrets are stored in plaintext, with a startup warning. |
+| `COFFEEBLACK_CONF_DIR` | `/etc/coffeeblack/conf` | Where the generated `cb0.conf` is written |
+| `COFFEEBLACK_XRAY_DIR` | `<COFFEEBLACK_CONF_DIR>/xray` | Where the bundled Xray ELF is extracted and `server.json` written. Persist this on a docker volume so the binary doesn't re-extract on every restart. |
+| `XRAY_BIN_PATH` | — | If set, the supervisor uses this `xray` binary instead of extracting the bundled one. Useful for operators tracking upstream Xray independently of coffeeblack-vpn releases. |
+| `COFFEEBLACK_MTPROXY_DIR` | `<COFFEEBLACK_CONF_DIR>/mtproxy` | Where the bundled `telemt` ELF is extracted, plus the generated `config.toml`, telemt's PID file, and the `tlsfront` cache (real TLS records fetched from the masking domain). Persist on a docker volume to avoid re-extraction + tlsfront rebuilds across restarts. |
+| `COFFEEBLACK_DNS_DIR` | `<COFFEEBLACK_CONF_DIR>/dns` | Where the bundled DNS-stack ELFs (dnscrypt-proxy, tor, lyrebird, snowflake, webtunnel) are extracted, plus generated configs (`dnscrypt-proxy.toml`, `torrc`, etc.) and tor's data directory. Persist to keep tor's onion descriptors / consensus across restarts. |
+| `COFFEEBLACK_MDNSVPN_DIR` | `<COFFEEBLACK_CONF_DIR>/mdnsvpn` | Where the bundled MasterDnsVPN ELF is extracted, plus the generated `server_config.toml` and the singleton `encrypt_key.txt`. Persist on a docker volume to avoid re-extraction across restarts. |
 
 ### Run entirely in memory
 
 | Variable | Default | Description |
 |---|---|---|
-| `IN_MEMORY` | `true` (set `IN_MEMORY=false` to opt out) | Run with the data plane fully RAM-resident. SQLite is opened `:memory:`, and every bundled subprocess ELF (Xray, telemt, MasterDnsVPN, dnscrypt-proxy, tor) is exec'd from an anonymous `memfd_create(2)` object instead of being written to disk. No query and no `exec` touches a block device. Set `IN_MEMORY=false` for the classic durable on-disk database under `WG_EASY_DB_PATH`. |
-| `WG_EASY_PERSIST_DB` | — (`/data/wg-easy.db` in the image) | Durable snapshot file for the RAM database. Restored on boot (the only time it's read) and re-written by a background task + on graceful shutdown via SQLite's online-backup API. Unset ⇒ pure RAM, state lost on restart. Only consulted when `IN_MEMORY=true`. |
-| `WG_EASY_PERSIST_INTERVAL` | `30` | Seconds between RAM→disk snapshots. `0` disables periodic snapshots (shutdown still snapshots). |
+| `IN_MEMORY` | `true` (set `IN_MEMORY=false` to opt out) | Run with the data plane fully RAM-resident. SQLite is opened `:memory:`, and every bundled subprocess ELF (Xray, telemt, MasterDnsVPN, dnscrypt-proxy, tor) is exec'd from an anonymous `memfd_create(2)` object instead of being written to disk. No query and no `exec` touches a block device. Set `IN_MEMORY=false` for the classic durable on-disk database under `COFFEEBLACK_DB_PATH`. |
+| `COFFEEBLACK_PERSIST_DB` | — (`/data/coffeeblack.db` in the image) | Durable snapshot file for the RAM database. Restored on boot (the only time it's read) and re-written by a background task + on graceful shutdown via SQLite's online-backup API. Unset ⇒ pure RAM, state lost on restart. Only consulted when `IN_MEMORY=true`. |
+| `COFFEEBLACK_PERSIST_INTERVAL` | `30` | Seconds between RAM→disk snapshots. `0` disables periodic snapshots (shutdown still snapshots). |
 
 When `IN_MEMORY=true`:
 
-- **Database** — `:memory:`, so no SQLite query ever blocks on disk. If `WG_EASY_PERSIST_DB` is set, the full roster (clients, Reality keys, MTProxy secrets, the MasterDnsVPN key, accounts, 2FA) is restored from that file at boot and snapshotted back out-of-band. Every snapshot is best-effort and off the request path — a degraded or read-only disk demotes you to "no fresh snapshot", it never stalls or crashes the data plane. This is the WireGuard property the mode is built for: the service comes up and stays up from RAM regardless of disk health.
+- **Database** — `:memory:`, so no SQLite query ever blocks on disk. If `COFFEEBLACK_PERSIST_DB` is set, the full roster (clients, Reality keys, MTProxy secrets, the MasterDnsVPN key, accounts, 2FA) is restored from that file at boot and snapshotted back out-of-band. Every snapshot is best-effort and off the request path — a degraded or read-only disk demotes you to "no fresh snapshot", it never stalls or crashes the data plane. This is the WireGuard property the mode is built for: the service comes up and stays up from RAM regardless of disk health.
 - **Subprocess binaries** — decompressed, SHA-256-verified, and sealed (`F_SEAL_WRITE`) inside an anonymous memfd, then exec'd via `/proc/self/fd/N`. The binary has no name in any filesystem and is immutable. The memfd is cached for the process lifetime, so a crash-looping child re-`exec`s the same in-RAM image with zero re-extraction. (`XRAY_BIN_PATH` still overrides Xray with a real on-disk binary if you want to track upstream yourself.)
-- **Config files / `.conf` / tor data dir / PT plugins** — these still need real paths (tor `exec`s its lyrebird/snowflake/webtunnel plugins by the path written into `torrc`, and `awg-quick` reads `/etc/wireguard/<iface>.conf`). Mount the runtime root (`WG_EASY_CONF_DIR`, default `/etc/wireguard`) as a **tmpfs** so those live in RAM too. The bundled `docker-compose.yml` does exactly that (`tmpfs: /etc/wireguard`, durable volume only at `/data`). The server logs a warning at startup if `IN_MEMORY=true` but the runtime root isn't tmpfs.
+- **Config files / `.conf` / tor data dir / PT plugins** — these still need real paths (tor `exec`s its lyrebird/snowflake/webtunnel plugins by the path written into `torrc`, and `awg-quick` reads `/etc/coffeeblack/conf/<iface>.conf`). Mount the runtime root (`COFFEEBLACK_CONF_DIR`, default `/etc/coffeeblack/conf`) as a **tmpfs** so those live in RAM too. The bundled `docker-compose.yml` does exactly that (`tmpfs: /etc/coffeeblack/conf`, durable volume only at `/data`). The server logs a warning at startup if `IN_MEMORY=true` but the runtime root isn't tmpfs.
 
 No extra Linux capabilities are required — memfd needs none, and the tmpfs is supplied by the container runtime, so the cap set stays `NET_ADMIN` alone — the shipped `docker-compose.yml` does `cap_drop: ALL` and re-adds only that. (`SYS_MODULE` was dropped: it let the container load kernel modules into the host kernel, and amneziawg-go is userspace, so it was never needed.)
 
@@ -259,7 +259,7 @@ The official Amnezia VPN app (iOS/Android/Win/Mac/Linux) **consumes** the config
 2. Scan QR
 3. Paste the native JSON we expose at `/api/xray/clients/:id/json`
 
-It cannot **provision** peers on awg-easy-rs (its self-hosting flow expects SSH access to a Docker host). That's by design — peer management lives in the awg-easy-rs admin UI; the Amnezia app is just one of several supported clients.
+It cannot **provision** peers on coffeeblack-vpn (its self-hosting flow expects SSH access to a Docker host). That's by design — peer management lives in the coffeeblack-vpn admin UI; the Amnezia app is just one of several supported clients.
 
 ---
 
@@ -272,7 +272,7 @@ Telemt is **off by default**. To enable it:
 3. Set the listen port (default `8080` to avoid the 443 collision with Xray Reality) and optional `publicHost` / `publicPort` for the share links. Toggle **Enabled** and **Save** — telemt extracts on first start, writes `config.toml`, and brings up the listener. Subsequent saves rewrite `config.toml`; telemt's `notify`-based hot-reload picks up changes without a restart.
 4. Switch to **Telegram → Users**, click **Add user**, and hand over the auto-generated `tg://proxy?…&secret=ee<…>` link or QR.
 
-Awg-easy-rs is the **durable source of truth** for the user roster. The supervisor reconciles `mtproxy_users_table` into telemt's `127.0.0.1:9091/v1/users` HTTP control plane after every spawn, so a telemt state-file wipe doesn't lose the operator's users — same model as Xray's per-peer UUID/shortId lifecycle.
+Coffeeblack-vpn is the **durable source of truth** for the user roster. The supervisor reconciles `mtproxy_users_table` into telemt's `127.0.0.1:9091/v1/users` HTTP control plane after every spawn, so a telemt state-file wipe doesn't lose the operator's users — same model as Xray's per-peer UUID/shortId lifecycle.
 
 Expose the listening port on your reverse proxy / cloud firewall for Telegram clients to reach. Unlike Xray Reality, MTProxy on a non-443 port isn't a fingerprint; pick whatever doesn't conflict.
 
@@ -289,11 +289,11 @@ MasterDnsVPN is **off by default** — and unlike the other transports it has a 
 1. Open **Admin → DNS Tunnel (MasterDnsVPN) → Inbound** in the web UI.
 2. Click **Regenerate** to mint a fresh 16-byte shared encryption key. The same key is baked into every client's `client_config.toml` (MasterDnsVPN has no per-user secret slot — that's a property of the underlying protocol).
 3. Paste the NS-delegated FQDN(s) into **Tunnel domains** (one per line). Pick an encryption method (XOR for low CPU on weak hardware, AES-256-GCM otherwise) and a protocol type — `SOCKS5` lets clients pick the destination per-stream; `TCP` forwards every connection to a fixed `forwardIp:forwardPort` (useful for chaining mdnsvpn into a Shadowsocks / 3X-UI panel).
-4. Set the UDP listen port (default 53). On hosts where awg-easy-rs runs unprivileged, the binary needs `CAP_NET_BIND_SERVICE` or a port-forward (since :53 is privileged); on a `docker compose up -d` deployment the default `cap_add: NET_ADMIN` is already broad enough.
+4. Set the UDP listen port (default 53). On hosts where coffeeblack-vpn runs unprivileged, the binary needs `CAP_NET_BIND_SERVICE` or a port-forward (since :53 is privileged); on a `docker compose up -d` deployment the default `cap_add: NET_ADMIN` is already broad enough.
 5. Toggle **Enabled** and **Save** — mdnsvpn extracts on first start, writes `server_config.toml` + `encrypt_key.txt`, and binds the UDP listener.
 6. Switch to **DNS Tunnel → Clients**, click **Add client**, and hand over the auto-generated `client_config.toml` + `client_resolvers.txt` (or the single-string `mdnsvpn://b64?<base64>` blob — paste straight into `mdnsvpn -json_base64 <blob>` on the client side).
 
-Awg-easy-rs is the **bookkeeping source of truth** for the client roster — but MasterDnsVPN itself authenticates every tunnel with the singleton encryption key, so per-client rows are pure UX state (share-link slot, expiry, enabled toggle). Disabling a client in the admin UI revokes its config bundle from the download URLs but doesn't break the underlying tunnel for someone who already has a copy; rolling the encryption key (**Regenerate**) is what revokes every issued config.
+Coffeeblack-vpn is the **bookkeeping source of truth** for the client roster — but MasterDnsVPN itself authenticates every tunnel with the singleton encryption key, so per-client rows are pure UX state (share-link slot, expiry, enabled toggle). Disabling a client in the admin UI revokes its config bundle from the download URLs but doesn't break the underlying tunnel for someone who already has a copy; rolling the encryption key (**Regenerate**) is what revokes every issued config.
 
 ### Why bundle MasterDnsVPN?
 
@@ -307,7 +307,7 @@ The binary ships **without** TLS termination — put a reverse proxy in front of
 
 ```caddy
 vpn.example.com {
-    reverse_proxy awg-easy:51821
+    reverse_proxy coffeeblack-vpn:51821
 }
 ```
 
@@ -336,9 +336,9 @@ If you really must run without a proxy on a trusted network: set `INSECURE=true`
 
 ## Upgrades
 
-awg-easy-rs is a **standalone project** — not a drop-in for upstream `awg-easy` (Node.js) or `wg-easy`. It runs against its own SQLite database at `/etc/wireguard/wg-easy.db` (path kept for our own historical compat; override via `WG_EASY_DB_PATH`).
+coffeeblack-vpn is a **standalone project** — not a drop-in for upstream `awg-easy` (Node.js) or `wg-easy`. It runs against its own SQLite database at `/etc/coffeeblack/conf/coffeeblack.db` (override via `COFFEEBLACK_DB_PATH`).
 
-For upgrades between awg-easy-rs versions, idempotent `ALTER TABLE` migrations apply on first boot; no manual DDL.
+For upgrades between coffeeblack-vpn versions, idempotent `ALTER TABLE` migrations apply on first boot; no manual DDL.
 
 ---
 
@@ -383,7 +383,7 @@ That:
 
 1. Reads each pinned version from `vendor/{XRAY,DNS_BUNDLE,TELEMT}_VERSION`.
 2. Materialises `vendor/<name>-linux-amd64.gz` for each entry by delegating to `vendor/update.sh` (downloads pre-built artifacts where upstream publishes them; builds from source in Alpine Docker for `tor` and the Go pluggable transports). Skips binaries whose `.gz` already round-trips to the pinned SHA.
-3. Builds awg-easy-rs as a fully static **x86_64-linux-musl** ELF (`target/x86_64-unknown-linux-musl/release/awg-easy-rs`, ~18 MB stripped, runs unchanged on glibc / musl / any libc).
+3. Builds coffeeblack-vpn as a fully static **x86_64-linux-musl** ELF (`target/x86_64-unknown-linux-musl/release/coffeeblack-vpn`, ~18 MB stripped, runs unchanged on glibc / musl / any libc).
 
 For the workflow that does the same thing in CI + publishes a release, see [`.github/workflows/build-release.yml`](.github/workflows/build-release.yml).
 
@@ -425,13 +425,13 @@ Then commit the updated pin file (the `.gz` itself stays out of git). `build.rs`
 
 ### Running without Docker
 
-Gaming mode requires `awg`, `awg-quick`, and the AmneziaWG kernel module on the host. The other four subsystems are self-contained — the bundled `xray`, `telemt`, `mdnsvpn`, and DNS-stack ELFs are extracted to `WG_EASY_XRAY_DIR` / `WG_EASY_MTPROXY_DIR` / `WG_EASY_MDNSVPN_DIR` / `WG_EASY_DNS_DIR` on first start and don't need anything else on the host. Only the firewall stage needs `nft` available.
+Gaming mode requires `awg`, `awg-quick`, and the AmneziaWG kernel module on the host. The other four subsystems are self-contained — the bundled `xray`, `telemt`, `mdnsvpn`, and DNS-stack ELFs are extracted to `COFFEEBLACK_XRAY_DIR` / `COFFEEBLACK_MTPROXY_DIR` / `COFFEEBLACK_MDNSVPN_DIR` / `COFFEEBLACK_DNS_DIR` on first start and don't need anything else on the host. Only the firewall stage needs `nft` available.
 
 ```bash
-sudo ./target/x86_64-unknown-linux-musl/release/awg-easy-rs
+sudo ./target/x86_64-unknown-linux-musl/release/coffeeblack-vpn
 ```
 
-`/etc/wireguard/` must be writable by the user the binary runs as. If `awg-quick up awg0` fails the binary still starts and exposes the web UI — fix the host config and click *Restart Interface* in the admin panel. Per-supervisor failures surface in their respective admin tabs (`Admin → Browsing → Inbound`, `Admin → Telegram → Inbound`, `Admin → DNS Tunnel → Inbound`, `Admin → DNS bundle`). All five are independently disable-able and degrade gracefully — a misconfigured Browsing inbound doesn't block AmneziaWG, etc.
+`/etc/coffeeblack/conf/` must be writable by the user the binary runs as. If `awg-quick up cb0` fails the binary still starts and exposes the web UI — fix the host config and click *Restart Interface* in the admin panel. Per-supervisor failures surface in their respective admin tabs (`Admin → Browsing → Inbound`, `Admin → Telegram → Inbound`, `Admin → DNS Tunnel → Inbound`, `Admin → DNS bundle`). All five are independently disable-able and degrade gracefully — a misconfigured Browsing inbound doesn't block AmneziaWG, etc.
 
 ---
 
@@ -469,7 +469,7 @@ module                   listener     listener       tor SOCKS :9053
                          on TCP/8080  on UDP/53
                          (Fake-TLS)   (NS-delegated)
 
-  Firewall: single `inet awg-easy-rs` nftables table.
+  Firewall: single `inet coffeeblack` nftables table.
   PostUp creates: forward / nat-postrouting / filter-input.
   firewall.rs owns: wg-clients chain (per-peer rules) +
   dns-prerouting (DNS-leak DNAT) + dns-lockdown (residual drop).
@@ -501,7 +501,7 @@ src/
   datetime.rs      # RFC 3339 / expiry helpers + UTC day keys over `time`
   rng.rs           # OS CSPRNG + unbiased int ranges over `getrandom` (no rand)
   qr.rs            # SVG QR codes
-  firewall.rs      # native nftables; manages inet awg-easy-rs table:
+  firewall.rs      # native nftables; manages inet coffeeblack table:
                    #   wg-clients chain (per-peer rules)
                    #   dns-prerouting chain (DNS-leak DNAT)
                    #   dns-lockdown chain (residual drop)
@@ -588,7 +588,7 @@ rust-toolchain.toml     # pins rustc (reproducible builds)
 
 The web UI and the interface manager are the same process, and that process runs as root because `awg-quick`, `awg` and `nft` need `CAP_NET_ADMIN`. So a remote-code-execution bug anywhere in the HTTP layer — a handler, a parser, a dependency — is immediately full control of the host. The privileged work is six operations; the surface carrying that privilege is an entire web application.
 
-`awg-easy-rs --privileged-helper` splits them. It runs as root on a Unix socket, speaks one line-delimited JSON request per connection, and accepts a **fixed allowlist**:
+`coffeeblack-vpn --privileged-helper` splits them. It runs as root on a Unix socket, speaks one line-delimited JSON request per connection, and accepts a **fixed allowlist**:
 
 | Op | Runs |
 |---|---|
@@ -596,12 +596,12 @@ The web UI and the interface manager are the same process, and that process runs
 | `wg_sync` | writes `<conf_dir>/<iface>.conf` (0600), then `awg-quick strip` → `awg syncconf` |
 | `wg_show` | `awg show <iface> dump` |
 | `nft_apply` | `nft -c -f -` to validate, then `nft -f -` to apply |
-| `nft_list` | `nft list table inet awg-easy-rs` |
+| `nft_list` | `nft list table inet coffeeblack` |
 | `ping` | liveness |
 
 Everything is executed as an **argument vector** — never a shell string, and `argv[0]` always comes from a literal in the helper. The interface name and every filesystem path are fixed when the helper starts and are never read from a request, so `wg_sync` cannot be turned into an arbitrary-file-write primitive no matter what fields a caller adds. Operations that need no privilege at all (`genkey`, `pubkey`, `genpsk` — pure crypto) stay in the main process and are not forwardable.
 
-Enable it with `WG_EASY_HELPER_SOCKET`; unset, the binary behaves exactly as before and executes the commands itself, so an upgrade changes nothing until you opt in. See `packaging/awg-easy-rs-helper.service` and the commented block in `packaging/awg-easy-rs.service`.
+Enable it with `COFFEEBLACK_HELPER_SOCKET`; unset, the binary behaves exactly as before and executes the commands itself, so an upgrade changes nothing until you opt in. See `packaging/coffeeblack-vpn-helper.service` and the commented block in `packaging/coffeeblack-vpn.service`.
 
 **What it buys, stated honestly.** It removes arbitrary code execution as root, arbitrary file read and write, module loading, and persistence — the things an attacker actually wants out of an RCE. It does **not** remove control of the VPN: a compromised main process can still ask for a ruleset to be applied and an interface to be reconfigured, because that is the product's entire purpose. The helper validates that a ruleset parses; it cannot judge whether the operator wanted it. The pattern converts *root on the box* into *control of the tunnel* — a large reduction, not containment.
 
@@ -641,8 +641,8 @@ Values are encrypted with **AES-256-GCM** (via `ring`, already in the dependency
 
 | Source | Use |
 |---|---|
-| `WG_EASY_SECRET_KEY_PATH` | Path to a file holding the base64 key. Intended for systemd credentials — `LoadCredentialEncrypted=SECRET_KEY:…` decrypts a machine-bound blob into `/run/credentials/awg-easy-rs.service/SECRET_KEY` at start, so the key never exists as plaintext on disk. |
-| `WG_EASY_SECRET_KEY` | The base64 key itself (32 bytes). For Docker and development. |
+| `COFFEEBLACK_SECRET_KEY_PATH` | Path to a file holding the base64 key. Intended for systemd credentials — `LoadCredentialEncrypted=SECRET_KEY:…` decrypts a machine-bound blob into `/run/credentials/coffeeblack-vpn.service/SECRET_KEY` at start, so the key never exists as plaintext on disk. |
+| `COFFEEBLACK_SECRET_KEY` | The base64 key itself (32 bytes). For Docker and development. |
 
 ```bash
 # generate one
@@ -712,7 +712,7 @@ A background poller (`src/activity.rs`) samples the same dump every 30 s and fol
 
 ### None of it is in the database
 
-Per-peer connection history is the most sensitive thing this service could accumulate: who connected, when, from where, and how much they moved. Everything in the SQLite schema is written to a file when `IN_MEMORY=false`, and is copied verbatim into the durable snapshot when `WG_EASY_PERSIST_DB` is set — so a table, *even one in the `:memory:` database*, is one operator setting away from becoming a durable record of exactly that.
+Per-peer connection history is the most sensitive thing this service could accumulate: who connected, when, from where, and how much they moved. Everything in the SQLite schema is written to a file when `IN_MEMORY=false`, and is copied verbatim into the durable snapshot when `COFFEEBLACK_PERSIST_DB` is set — so a table, *even one in the `:memory:` database*, is one operator setting away from becoming a durable record of exactly that.
 
 So the history is not in the schema at all. It lives in a process-memory store (`RwLock<HashMap<client_id, ClientActivity>>`), which makes the guarantee structural rather than conditional: **there is no code path from this data to a file, in any mode.** It dies with the process, which is the intended lifetime. `tests/activity.rs` asserts this against the live schema — no table may be named for activity, and no `total_*` / `last_seen*` / `last_sampled_*` column may appear on `clients_table` — so a future change cannot quietly reintroduce on-disk history.
 
@@ -757,7 +757,7 @@ If you find a security issue, please open an issue marked `security`.
 
 ## Operational notes
 
-- **Backups**: copy `/etc/wireguard/wg-easy.db` while the container is stopped (or use `sqlite3 .backup`). The `.conf` and live kernel state regenerate from it on next start.
+- **Backups**: copy `/etc/coffeeblack/conf/coffeeblack.db` while the container is stopped (or use `sqlite3 .backup`). The `.conf` and live kernel state regenerate from it on next start.
 - **Health check**: the Dockerfile health check runs `awg show` to verify the kernel interface is up. Add an HTTP probe on `/health` if you want the proxy / orchestrator to also check the web UI.
 - **Sessions**: stored in-memory only, so a restart logs everyone out. Persist to disk if needed by trading off restart time vs. the slim attack surface of in-memory sessions.
 
@@ -765,7 +765,7 @@ If you find a security issue, please open an issue marked `security`.
 
 ## Comparison with upstream `awg-easy` (Node.js)
 
-| | Upstream Node.js | awg-easy-rs |
+| | Upstream Node.js | coffeeblack-vpn |
 |---|---|---|
 | Container size | ~150 MB (Node + deps) | ~50 MB (Alpine + Rust binary with bundled Xray + telemt + MasterDnsVPN + AmneziaWG tools; +~20 MB if the DNS bundle is curated) |
 | Cold start | seconds (Nuxt warm-up) | ~50 ms |

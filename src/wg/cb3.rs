@@ -173,7 +173,7 @@ pub fn check_header_protection_paddings(
 ///   survived.
 /// - **`RandomTrailers`** — the proxy identifies handshake packets by an
 ///   exact total length (`S + 148` for an initiation, and so on, in
-///   `proxy/responder.rs::classify_awg_packet`). A random trailer breaks
+///   `proxy/responder.rs::classify_cb_packet`). A random trailer breaks
 ///   that equality, so handshakes stop being recognised as AmneziaWG and
 ///   get answered as if they were probes.
 ///
@@ -211,7 +211,7 @@ pub fn proxy_conflict(header_protection_key: &str, random_trailers: bool) -> Opt
 /// the UI shows the section without a positive confirmation, and nothing
 /// is blocked, because refusing to configure on a failed probe would be
 /// worse than letting an operator who knows their deployment proceed.
-pub fn tools_support_awg3() -> Option<bool> {
+pub fn tools_support_cb3() -> Option<bool> {
     let out = crate::wg::cli::run("awg", &["--version"]).ok()?;
     parse_major_version(&out).map(|major| major >= 3)
 }

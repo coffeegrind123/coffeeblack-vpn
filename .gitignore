@@ -32,7 +32,7 @@ Thumbs.db
 .directory
 
 # SQLite databases and their WAL siblings. A locally-run server writes
-# wg-easy.db, which holds the service private key, every transport secret and
+# coffeeblack.db, which holds the service private key, every transport secret and
 # TOTP material — `git add .` in a dev checkout must not be able to commit it.
 *.db
 *.db-wal

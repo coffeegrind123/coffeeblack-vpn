@@ -488,12 +488,12 @@ mod tests {
     #[test]
     fn cookie_jar_extractor_reads_the_request_header() {
         let req = ::http::Request::builder()
-            .header(::http::header::COOKIE, "awg_session=tok")
+            .header(::http::header::COOKIE, "coffeeblack_session=tok")
             .body(Body::empty())
             .unwrap();
         let (mut parts, _) = req.into_parts();
         let jar = CookieJar::from_request_parts(&mut parts, &()).unwrap();
-        assert_eq!(jar.get("awg_session").unwrap().value(), "tok");
+        assert_eq!(jar.get("coffeeblack_session").unwrap().value(), "tok");
     }
 
     #[test]

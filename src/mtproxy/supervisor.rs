@@ -19,7 +19,7 @@
 //!    available (sends SIGHUP via PID file) but the file-watch path
 //!    works without it. We trust `notify` and rely on rewrite-only.
 //!
-//! 2. **User reconciliation**: awg-easy-rs is the durable source of
+//! 2. **User reconciliation**: coffeeblack-vpn is the durable source of
 //!    truth for users; telemt's runtime state isn't. After every
 //!    successful spawn (or whenever the DB roster changes through the
 //!    admin API) we POST/PATCH/DELETE through telemt's `/v1/users` to
@@ -405,7 +405,7 @@ pub async fn shutdown_for_exit() {
 ///    - In telemt with different secret/ad_tag/enabled → `PATCH`.
 ///    - Match → no-op.
 /// 4. For each telemt user **not** in our DB → `DELETE`. We assume the
-///    operator manages MTProxy users only through awg-easy-rs; users
+///    operator manages MTProxy users only through coffeeblack-vpn; users
 ///    created out-of-band against telemt directly will be reaped on
 ///    the next reconcile.
 ///
@@ -505,7 +505,7 @@ pub async fn reconcile_users_now() -> Result<()> {
     }
 
     // Anything in telemt that's not in the DB → delete it. This is the
-    // step that makes awg-easy-rs the durable source of truth.
+    // step that makes coffeeblack-vpn the durable source of truth.
     for live_name in live_map.keys() {
         if !db_names.contains(live_name) {
             match client::delete_user(live_name).await {

@@ -50,11 +50,11 @@ pub mod tor;
 /// shipped without unpacking the binary.
 pub fn embedded_versions() -> [(&'static str, &'static str, &'static str); 5] {
     [
-        ("dnscrypt-proxy", env!("AWG_EASY_DNS_DNSCRYPT_PROXY_VERSION"), env!("AWG_EASY_DNS_DNSCRYPT_PROXY_SHA256")),
-        ("tor",            env!("AWG_EASY_DNS_TOR_VERSION"),            env!("AWG_EASY_DNS_TOR_SHA256")),
-        ("lyrebird",       env!("AWG_EASY_DNS_LYREBIRD_VERSION"),       env!("AWG_EASY_DNS_LYREBIRD_SHA256")),
-        ("snowflake",      env!("AWG_EASY_DNS_SNOWFLAKE_VERSION"),      env!("AWG_EASY_DNS_SNOWFLAKE_SHA256")),
-        ("webtunnel",      env!("AWG_EASY_DNS_WEBTUNNEL_VERSION"),      env!("AWG_EASY_DNS_WEBTUNNEL_SHA256")),
+        ("dnscrypt-proxy", env!("COFFEEBLACK_DNS_DNSCRYPT_PROXY_VERSION"), env!("COFFEEBLACK_DNS_DNSCRYPT_PROXY_SHA256")),
+        ("tor",            env!("COFFEEBLACK_DNS_TOR_VERSION"),            env!("COFFEEBLACK_DNS_TOR_SHA256")),
+        ("lyrebird",       env!("COFFEEBLACK_DNS_LYREBIRD_VERSION"),       env!("COFFEEBLACK_DNS_LYREBIRD_SHA256")),
+        ("snowflake",      env!("COFFEEBLACK_DNS_SNOWFLAKE_VERSION"),      env!("COFFEEBLACK_DNS_SNOWFLAKE_SHA256")),
+        ("webtunnel",      env!("COFFEEBLACK_DNS_WEBTUNNEL_VERSION"),      env!("COFFEEBLACK_DNS_WEBTUNNEL_SHA256")),
     ]
 }
 
@@ -78,7 +78,7 @@ pub const fn is_bundled() -> bool {
 /// identical from inside the binary.
 #[inline]
 pub const fn bundle_incomplete_reason() -> &'static str {
-    env!("AWG_EASY_DNS_BUNDLE_INCOMPLETE")
+    env!("COFFEEBLACK_DNS_BUNDLE_INCOMPLETE")
 }
 
 #[cfg(test)]

@@ -439,7 +439,7 @@ where
             }
             // Route to a category target (`dnscrypt` or `tor`) so
             // operators can subscribe to one stream independently of
-            // awg-easy-rs's own tracing output.
+            // coffeeblack-vpn's own tracing output.
             let category = if target.starts_with("dnscrypt") {
                 "dnscrypt"
             } else {

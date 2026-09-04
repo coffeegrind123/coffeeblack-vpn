@@ -22,14 +22,14 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use awg_easy_rs::db::MdnsvpnInbound;
-use awg_easy_rs::mdnsvpn::{config, keys};
+use coffeeblack_vpn::db::MdnsvpnInbound;
+use coffeeblack_vpn::mdnsvpn::{config, keys};
 
 #[test]
 #[ignore = "spawns real mdnsvpn subprocess; needs vendor/mdnsvpn-linux-amd64.gz on disk"]
 fn generated_config_parses_and_mdnsvpn_starts() {
     let dir = format!(
-        "/tmp/awg-easy-rs-mdnsvpn-cfg-smoke-{}-{}",
+        "/tmp/coffeeblack-vpn-mdnsvpn-cfg-smoke-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

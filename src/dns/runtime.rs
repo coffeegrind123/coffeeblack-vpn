@@ -57,32 +57,32 @@ const WEBTUNNEL_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/webtunnel.
 pub const BINARIES: &[BundledBinary] = &[
     BundledBinary {
         name: "dnscrypt-proxy",
-        sha256: env!("AWG_EASY_DNS_DNSCRYPT_PROXY_SHA256"),
-        version: env!("AWG_EASY_DNS_DNSCRYPT_PROXY_VERSION"),
+        sha256: env!("COFFEEBLACK_DNS_DNSCRYPT_PROXY_SHA256"),
+        version: env!("COFFEEBLACK_DNS_DNSCRYPT_PROXY_VERSION"),
         gz: DNSCRYPT_PROXY_GZ,
     },
     BundledBinary {
         name: "tor",
-        sha256: env!("AWG_EASY_DNS_TOR_SHA256"),
-        version: env!("AWG_EASY_DNS_TOR_VERSION"),
+        sha256: env!("COFFEEBLACK_DNS_TOR_SHA256"),
+        version: env!("COFFEEBLACK_DNS_TOR_VERSION"),
         gz: TOR_GZ,
     },
     BundledBinary {
         name: "lyrebird",
-        sha256: env!("AWG_EASY_DNS_LYREBIRD_SHA256"),
-        version: env!("AWG_EASY_DNS_LYREBIRD_VERSION"),
+        sha256: env!("COFFEEBLACK_DNS_LYREBIRD_SHA256"),
+        version: env!("COFFEEBLACK_DNS_LYREBIRD_VERSION"),
         gz: LYREBIRD_GZ,
     },
     BundledBinary {
         name: "snowflake",
-        sha256: env!("AWG_EASY_DNS_SNOWFLAKE_SHA256"),
-        version: env!("AWG_EASY_DNS_SNOWFLAKE_VERSION"),
+        sha256: env!("COFFEEBLACK_DNS_SNOWFLAKE_SHA256"),
+        version: env!("COFFEEBLACK_DNS_SNOWFLAKE_VERSION"),
         gz: SNOWFLAKE_GZ,
     },
     BundledBinary {
         name: "webtunnel",
-        sha256: env!("AWG_EASY_DNS_WEBTUNNEL_SHA256"),
-        version: env!("AWG_EASY_DNS_WEBTUNNEL_VERSION"),
+        sha256: env!("COFFEEBLACK_DNS_WEBTUNNEL_SHA256"),
+        version: env!("COFFEEBLACK_DNS_WEBTUNNEL_VERSION"),
         gz: WEBTUNNEL_GZ,
     },
 ];
@@ -237,13 +237,13 @@ mod tests {
             assert_eq!(
                 bin.sha256.len(),
                 64,
-                "AWG_EASY_DNS_{}_SHA256 must be a hex SHA-256 (got {} chars)",
+                "COFFEEBLACK_DNS_{}_SHA256 must be a hex SHA-256 (got {} chars)",
                 bin.name.to_uppercase(),
                 bin.sha256.len()
             );
             assert!(
                 bin.sha256.chars().all(|c| c.is_ascii_hexdigit()),
-                "AWG_EASY_DNS_{}_SHA256 contains non-hex characters",
+                "COFFEEBLACK_DNS_{}_SHA256 contains non-hex characters",
                 bin.name.to_uppercase()
             );
             assert!(!bin.version.is_empty(), "{} version is blank", bin.name);

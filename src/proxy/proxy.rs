@@ -12,7 +12,7 @@ use tokio::time;
 use crate::{debug, error, info, warn};
 
 use crate::proxy::backend;
-use crate::proxy::config::{AwgParams, ProxyConfig};
+use crate::proxy::config::{CbParams, ProxyConfig};
 use crate::proxy::metrics::{GlobalProbeBudget, MetricsStore};
 use crate::proxy::quic_handshake::{QuicHandshakeResponder, QuicResponse};
 use crate::proxy::responder::{self, DnsEcho, Protocol, SipDialog, SipDialogStage};
@@ -109,7 +109,7 @@ pub struct Proxy {
     probe_budget: Arc<GlobalProbeBudget>,
     fixed_protocol: Option<Protocol>,
     client_protocols: Arc<ShardMap<SocketAddr, Protocol>>,
-    awg_params: Option<Arc<AwgParams>>,
+    cb_params: Option<Arc<CbParams>>,
     dns_forward_enabled: bool,
     dns_upstream: Option<SocketAddr>,
     dns_upstream_timeout: Duration,
@@ -328,7 +328,7 @@ async fn rename_status_file(tmp_path: &Path, path: &Path) -> anyhow::Result<()> 
 
 impl Proxy {
     /// Create and bind a new proxy instance.
-    pub async fn bind(config: ProxyConfig, awg_params: Option<AwgParams>) -> anyhow::Result<Self> {
+    pub async fn bind(config: ProxyConfig, cb_params: Option<CbParams>) -> anyhow::Result<Self> {
         let listen_addr: SocketAddr = config.listen.parse()?;
         let backend_addr: SocketAddr = config.backend.parse()?;
         let frontend = UdpSocket::bind(listen_addr).await?;
@@ -384,7 +384,7 @@ impl Proxy {
             backend = %backend_addr,
             protocol = %config.imitate_protocol,
             session_ttl = config.session_ttl_secs,
-            awg_params = awg_params.is_some(),
+            cb_params = cb_params.is_some(),
             "proxy initialized"
         );
 
@@ -396,7 +396,7 @@ impl Proxy {
             metrics,
             fixed_protocol,
             client_protocols: Arc::new(ShardMap::new()),
-            awg_params: awg_params.map(Arc::new),
+            cb_params: cb_params.map(Arc::new),
             dns_forward_enabled,
             dns_upstream,
             dns_upstream_timeout,
@@ -419,7 +419,7 @@ impl Proxy {
         sessions: Arc<SessionTable>,
         metrics: Arc<MetricsStore>,
         protocol: Protocol,
-        awg_params: Option<AwgParams>,
+        cb_params: Option<CbParams>,
     ) -> Self {
         Self {
             probe_budget: Arc::new(GlobalProbeBudget::new(config.probe_reply_bytes_per_sec)),
@@ -429,7 +429,7 @@ impl Proxy {
             metrics,
             fixed_protocol: Some(protocol),
             client_protocols: Arc::new(ShardMap::new()),
-            awg_params: awg_params.map(Arc::new),
+            cb_params: cb_params.map(Arc::new),
             dns_forward_enabled: false,
             dns_upstream: None,
             dns_upstream_timeout: Duration::from_millis(1500),
@@ -637,7 +637,7 @@ impl Proxy {
     /// every packet and take the proxy off the air rather than protecting it.
     /// In that case admission stays permissive, exactly as before.
     fn session_admission_is_classified(&self) -> bool {
-        self.awg_params
+        self.cb_params
             .as_deref()
             .is_some_and(|p| p.h1.max > 0 && p.h4.max > 0)
     }
@@ -660,12 +660,12 @@ impl Proxy {
         // forwarded as-is and never treated as external probes, otherwise the
         // QUIC handshake responder fires and sends back real QUIC frames that
         // the client tries — and fails — to decrypt as AWG.
-        let is_awg_packet = self
-            .awg_params
+        let is_cb_packet = self
+            .cb_params
             .as_deref()
-            .is_some_and(|p| responder::classify_awg_packet(data, p).is_some());
+            .is_some_and(|p| responder::classify_cb_packet(data, p).is_some());
 
-        if !is_awg_packet {
+        if !is_cb_packet {
             self.handle_probe(data, client_addr, &metrics_ref).await;
         }
 
@@ -714,7 +714,7 @@ impl Proxy {
         // the air. An established session keeps forwarding either way, so a
         // peer whose padding stops matching mid-session is never dropped.
         if self.session_admission_is_classified()
-            && !is_awg_packet
+            && !is_cb_packet
             && !self.sessions.contains(&client_addr)
         {
             debug!(
@@ -1342,7 +1342,7 @@ impl Proxy {
         let sip_dialogs = Arc::clone(&self.sip_dialogs);
         let dns_query_echo = Arc::clone(&self.dns_query_echo);
         let sip_deferred_handles = Arc::clone(&self.sip_deferred_handles);
-        let awg_params = self.awg_params.clone();
+        let cb_params = self.cb_params.clone();
         // The relay buffer is resident memory per session, so it is sized
         // from `relay_buffer_size` (default 8 KiB — ample for any
         // internet-path tunnel MTU plus S-padding) rather than the 64 KiB
@@ -1387,7 +1387,7 @@ impl Proxy {
                         // when the client's protocol has actually been detected;
                         // without a detected protocol there is no basis for choosing
                         // a padding strategy, so the packet is forwarded as-is.
-                        if let Some(ref params) = awg_params {
+                        if let Some(ref params) = cb_params {
                             // In fixed mode the protocol is known statically and
                             // `client_protocols` is always empty, so skip the
                             // lookup entirely; in auto mode (late binding) look
@@ -1410,7 +1410,7 @@ impl Proxy {
                                 } else {
                                     None
                                 };
-                                transform::apply_awg_transform(
+                                transform::apply_cb_transform(
                                     &mut buf[..n],
                                     params,
                                     protocol,
@@ -1823,7 +1823,7 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         };
 
         let proxy = Proxy::bind(config, None).await.unwrap();
@@ -1909,7 +1909,7 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         };
 
         let proxy = Proxy::bind(config, None).await.unwrap();
@@ -2019,7 +2019,7 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         };
 
         let proxy = Proxy::bind(config, None).await.unwrap();
@@ -2089,7 +2089,7 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         };
 
         let proxy = Proxy::bind(config, None).await.unwrap();
@@ -2144,7 +2144,7 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         };
 
         let proxy = Proxy::bind(config, None).await.unwrap();
@@ -2237,7 +2237,7 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         };
 
         let proxy = Proxy::bind(config, None).await.unwrap();
@@ -2309,7 +2309,7 @@ mod tests {
     /// QUIC long-header Initial (mirroring what WireSock emits with `Ip=quic`).
     ///
     /// Layout: [S4 bytes of QUIC-like padding] ++ [H4 header LE u32] ++ [body]
-    fn awg_quic_masked_transport_packet(params: &crate::proxy::config::AwgParams) -> Vec<u8> {
+    fn cb_quic_masked_transport_packet(params: &crate::proxy::config::CbParams) -> Vec<u8> {
         let s4 = params.s4 as usize;
         let h4_value = params.h4.min;
 
@@ -2350,8 +2350,8 @@ mod tests {
     /// Build an AWG transport-data packet whose S4-padding prefix is a DNS query
     /// (mirroring what WireSock emits with `Ip=dns`): header + QNAME + QTYPE +
     /// QCLASS, zero-filled to S4, then the H4 header and body.
-    fn awg_dns_masked_transport_packet(
-        params: &crate::proxy::config::AwgParams,
+    fn cb_dns_masked_transport_packet(
+        params: &crate::proxy::config::CbParams,
         qname_wire: &[u8],
         qtype: [u8; 2],
         txid: [u8; 2],
@@ -2389,16 +2389,16 @@ mod tests {
     /// proxy off the air instead of protecting it.
     #[tokio::test]
     async fn session_admission_stays_permissive_when_params_cannot_classify() {
-        use crate::proxy::config::{AwgParams, HRange};
+        use crate::proxy::config::{CbParams, HRange};
 
         let zero = HRange { min: 0, max: 0 };
         let usable = HRange { min: 100, max: 200 };
-        let base = AwgParams {
+        let base = CbParams {
             jc: 8, jmin: 50, jmax: 1000, s1: 72, s2: 142, s3: 59, s4: 40,
             h1: usable, h2: usable, h3: usable, h4: usable,
         };
 
-        let mk = |params: Option<AwgParams>| async move {
+        let mk = |params: Option<CbParams>| async move {
             let frontend = Arc::new(UdpSocket::bind("127.0.0.1:0").await.unwrap());
             let backend_addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
             Proxy::from_parts(
@@ -2415,12 +2415,12 @@ mod tests {
         assert!(!mk(None).await.session_admission_is_classified());
 
         // Blank H1/H4 (the pre-2.0 / never-generated shape): still permissive.
-        let blank = AwgParams { h1: zero, h4: zero, ..base };
+        let blank = CbParams { h1: zero, h4: zero, ..base };
         assert!(!mk(Some(blank)).await.session_admission_is_classified());
 
         // A usable handshake range but no transport range: a returning client
         // whose session aged out would be locked out, so still permissive.
-        let no_h4 = AwgParams { h4: zero, ..base };
+        let no_h4 = CbParams { h4: zero, ..base };
         assert!(!mk(Some(no_h4)).await.session_admission_is_classified());
 
         // Fully usable params: the gate engages.
@@ -2429,13 +2429,13 @@ mod tests {
 
     /// otherwise responses never echo the query (root-label fallback only).
     #[tokio::test]
-    async fn dns_echo_captured_from_awg_data_packet() {
+    async fn dns_echo_captured_from_cb_data_packet() {
         use crate::proxy::config::HRange;
 
         let backend = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let backend_addr = backend.local_addr().unwrap();
 
-        let awg_params = crate::proxy::config::AwgParams {
+        let cb_params = crate::proxy::config::CbParams {
             jc: 8,
             jmin: 50,
             jmax: 1000,
@@ -2480,19 +2480,19 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         };
 
-        let proxy = Proxy::bind(config, Some(awg_params.clone())).await.unwrap();
+        let proxy = Proxy::bind(config, Some(cb_params.clone())).await.unwrap();
         let client_addr: SocketAddr = "127.0.0.1:55555".parse().unwrap();
 
         // QNAME wire bytes for "test.example".
         let qname = b"\x04test\x07example\x00";
-        let pkt = awg_dns_masked_transport_packet(&awg_params, qname, [0x00, 0x01], [0x12, 0x34]);
+        let pkt = cb_dns_masked_transport_packet(&cb_params, qname, [0x00, 0x01], [0x12, 0x34]);
 
         // Precondition: classified as AWG, so `handle_probe` is skipped.
         assert!(
-            responder::classify_awg_packet(&pkt, &awg_params).is_some(),
+            responder::classify_cb_packet(&pkt, &cb_params).is_some(),
             "packet must classify as AWG"
         );
 
@@ -2707,7 +2707,7 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         }
     }
 
@@ -2809,12 +2809,12 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         }
     }
 
     #[tokio::test]
-    async fn awg_packet_not_treated_as_probe() {
+    async fn cb_packet_not_treated_as_probe() {
         use crate::proxy::config::HRange;
 
         let backend = UdpSocket::bind("127.0.0.1:0").await.unwrap();
@@ -2822,7 +2822,7 @@ mod tests {
 
         // AWG params matching the user's config: S4=40, H4 range such that the
         // H4 header at offset 40 is unmistakably classified as TransportData.
-        let awg_params = crate::proxy::config::AwgParams {
+        let cb_params = crate::proxy::config::CbParams {
             jc: 8,
             jmin: 50,
             jmax: 1000,
@@ -2867,21 +2867,21 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         };
 
-        let proxy = Proxy::bind(config, Some(awg_params.clone())).await.unwrap();
+        let proxy = Proxy::bind(config, Some(cb_params.clone())).await.unwrap();
         let proxy_addr = proxy.local_addr().unwrap();
 
         let client = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let client_addr = client.local_addr().unwrap();
 
         // Build a transport-data packet whose S4 prefix looks like QUIC.
-        let pkt = awg_quic_masked_transport_packet(&awg_params);
+        let pkt = cb_quic_masked_transport_packet(&cb_params);
 
         // Verify the packet is classified as AWG (precondition for the test).
         assert!(
-            responder::classify_awg_packet(&pkt, &awg_params).is_some(),
+            responder::classify_cb_packet(&pkt, &cb_params).is_some(),
             "test packet must be classified as AWG"
         );
         // And that it would fool detect_protocol into thinking it's QUIC
@@ -2946,7 +2946,7 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         };
 
         let proxy = Proxy::bind(config, None).await.unwrap();
@@ -3045,7 +3045,7 @@ mod tests {
             socket_buffer_bytes: 0,
             status_file: "/tmp/amneziawg-proxy-sessions.json".into(),
             status_interval_secs: 5,
-            awg_config: None,
+            cb_config: None,
         };
 
         let proxy = Proxy::bind(config, None).await.unwrap();

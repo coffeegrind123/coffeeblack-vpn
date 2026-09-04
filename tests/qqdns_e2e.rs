@@ -17,7 +17,7 @@
 
 use std::time::Duration;
 
-use awg_easy_rs::qqdns::engine::{start, EngineConfig};
+use coffeeblack_vpn::qqdns::engine::{start, EngineConfig};
 use tokio::net::UdpSocket;
 
 /// Grab a free UDP port on loopback (bind :0, read it back, drop). Good

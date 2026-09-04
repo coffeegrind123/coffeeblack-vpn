@@ -3,7 +3,7 @@
 # vendor-proxy.sh — (re)vendor the in-process DPI proxy from upstream.
 #
 # The modules under src/proxy/ (except mod.rs and supervisor.rs, which are
-# awg-easy-rs's own glue) are a near-verbatim mirror of the `src/` tree of
+# coffeeblack-vpn's own glue) are a near-verbatim mirror of the `src/` tree of
 # wiresock/amneziawg-install's `amneziawg-proxy` crate. The only mechanical
 # change is rehoming the crate paths: `crate::` -> `crate::proxy::`.
 #
@@ -199,7 +199,7 @@ cmd_sync() {
 
   # Dependency drift check — we can't safely rewrite Cargo.toml, but the
   # maintainer must reconcile any dep change by hand.
-  info "upstream [dependencies] (reconcile against awg-easy-rs Cargo.toml if changed):"
+  info "upstream [dependencies] (reconcile against coffeeblack-vpn Cargo.toml if changed):"
   sed -n '/^\[dependencies\]/,/^\[/p' "$tmp/up/$UPSTREAM_CARGO" | sed '1d;/^\[/d;/^\s*$/d' | sed "s/^/  $c_dim/;s/$/$c_rst/"
 
   cat <<EOF

@@ -1,44 +1,44 @@
-use awg_easy_rs::{activity, api, config, db, firewall, init_setup, wg};
+use coffeeblack_vpn::{activity, api, config, db, firewall, init_setup, wg};
 
 use std::net::SocketAddr;
 use std::sync::OnceLock;
-use awg_easy_rs::http::{header, routing::get, HeaderMap, Response, ResponseBuilder, Router, StatusCode};
+use coffeeblack_vpn::http::{header, routing::get, HeaderMap, Response, ResponseBuilder, Router, StatusCode};
 
 // Embedded frontend
 const INDEX_HTML: &str = include_str!("../static/index.html");
 const APP_JS: &str = include_str!("../static/app.js");
 const FAVICON_PNG: &[u8] = include_bytes!("../static/favicon.png");
-const FAVICON_AWG_ICO: &[u8] = include_bytes!("../static/favicon-amnezia.ico");
+const FAVICON_COFFEEBLACK_ICO: &[u8] = include_bytes!("../static/favicon-coffeeblack.ico");
 const LOGO_PNG: &[u8] = include_bytes!("../static/logo.png");
-const LOGO_AWG_SVG: &[u8] = include_bytes!("../static/logo-amnezia.svg");
+const LOGO_COFFEEBLACK_SVG: &[u8] = include_bytes!("../static/logo-coffeeblack.svg");
 const APPLE_ICON: &[u8] = include_bytes!("../static/apple-touch-icon.png");
-const APPLE_ICON_AWG: &[u8] = include_bytes!("../static/apple-touch-icon-amnezia.png");
+const APPLE_ICON_COFFEEBLACK: &[u8] = include_bytes!("../static/apple-touch-icon-coffeeblack.png");
 const MANIFEST_JSON: &[u8] = include_bytes!("../static/manifest.json");
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    awg_easy_rs::log::init();
+    coffeeblack_vpn::log::init();
 
     // `--privileged-helper` runs the root side and nothing else: no database,
     // no HTTP listener, no supervisors. Handled before any of that is set up
     // precisely so the privileged process carries none of it — the whole point
     // is that the code holding CAP_NET_ADMIN is small enough to audit.
     if std::env::args().any(|a| a == "--privileged-helper") {
-        let cfg = awg_easy_rs::privhelper::HelperConfig {
-            socket_path: awg_easy_rs::privhelper::socket_path()
-                .unwrap_or_else(|| awg_easy_rs::privhelper::DEFAULT_SOCKET.into()),
-            interface: std::env::var("WG_EASY_HELPER_INTERFACE")
-                .unwrap_or_else(|_| "awg0".to_string()),
+        let cfg = coffeeblack_vpn::privhelper::HelperConfig {
+            socket_path: coffeeblack_vpn::privhelper::socket_path()
+                .unwrap_or_else(|| coffeeblack_vpn::privhelper::DEFAULT_SOCKET.into()),
+            interface: std::env::var("COFFEEBLACK_HELPER_INTERFACE")
+                .unwrap_or_else(|_| "cb0".to_string()),
             conf_dir: config::CONFIG.wg_conf_dir.clone().into(),
-            allow_gid: std::env::var("WG_EASY_HELPER_GID")
+            allow_gid: std::env::var("COFFEEBLACK_HELPER_GID")
                 .ok()
                 .and_then(|g| g.parse().ok()),
         };
-        return awg_easy_rs::privhelper::serve(cfg);
+        return coffeeblack_vpn::privhelper::serve(cfg);
     }
 
     db::init_db()?;
-    awg_easy_rs::info!("Database initialized");
+    coffeeblack_vpn::info!("Database initialized");
 
     // In-memory mode promises "entirely in RAM". The DB and the bundled
     // binaries honour that on their own (`:memory:` + memfd), but the
@@ -61,11 +61,11 @@ async fn main() -> anyhow::Result<()> {
             ("MasterDnsVPN (tunnel key)", &config::CONFIG.mdnsvpn_dir),
             ("DNS bundle", &config::CONFIG.dns_dir),
         ] {
-            match awg_easy_rs::memexec::is_ram_backed(dir) {
+            match coffeeblack_vpn::memexec::is_ram_backed(dir) {
                 Some(true) => {
-                    awg_easy_rs::info!("IN_MEMORY: {label} dir {dir} is tmpfs (RAM-backed)")
+                    coffeeblack_vpn::info!("IN_MEMORY: {label} dir {dir} is tmpfs (RAM-backed)")
                 }
-                Some(false) => awg_easy_rs::warn!(
+                Some(false) => coffeeblack_vpn::warn!(
                     "IN_MEMORY is set but the {label} dir {dir} is NOT tmpfs — the \
                      credentials rendered there reach a block device. Mount it as \
                      tmpfs (the bundled docker-compose does). The files are written \
@@ -82,8 +82,8 @@ async fn main() -> anyhow::Result<()> {
     // unauthenticated first-run wizard on a public listener, letting whoever
     // reaches it first claim the admin account.
     if let Err(e) = run_init_setup() {
-        awg_easy_rs::error!("INIT_ENABLED auto-setup failed: {e:#}");
-        awg_easy_rs::error!(
+        coffeeblack_vpn::error!("INIT_ENABLED auto-setup failed: {e:#}");
+        coffeeblack_vpn::error!(
             "Refusing to start: the setup wizard would be reachable without \
              authentication and any client could claim the admin account."
         );
@@ -100,10 +100,10 @@ async fn main() -> anyhow::Result<()> {
     std::env::remove_var("INIT_PASSWORD");
 
     if let Err(e) = wg::startup() {
-        awg_easy_rs::warn!("AmneziaWG startup failed (non-fatal): {e}");
-        awg_easy_rs::warn!("Web UI will still be available. Fix AmneziaWG and use Restart from admin panel.");
+        coffeeblack_vpn::warn!("AmneziaWG startup failed (non-fatal): {e}");
+        coffeeblack_vpn::warn!("Web UI will still be available. Fix AmneziaWG and use Restart from admin panel.");
     } else {
-        awg_easy_rs::info!("AmneziaWG started");
+        coffeeblack_vpn::info!("AmneziaWG started");
     }
 
     // iptables-legacy compat: on hosts running the xt_tables backend
@@ -117,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
             iface.port,
             !config::CONFIG.disable_ipv6,
         ) {
-            awg_easy_rs::warn!("iptables-legacy compat startup failed (non-fatal): {e}");
+            coffeeblack_vpn::warn!("iptables-legacy compat startup failed (non-fatal): {e}");
         }
     }
 
@@ -125,8 +125,8 @@ async fn main() -> anyhow::Result<()> {
     // operators who haven't set up Reality keys yet will see Status::Disabled
     // in the admin UI rather than a startup crash.
     #[cfg(xray_bundled)]
-    if let Err(e) = awg_easy_rs::xray::supervisor::ensure_running().await {
-        awg_easy_rs::warn!("Xray supervisor startup failed (non-fatal): {e}");
+    if let Err(e) = coffeeblack_vpn::xray::supervisor::ensure_running().await {
+        coffeeblack_vpn::warn!("Xray supervisor startup failed (non-fatal): {e}");
     }
 
     // Bring the bundled DNS stack online if it's been enabled. Same
@@ -134,8 +134,8 @@ async fn main() -> anyhow::Result<()> {
     // master switch see Status::Disabled, not a crash. Tor stays off
     // independently of the master switch (see DnsBundle.tor_enabled).
     #[cfg(dns_bundled)]
-    if let Err(e) = awg_easy_rs::dns::supervisor::ensure_running().await {
-        awg_easy_rs::warn!("DNS bundle supervisor startup failed (non-fatal): {e}");
+    if let Err(e) = coffeeblack_vpn::dns::supervisor::ensure_running().await {
+        coffeeblack_vpn::warn!("DNS bundle supervisor startup failed (non-fatal): {e}");
     }
 
     // Bring telemt (Telegram MTProxy) online if it's been enabled.
@@ -143,8 +143,8 @@ async fn main() -> anyhow::Result<()> {
     // when the inbound row is off. Any spawn failure is non-fatal so a
     // misconfigured tls_domain doesn't block the rest of the server.
     #[cfg(telemt_bundled)]
-    if let Err(e) = awg_easy_rs::mtproxy::supervisor::ensure_running().await {
-        awg_easy_rs::warn!("MTProxy supervisor startup failed (non-fatal): {e}");
+    if let Err(e) = coffeeblack_vpn::mtproxy::supervisor::ensure_running().await {
+        coffeeblack_vpn::warn!("MTProxy supervisor startup failed (non-fatal): {e}");
     }
 
     // Bring MasterDnsVPN (DNS-tunnel mode) online if it's been enabled.
@@ -153,8 +153,8 @@ async fn main() -> anyhow::Result<()> {
     // NS-delegated domain, and flips the toggle. Failures are non-fatal
     // (matches the Xray / telemt / DNS-bundle posture).
     #[cfg(mdnsvpn_bundled)]
-    if let Err(e) = awg_easy_rs::mdnsvpn::supervisor::ensure_running().await {
-        awg_easy_rs::warn!("MasterDnsVPN supervisor startup failed (non-fatal): {e}");
+    if let Err(e) = coffeeblack_vpn::mdnsvpn::supervisor::ensure_running().await {
+        coffeeblack_vpn::warn!("MasterDnsVPN supervisor startup failed (non-fatal): {e}");
     }
 
     // Bring the in-process DPI-imitation proxy online if it's been enabled.
@@ -165,11 +165,11 @@ async fn main() -> anyhow::Result<()> {
     // in the admin UI rather than a startup crash.
     if let Ok(iface) = db::get_interface() {
         if let Err(e) = firewall::apply_proxy_lockdown(&iface) {
-            awg_easy_rs::warn!("proxy backend lockdown failed (non-fatal): {e}");
+            coffeeblack_vpn::warn!("proxy backend lockdown failed (non-fatal): {e}");
         }
     }
-    if let Err(e) = awg_easy_rs::proxy::supervisor::ensure_running().await {
-        awg_easy_rs::warn!("DPI proxy startup failed (non-fatal): {e}");
+    if let Err(e) = coffeeblack_vpn::proxy::supervisor::ensure_running().await {
+        coffeeblack_vpn::warn!("DPI proxy startup failed (non-fatal): {e}");
     }
 
     // Bring the QQ-Tunnel UDP-over-DNS transport online if enabled. Disabled
@@ -177,8 +177,8 @@ async fn main() -> anyhow::Result<()> {
     // settings row is off or incomplete. No AmneziaWG rebind — it's a
     // side-channel — so any bind failure is purely its own, surfaced as
     // Status::Crashed rather than a startup crash.
-    if let Err(e) = awg_easy_rs::qqdns::supervisor::ensure_running().await {
-        awg_easy_rs::warn!("QQ-DNS transport startup failed (non-fatal): {e}");
+    if let Err(e) = coffeeblack_vpn::qqdns::supervisor::ensure_running().await {
+        coffeeblack_vpn::warn!("QQ-DNS transport startup failed (non-fatal): {e}");
     }
 
     let app_state = api::AppState::new();
@@ -204,13 +204,13 @@ async fn main() -> anyhow::Result<()> {
                         tick.tick().await;
                         let p = path.clone();
                         match tokio::task::spawn_blocking(move || db::snapshot_to(&p)).await {
-                            Ok(Ok(())) => awg_easy_rs::debug!("DB snapshot written to {path}"),
-                            Ok(Err(e)) => awg_easy_rs::warn!("DB snapshot failed (non-fatal): {e:#}"),
-                            Err(e) => awg_easy_rs::warn!("DB snapshot task join error: {e}"),
+                            Ok(Ok(())) => coffeeblack_vpn::debug!("DB snapshot written to {path}"),
+                            Ok(Err(e)) => coffeeblack_vpn::warn!("DB snapshot failed (non-fatal): {e:#}"),
+                            Err(e) => coffeeblack_vpn::warn!("DB snapshot task join error: {e}"),
                         }
                     }
                 });
-                awg_easy_rs::info!(
+                coffeeblack_vpn::info!(
                     "In-memory DB snapshots every {interval}s → {}",
                     config::CONFIG.persist_db_path.as_deref().unwrap_or("")
                 );
@@ -222,16 +222,16 @@ async fn main() -> anyhow::Result<()> {
     // TOTP secret still stored as plaintext now that a key is available.
     // Ordering matters: this has to run after the DB is open and before the
     // first login can read a secret.
-    awg_easy_rs::crypto::log_status();
-    if awg_easy_rs::privhelper::is_enabled() {
+    coffeeblack_vpn::crypto::log_status();
+    if coffeeblack_vpn::privhelper::is_enabled() {
         // Verify the socket answers before anything depends on it, so a
         // misconfigured deployment fails at startup with a clear message
         // rather than at the first peer change with a confusing one.
-        match awg_easy_rs::privhelper::call(&awg_easy_rs::privhelper::Request::Ping) {
-            Ok(_) => awg_easy_rs::info!(
+        match coffeeblack_vpn::privhelper::call(&coffeeblack_vpn::privhelper::Request::Ping) {
+            Ok(_) => coffeeblack_vpn::info!(
                 "privileged helper: connected — this process needs no CAP_NET_ADMIN"
             ),
-            Err(e) => awg_easy_rs::error!(
+            Err(e) => coffeeblack_vpn::error!(
                 "privileged helper configured but unreachable ({e:#}); \
                  interface and firewall changes will fail"
             ),
@@ -239,8 +239,8 @@ async fn main() -> anyhow::Result<()> {
     }
     match db::encrypt_plaintext_secrets() {
         Ok(0) => {}
-        Ok(n) => awg_easy_rs::info!("encrypted {n} secret(s) previously stored as plaintext"),
-        Err(e) => awg_easy_rs::error!("secret encryption migration failed (non-fatal): {e:#}"),
+        Ok(n) => coffeeblack_vpn::info!("encrypted {n} secret(s) previously stored as plaintext"),
+        Err(e) => coffeeblack_vpn::error!("secret encryption migration failed (non-fatal): {e:#}"),
     }
 
     // Start the activity poller: samples `awg show dump` every 30s into the
@@ -250,7 +250,7 @@ async fn main() -> anyhow::Result<()> {
     // UI takes effect within one interval without a restart.
     match db::get_interface() {
         Ok(iface) => activity::spawn(iface.name),
-        Err(e) => awg_easy_rs::warn!("activity poller not started (interface read failed): {e}"),
+        Err(e) => coffeeblack_vpn::warn!("activity poller not started (interface read failed): {e}"),
     }
 
     // Start background cron job (every 60 seconds): expire clients/one-time
@@ -260,11 +260,11 @@ async fn main() -> anyhow::Result<()> {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             if let Err(e) = wg::cron_job() {
-                awg_easy_rs::error!("Cron job failed: {e}");
+                coffeeblack_vpn::error!("Cron job failed: {e}");
             }
             match db::get_general() {
                 Ok(g) => api::prune_expired_sessions(&cron_state, g.session_timeout),
-                Err(e) => awg_easy_rs::error!("session prune skipped (general read failed): {e}"),
+                Err(e) => coffeeblack_vpn::error!("session prune skipped (general read failed): {e}"),
             }
         }
     });
@@ -273,12 +273,12 @@ async fn main() -> anyhow::Result<()> {
     let static_routes = Router::new()
         .route("/app.js", get(|h: HeaderMap| async move { js_response(h, APP_JS) }))
         .route("/favicon.png", get(|h: HeaderMap| async move { png_response(h, FAVICON_PNG, asset_etag("favicon.png", FAVICON_PNG)) }))
-        .route("/favicon-amnezia.ico", get(|h: HeaderMap| async move { ico_response(h, FAVICON_AWG_ICO, asset_etag("favicon-amnezia.ico", FAVICON_AWG_ICO)) }))
-        .route("/favicon.ico", get(|h: HeaderMap| async move { ico_response(h, FAVICON_AWG_ICO, asset_etag("favicon-amnezia.ico", FAVICON_AWG_ICO)) }))
+        .route("/favicon-coffeeblack.ico", get(|h: HeaderMap| async move { ico_response(h, FAVICON_COFFEEBLACK_ICO, asset_etag("favicon-coffeeblack.ico", FAVICON_COFFEEBLACK_ICO)) }))
+        .route("/favicon.ico", get(|h: HeaderMap| async move { ico_response(h, FAVICON_COFFEEBLACK_ICO, asset_etag("favicon-coffeeblack.ico", FAVICON_COFFEEBLACK_ICO)) }))
         .route("/logo.png", get(|h: HeaderMap| async move { png_response(h, LOGO_PNG, asset_etag("logo.png", LOGO_PNG)) }))
-        .route("/logo-amnezia.svg", get(|h: HeaderMap| async move { svg_response(h, LOGO_AWG_SVG, asset_etag("logo-amnezia.svg", LOGO_AWG_SVG)) }))
+        .route("/logo-coffeeblack.svg", get(|h: HeaderMap| async move { svg_response(h, LOGO_COFFEEBLACK_SVG, asset_etag("logo-coffeeblack.svg", LOGO_COFFEEBLACK_SVG)) }))
         .route("/apple-touch-icon.png", get(|h: HeaderMap| async move { png_response(h, APPLE_ICON, asset_etag("apple-touch-icon.png", APPLE_ICON)) }))
-        .route("/apple-touch-icon-amnezia.png", get(|h: HeaderMap| async move { png_response(h, APPLE_ICON_AWG, asset_etag("apple-touch-icon-amnezia.png", APPLE_ICON_AWG)) }))
+        .route("/apple-touch-icon-coffeeblack.png", get(|h: HeaderMap| async move { png_response(h, APPLE_ICON_COFFEEBLACK, asset_etag("apple-touch-icon-coffeeblack.png", APPLE_ICON_COFFEEBLACK)) }))
         .route("/manifest.json", get(|h: HeaderMap| async move { json_response(h, MANIFEST_JSON, asset_etag("manifest.json", MANIFEST_JSON)) }));
 
     let app = api::build_router(app_state)
@@ -303,7 +303,7 @@ async fn main() -> anyhow::Result<()> {
         )
     })?;
     let addr = SocketAddr::from((host, config::CONFIG.port));
-    awg_easy_rs::info!("awg-easy-rs starting on {}", addr);
+    coffeeblack_vpn::info!("coffeeblack-vpn starting on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
@@ -316,7 +316,7 @@ async fn main() -> anyhow::Result<()> {
         ) {
             Ok(s) => s,
             Err(e) => {
-                awg_easy_rs::error!(error = ?e, "failed to install SIGTERM handler");
+                coffeeblack_vpn::error!(error = ?e, "failed to install SIGTERM handler");
                 std::future::pending::<()>().await;
                 unreachable!();
             }
@@ -326,35 +326,35 @@ async fn main() -> anyhow::Result<()> {
         ) {
             Ok(s) => s,
             Err(e) => {
-                awg_easy_rs::error!(error = ?e, "failed to install SIGINT handler");
+                coffeeblack_vpn::error!(error = ?e, "failed to install SIGINT handler");
                 std::future::pending::<()>().await;
                 unreachable!();
             }
         };
         tokio::select! {
-            _ = sigterm.recv() => awg_easy_rs::info!("SIGTERM received; shutting down"),
-            _ = sigint.recv()  => awg_easy_rs::info!("SIGINT received; shutting down"),
+            _ = sigterm.recv() => coffeeblack_vpn::info!("SIGTERM received; shutting down"),
+            _ = sigint.recv()  => coffeeblack_vpn::info!("SIGINT received; shutting down"),
         }
     };
     // The server attaches the peer socket address to every request, so
     // handlers can read it (the login rate limiter uses it when TRUST_PROXY
     // is off).
-    awg_easy_rs::http::serve(listener, app, shutdown).await?;
+    coffeeblack_vpn::http::serve(listener, app, shutdown).await?;
 
     // Post-serve cleanup. Order matters: stop Xray + DNS + MTProxy
     // supervisor children first so they're reaped before we tear down
     // firewall state, then peel back any iptables-legacy compat rules
     // we inserted at startup.
     #[cfg(xray_bundled)]
-    awg_easy_rs::xray::supervisor::shutdown_for_exit().await;
+    coffeeblack_vpn::xray::supervisor::shutdown_for_exit().await;
     #[cfg(dns_bundled)]
-    awg_easy_rs::dns::supervisor::shutdown_for_exit().await;
+    coffeeblack_vpn::dns::supervisor::shutdown_for_exit().await;
     #[cfg(telemt_bundled)]
-    awg_easy_rs::mtproxy::supervisor::shutdown_for_exit().await;
+    coffeeblack_vpn::mtproxy::supervisor::shutdown_for_exit().await;
     #[cfg(mdnsvpn_bundled)]
-    awg_easy_rs::mdnsvpn::supervisor::shutdown_for_exit().await;
-    awg_easy_rs::proxy::supervisor::shutdown_for_exit().await;
-    awg_easy_rs::qqdns::supervisor::shutdown_for_exit().await;
+    coffeeblack_vpn::mdnsvpn::supervisor::shutdown_for_exit().await;
+    coffeeblack_vpn::proxy::supervisor::shutdown_for_exit().await;
+    coffeeblack_vpn::qqdns::supervisor::shutdown_for_exit().await;
 
     if let Ok(iface) = db::get_interface() {
         firewall::remove_legacy_compat(
@@ -370,13 +370,13 @@ async fn main() -> anyhow::Result<()> {
     if config::CONFIG.in_memory {
         if let Some(path) = config::CONFIG.persist_db_path.as_deref() {
             match db::snapshot_to(path) {
-                Ok(()) => awg_easy_rs::info!("Final DB snapshot written to {path}"),
-                Err(e) => awg_easy_rs::warn!("Final DB snapshot failed (non-fatal): {e:#}"),
+                Ok(()) => coffeeblack_vpn::info!("Final DB snapshot written to {path}"),
+                Err(e) => coffeeblack_vpn::warn!("Final DB snapshot failed (non-fatal): {e:#}"),
             }
         }
     }
 
-    awg_easy_rs::info!("awg-easy-rs exited cleanly");
+    coffeeblack_vpn::info!("coffeeblack-vpn exited cleanly");
     Ok(())
 }
 
@@ -420,7 +420,7 @@ fn not_modified(etag: &str) -> Response {
         .status(StatusCode::NOT_MODIFIED)
         .header(header::ETAG, etag)
         .header(header::CACHE_CONTROL, "no-cache")
-        .body(awg_easy_rs::http::Body::empty())
+        .body(coffeeblack_vpn::http::Body::empty())
         .unwrap()
 }
 
@@ -433,7 +433,7 @@ fn binary_response(headers: HeaderMap, content_type: &'static str, data: &'stati
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::ETAG, etag)
-        .body(awg_easy_rs::http::Body::from(data))
+        .body(coffeeblack_vpn::http::Body::from(data))
         .unwrap()
 }
 
@@ -464,7 +464,7 @@ fn js_response(headers: HeaderMap, data: &'static str) -> Response {
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::ETAG, etag)
         .header("X-Content-Type-Options", "nosniff")
-        .body(awg_easy_rs::http::Body::from(data))
+        .body(coffeeblack_vpn::http::Body::from(data))
         .unwrap()
 }
 
@@ -501,7 +501,7 @@ fn html_response(headers: HeaderMap, data: &'static str) -> Response {
         .header("X-Frame-Options", "DENY")
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
-        .body(awg_easy_rs::http::Body::from(data))
+        .body(coffeeblack_vpn::http::Body::from(data))
         .unwrap()
 }
 
@@ -515,7 +515,7 @@ fn run_init_setup() -> anyhow::Result<()> {
     }
     let user_count = db::get_user_count().unwrap_or(0);
     if user_count > 0 {
-        awg_easy_rs::debug!("INIT_ENABLED set but admin user already exists — skipping");
+        coffeeblack_vpn::debug!("INIT_ENABLED set but admin user already exists — skipping");
         return Ok(());
     }
     let username = cfg
@@ -539,7 +539,7 @@ fn run_init_setup() -> anyhow::Result<()> {
     };
 
     if init_setup::provision_initial_setup(&params)? {
-        awg_easy_rs::info!("INIT_ENABLED: created admin user '{username}' and completed setup");
+        coffeeblack_vpn::info!("INIT_ENABLED: created admin user '{username}' and completed setup");
     }
     Ok(())
 }
