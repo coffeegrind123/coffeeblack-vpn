@@ -402,13 +402,24 @@ update_dnscrypt_proxy() {
     # runtime check trusts — so accepting an unverified download here defeats
     # every later integrity check rather than merely weakening this one.
     #
-    # The maintainers have rotated the signing key without updating their docs
-    # before, which is why this used to warn. That is a reason to make the
-    # override explicit and auditable, not to accept any artifact silently: set
-    # ALLOW_UNVERIFIED_VENDOR=1 to proceed after checking the key out of band.
+    # Set ALLOW_UNVERIFIED_VENDOR=1 to proceed after checking the key out of
+    # band. Make that override explicit and auditable; never accept an
+    # artifact silently.
     if [ -s "$sig" ] && command -v minisign >/dev/null 2>&1; then
-        # Documented public key from the dnscrypt-proxy README.
-        if minisign -V -P RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3 \
+        # dnscrypt-proxy's RELEASE-ARTIFACT signing key, key id 79833371EA15D7E4.
+        # Documented in the project wiki, Installation.md ("Pre-compiled
+        # binaries can be verified with Minisign") and Updates.md. Verified
+        # against the .minisig of releases 2.1.5, 2.1.12 and 2.1.18.
+        #
+        # NOT the same key as the one in src/dns/dnscrypt.rs, which is
+        # RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3 (key id
+        # E7620F1842B4E81F) — that one signs the *resolvers list*
+        # (public-resolvers.md / relays.md) and appears in upstream's
+        # example-dnscrypt-proxy.toml. It was pinned here by mistake and
+        # cannot verify a release tarball, so this check could never pass;
+        # it went unnoticed because CI always hit a warm vendor-blob cache.
+        # Do not "simplify" the two into one constant.
+        if minisign -V -P RWTk1xXqcTODeYttYMCMLo0YJHaFEHn7a3akqHlb/7QvIQXHVPxKbjB5 \
                 -m "$tgz" 2>&1 | grep -q "Signature and comment signature verified"; then
             ok "minisign signature verified"
         elif [ "${ALLOW_UNVERIFIED_VENDOR:-0}" = "1" ]; then

@@ -155,6 +155,10 @@ pub fn generate(bundle: &db::DnsBundle) -> Result<String> {
         "urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md', \
          'https://download.dnscrypt.info/resolvers-list/v3/public-resolvers.md']\n",
     );
+    // Resolvers-list signing key (key id E7620F1842B4E81F), as published in
+    // upstream's example-dnscrypt-proxy.toml. This signs public-resolvers.md
+    // and relays.md — NOT the release tarballs, which use key id
+    // 79833371EA15D7E4 (see vendor/update.sh). The two are unrelated.
     toml.push_str("minisign_key = 'RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3'\n");
     toml.push_str("cache_file = 'public-resolvers.md'\n");
     toml.push_str("refresh_delay = 73\n");
