@@ -58,7 +58,9 @@ That script:
    binary whose existing `.gz` already round-trips to the pinned SHA is skipped.
 3. Builds a fully static **x86_64-unknown-linux-musl** ELF at
    `target/x86_64-unknown-linux-musl/release/coffeeblack-vpn`, which runs unchanged on
-   glibc, musl, or any other libc.
+   glibc, musl, or any other libc. With every component bundled it is ~57 MB; a build
+   with no vendor blobs present is a fraction of that, since each missing blob compiles
+   its subsystem out via `cfg(*_bundled)`.
 
 `build.rs` refuses to build if a pin's SHA does not match the actual blob, and runtime
 extraction refuses to install a binary whose SHA does not match the embedded constant.

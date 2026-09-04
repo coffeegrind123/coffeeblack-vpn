@@ -44,7 +44,9 @@ Three properties fall out of the single-binary design:
 
 - **Runs anywhere x86_64 Linux runs.** Statically linked against musl — no glibc/musl
   mismatch, no runtime package dependencies beyond `nft` and, for Gaming mode, the
-  AmneziaWG tools.
+  AmneziaWG tools. The fully bundled release binary is ~57 MB, most of it the embedded
+  Xray, telemt, MasterDnsVPN and DNS-stack ELFs; each release publishes its exact size
+  and SHA-256.
 - **Can run entirely in RAM.** `IN_MEMORY=true` (the Docker default) opens SQLite as
   `:memory:` and `exec`s every bundled subprocess from a sealed anonymous `memfd`.
   Nothing on the request path or the `exec` path touches a block device.
