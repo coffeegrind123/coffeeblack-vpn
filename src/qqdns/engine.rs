@@ -46,7 +46,7 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tracing::{debug, info, warn};
+use crate::{debug, info, warn};
 
 use crate::qqdns::codec::{
     b32_decode_nopad, get_base32_final_domains, get_chunk_data, get_chunk_len, SendDomain,

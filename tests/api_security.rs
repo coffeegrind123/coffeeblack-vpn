@@ -7,11 +7,10 @@
 mod common;
 
 use awg_easy_rs::{api, auth, db};
-use axum::body::Body;
-use axum::http::{header, Request, StatusCode};
+use awg_easy_rs::http::Body;
+use awg_easy_rs::http::{header, Request, StatusCode};
 use serde_json::{json, Value};
 use serial_test::serial;
-use tower::ServiceExt;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -21,11 +20,11 @@ fn seed() {
     common::seed();
 }
 
-fn router() -> axum::Router {
+fn router() -> awg_easy_rs::http::Router {
     api::build_router(api::AppState::new())
 }
 
-async fn login_get_cookie(app: &axum::Router, username: &str, password: &str) -> String {
+async fn login_get_cookie(app: &awg_easy_rs::http::Router, username: &str, password: &str) -> String {
     let body = json!({ "username": username, "password": password });
     let req = Request::builder()
         .method("POST")
@@ -92,7 +91,7 @@ fn create_client(user_id: Option<i64>, name: &str, ip: &str) -> i64 {
     .unwrap()
 }
 
-async fn post(app: &axum::Router, path: &str, cookie: &str, body_val: &Value) -> (StatusCode, Value) {
+async fn post(app: &awg_easy_rs::http::Router, path: &str, cookie: &str, body_val: &Value) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("POST")
         .uri(path)
@@ -102,12 +101,12 @@ async fn post(app: &axum::Router, path: &str, cookie: &str, body_val: &Value) ->
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
     (status, body)
 }
 
-async fn get_req(app: &axum::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
+async fn get_req(app: &awg_easy_rs::http::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("GET")
         .uri(path)
@@ -116,12 +115,12 @@ async fn get_req(app: &axum::Router, path: &str, cookie: &str) -> (StatusCode, V
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
     (status, body)
 }
 
-async fn delete_req(app: &axum::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
+async fn delete_req(app: &awg_easy_rs::http::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("DELETE")
         .uri(path)
@@ -130,7 +129,7 @@ async fn delete_req(app: &axum::Router, path: &str, cookie: &str) -> (StatusCode
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
     (status, body)
 }
@@ -874,7 +873,7 @@ async fn login_missing_and_wrong_password_return_same_error() {
         .unwrap();
     let resp1 = app.clone().oneshot(req1).await.unwrap();
     let status1 = resp1.status();
-    let body1_bytes = axum::body::to_bytes(resp1.into_body(), 65536).await.unwrap();
+    let body1_bytes = awg_easy_rs::http::to_bytes(resp1.into_body(), 65536).unwrap();
     let body1_v: Value = serde_json::from_slice(&body1_bytes).unwrap();
 
     // Non-existent user.
@@ -887,7 +886,7 @@ async fn login_missing_and_wrong_password_return_same_error() {
         .unwrap();
     let resp2 = app.clone().oneshot(req2).await.unwrap();
     let status2 = resp2.status();
-    let body2_bytes = axum::body::to_bytes(resp2.into_body(), 65536).await.unwrap();
+    let body2_bytes = awg_easy_rs::http::to_bytes(resp2.into_body(), 65536).unwrap();
     let body2_v: Value = serde_json::from_slice(&body2_bytes).unwrap();
 
     assert_eq!(status1, StatusCode::UNAUTHORIZED);
@@ -2245,10 +2244,10 @@ async fn retention_mode_is_validated() {
 
 /// Fetch a path and return its response headers.
 async fn headers_for(
-    app: &axum::Router,
+    app: &awg_easy_rs::http::Router,
     path: &str,
     cookie: &str,
-) -> (StatusCode, axum::http::HeaderMap) {
+) -> (StatusCode, awg_easy_rs::http::HeaderMap) {
     let req = Request::builder()
         .method("GET")
         .uri(path)
@@ -2259,7 +2258,7 @@ async fn headers_for(
     (resp.status(), resp.headers().clone())
 }
 
-fn assert_no_store(headers: &axum::http::HeaderMap, path: &str) {
+fn assert_no_store(headers: &awg_easy_rs::http::HeaderMap, path: &str) {
     let cc = headers
         .get(header::CACHE_CONTROL)
         .unwrap_or_else(|| panic!("{path}: no Cache-Control header"))

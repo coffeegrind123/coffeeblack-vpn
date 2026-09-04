@@ -67,6 +67,30 @@ pub fn range_excl_i64(lo: i64, hi: i64) -> i64 {
     lo + u64_below(span) as i64
 }
 
+/// A random UUID v4, in the canonical hyphenated lowercase form.
+///
+/// Replaces the `uuid` crate, whose entire contribution here was 16 random
+/// bytes, six fixed bits, and a hyphen layout — all of which are RFC 4122
+/// §4.4 in full. The bytes come from the same OS CSPRNG as every other secret
+/// in the project, so the version/variant nibbles are the only structure.
+pub fn uuid_v4() -> String {
+    let mut b = [0u8; 16];
+    fill(&mut b);
+    // Version 4 in the high nibble of byte 6, RFC 4122 variant (0b10) in the
+    // top two bits of byte 8.
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h = crate::encoding::hex_encode(b);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +161,34 @@ mod tests {
         for _ in 0..10_000 {
             let v = range_excl_i64(H_MIN, H_MAX);
             assert!((H_MIN..H_MAX).contains(&v));
+        }
+    }
+
+    #[test]
+    fn uuid_v4_has_the_rfc_4122_shape() {
+        let u = uuid_v4();
+        assert_eq!(u.len(), 36);
+        let parts: Vec<&str> = u.split('-').collect();
+        assert_eq!(
+            parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
+            vec![8, 4, 4, 4, 12]
+        );
+        assert!(u.chars().all(|c| c.is_ascii_hexdigit() || c == '-'));
+        assert!(u.chars().all(|c| !c.is_ascii_uppercase()));
+        // Version nibble and variant bits are the only non-random structure.
+        assert_eq!(parts[2].as_bytes()[0], b'4', "version 4");
+        assert!(
+            matches!(parts[3].as_bytes()[0], b'8' | b'9' | b'a' | b'b'),
+            "RFC 4122 variant, got {}",
+            parts[3]
+        );
+    }
+
+    #[test]
+    fn uuid_v4_values_are_distinct() {
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..1_000 {
+            assert!(seen.insert(uuid_v4()), "UUID repeated");
         }
     }
 }

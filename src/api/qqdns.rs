@@ -12,10 +12,10 @@
 //! `qqdns::supervisor::apply_and_reconcile`, which binds/rebinds the engine to
 //! the new desired state (no AmneziaWG rebind — this is a side-channel).
 
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::Json;
-use axum_extra::extract::cookie::CookieJar;
+use crate::http::{Query, State};
+use crate::http::StatusCode;
+use crate::http::Json;
+use crate::http::CookieJar;
 use serde_json::{json, Value};
 
 use super::admin::require_admin;
@@ -163,7 +163,7 @@ pub async fn update_settings(
     // Rebind the engine to the new desired state. Non-fatal — the status
     // endpoint surfaces any reason it declined to come up.
     if let Err(e) = crate::qqdns::supervisor::apply_and_reconcile().await {
-        tracing::warn!(error = ?e, "qqdns reconcile failed after admin update");
+        crate::warn!(error = ?e, "qqdns reconcile failed after admin update");
     }
 
     Ok(ok_success())

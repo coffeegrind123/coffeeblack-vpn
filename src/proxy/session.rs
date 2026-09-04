@@ -3,13 +3,13 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use dashmap::DashMap;
+use crate::proxy::shardmap::{Entry, ShardMap};
 use tokio::net::UdpSocket;
-use tracing::{debug, info};
+use crate::{debug, info};
 
 /// Process-wide monotonic epoch used to express session activity timestamps
 /// as a plain `u64` (milliseconds), so they can live in an atomic and be
-/// updated under a DashMap *read* guard on the per-packet hot path instead
+/// updated under a shard *read* guard on the per-packet hot path instead
 /// of requiring an exclusive shard lock.
 fn process_epoch() -> Instant {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
@@ -35,7 +35,7 @@ pub struct Session {
     pub backend_sock: Arc<UdpSocket>,
     /// Time of the last packet received *from the client*, as milliseconds
     /// since [`process_epoch`]. Stored atomically so the per-packet refresh
-    /// happens under a shared DashMap guard.
+    /// happens under a shared shard guard.
     ///
     /// Deliberately client-only: backend→client relay traffic does not touch
     /// it, so a session expires after `ttl` of client silence even while the
@@ -76,7 +76,7 @@ impl Session {
 
 /// Concurrent session table keyed by client SocketAddr.
 pub struct SessionTable {
-    sessions: DashMap<SocketAddr, Session>,
+    sessions: ShardMap<SocketAddr, Session>,
     backend_addr: SocketAddr,
     ttl: Duration,
     max_sessions: usize,
@@ -91,7 +91,7 @@ pub struct SessionTable {
 impl SessionTable {
     pub fn new(backend_addr: SocketAddr, ttl: Duration, max_sessions: usize) -> Self {
         Self {
-            sessions: DashMap::new(),
+            sessions: ShardMap::new(),
             backend_addr,
             ttl,
             max_sessions,
@@ -113,7 +113,7 @@ impl SessionTable {
     /// was just created (so the caller can spawn a relay task for it).
     ///
     /// Session creation is single-flight per client address: we pre-create the
-    /// socket outside the lock, then use `DashMap::entry` to atomically check
+    /// socket outside the lock, then use `ShardMap::entry` to atomically check
     /// vacancy *and* enforce capacity in the same critical section. This
     /// prevents two concurrent calls for the same `client_addr` from both
     /// consuming a capacity slot when only one insert actually succeeds.
@@ -151,7 +151,7 @@ impl SessionTable {
         }
 
         // Pre-create the backend socket before acquiring the entry lock so
-        // no .await points are held under the DashMap shard guard.
+        // no .await points are held under the shard write guard.
         let bind_addr = if self.backend_addr.is_ipv4() {
             "0.0.0.0:0"
         } else {
@@ -169,12 +169,12 @@ impl SessionTable {
         // both consume a slot while only one insert succeeds.
         let entry = self.sessions.entry(client_addr);
         match entry {
-            dashmap::mapref::entry::Entry::Occupied(occ) => {
+            Entry::Occupied(occ) => {
                 // Another task raced us — reuse the existing session.
                 occ.get().touch();
                 Ok((Arc::clone(&occ.get().backend_sock), false))
             }
-            dashmap::mapref::entry::Entry::Vacant(vac) => {
+            Entry::Vacant(vac) => {
                 // Atomically reserve a slot only after confirming the key
                 // is vacant. No .await points between reservation and
                 // insert, so cancellation cannot leak the slot.
@@ -211,7 +211,7 @@ impl SessionTable {
     }
 
     /// Record client activity for a session (update last_active). Takes only
-    /// a shared (read) DashMap guard — safe to call per packet without
+    /// a shared (read) shard guard — safe to call per packet without
     /// contending with concurrent lookups.
     ///
     /// Only client-originated packets may be recorded here; see
@@ -266,7 +266,7 @@ impl SessionTable {
             }
         });
 
-        // Log outside the retain closure to avoid holding DashMap shard locks
+        // Log outside the retain closure to avoid holding shard locks
         // during formatting/IO under contention.
         for (addr, _) in &expired {
             info!(%addr, "session expired");
@@ -277,33 +277,26 @@ impl SessionTable {
 
     /// Look up a client address by the local address of its backend socket.
     pub fn find_client_by_backend_local_addr(&self, local_addr: SocketAddr) -> Option<SocketAddr> {
-        for entry in self.sessions.iter() {
-            if let Ok(addr) = entry.backend_sock.local_addr() {
-                if addr == local_addr {
-                    return Some(entry.client_addr);
-                }
+        self.sessions.find_map(|_, session| {
+            match session.backend_sock.local_addr() {
+                Ok(addr) if addr == local_addr => Some(session.client_addr),
+                _ => None,
             }
-        }
-        None
+        })
     }
 
     /// Get all backend sockets for the currently active sessions.
     pub fn all_backend_sockets(&self) -> Vec<(SocketAddr, Arc<UdpSocket>)> {
         self.sessions
-            .iter()
-            .map(|entry| (entry.client_addr, Arc::clone(&entry.backend_sock)))
-            .collect()
+            .map_collect(|_, session| (session.client_addr, Arc::clone(&session.backend_sock)))
     }
 
     pub fn snapshots(&self) -> Vec<SessionSnapshot> {
-        self.sessions
-            .iter()
-            .map(|entry| SessionSnapshot {
-                client_addr: entry.client_addr,
-                backend_local_addr: entry.backend_sock.local_addr().ok(),
-                last_active_ms: entry.last_active.load(Ordering::Relaxed),
-            })
-            .collect()
+        self.sessions.map_collect(|_, session| SessionSnapshot {
+            client_addr: session.client_addr,
+            backend_local_addr: session.backend_sock.local_addr().ok(),
+            last_active_ms: session.last_active.load(Ordering::Relaxed),
+        })
     }
 
     pub fn len(&self) -> usize {

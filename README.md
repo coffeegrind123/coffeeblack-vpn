@@ -16,7 +16,7 @@ Four transports + an optional bundled resolver, all sharing one admin UI, user a
   > **Detection trade-off — this is protocol *mimicry*, not a crypto layer, and it is off by default.** It cannot weaken WireGuard's encryption (the proxy holds no keys and rewrites only the random junk-padding prefix; the audit confirms it never touches the authenticated region). What it changes is *detectability*, and the direction depends on the adversary: it **helps** against commodity entropy/whitelist DPI and shallow active probers (where plain AmneziaWG reads as suspicious high-entropy UDP), but against an adversary who fingerprints *this specific tool* it can be **more** detectable than plain AmneziaWG — the imitation adds fixed protocol markers (and leaves AmneziaWG's own handshake-size tells intact underneath). This is the well-known ["Parrot is Dead"](https://people.cs.umass.edu/~amir/papers/parrot.pdf) limitation of all unauthenticated mimicry, not a flaw unique to this tool. Prefer `quic` mode (weakest static signature); `dns`/`sip` carry stronger fixed tells. Enable it only when countering commodity blocking.
 
 - **~20 MB stripped release binary** (musl-static, distro-agnostic — runs unchanged on glibc, musl, or any other libc x86_64 host). Bundled Xray accounts for ~13 MB; telemt adds ~6 MB; MasterDnsVPN adds ~2 MB; the DNS bundle adds another ~20 MB when curated.
-- **500+ unit + integration tests** (DB, auth, security, API, activity accounting + retention, AmneziaWG kernel-parity, Xray Reality e2e, telemt + MasterDnsVPN config-gen smoke).
+- **800+ unit + integration tests** (DB, auth, security, API, activity accounting + retention, AmneziaWG kernel-parity, Xray Reality e2e, telemt + MasterDnsVPN config-gen smoke, plus parity suites pinning every in-house replacement against the crate it replaced — QR symbols, gzip blobs, the QUIC flight, HTTP wire behaviour).
 - **Native nftables firewall** — single `inet awg-easy-rs` table with atomic transactions. Transparent compat shim for hosts still on `iptables-legacy`: detected at startup, three FORWARD/INPUT accept rules mirrored into the legacy backend, removed on graceful shutdown.
 
 ---
@@ -354,7 +354,24 @@ Builds are reproducible down to the crate: [`Cargo.lock`](Cargo.lock) is committ
 cargo deny check
 ```
 
-The tree is deliberately lean (~150 crates in the release build): 2FA is hand-rolled HMAC-SHA1 TOTP (RFC 6238) over `hmac`/`sha1` rather than a TOTP crate dragging in the `url`/ICU stack; the Reality dest-probe extracts cert SANs with a small in-house DER walk instead of a full X.509 parser; date handling uses `time` (already required transitively) rather than a second `chrono` tree; and randomness comes straight from the OS CSPRNG via `getrandom` (see `src/rng.rs`) instead of the `rand` userspace generator.
+The tree is deliberately lean — **69 crates in the release build, with no crate present at two versions** — because most of what a project like this would normally pull in is a general-purpose library used through one narrow corner. Where that corner is small and testable against the crate it replaces, it lives here instead:
+
+| In-house | Replaces | Why |
+|---|---|---|
+| `src/http/` — HTTP/1.1 server, router, extractors, responses, cookies, query deserializer | `axum`, `hyper`, `tower`, `axum-extra` (~32 crates) | The panel speaks plaintext HTTP/1.1 behind a reverse proxy, with in-memory bodies of a few kilobytes. The parser is deliberately strict where request smuggling lives (no obs-fold, no `Content-Length` + `Transfer-Encoding`, no conflicting lengths, explicit limits and timeouts) and `tests/http_server.rs` drives those cases as raw bytes over TCP. `http` itself is kept: it is the ecosystem's shared `Request`/`Response`/`HeaderMap` and costs one crate. |
+| `src/proxy/quic_handshake.rs` + `src/proxy/x509.rs` — QUIC v1 packet layer and self-signed certificates | `quinn-proto`, `rcgen` (14 crates) | The DPI responder emits one server flight and forgets the peer; it never needs congestion control, loss recovery or streams. rustls's `quic` module supplies the Initial key schedule, header protection and the TLS state machine. `quinn-proto` stays a **dev-dependency**, and a real QUIC client must accept our flight for the tests to pass. |
+| `src/qr.rs` — QR encoder (byte mode, level M, ISO/IEC 18004) | `qrcode` | `tests/qr_parity.rs` asserts our symbol is module-for-module identical to the crate's, and the rendered SVG byte-for-byte identical. The crate stays a dev-dependency as the reference. |
+| `src/inflate.rs` — gzip/DEFLATE decoder | `flate2`, `miniz_oxide`, `adler2`, `crc32fast`, `simd-adler32` | The only runtime use was expanding the vendored ELFs; nothing compresses outside tests. `tests/vendor_blobs.rs` decompresses every real `vendor/*.gz` and checks the SHA-256 against its pin file. |
+| `src/log.rs` — level filter, formatter, `RUST_LOG` parsing, event macros | `tracing`, `tracing-subscriber` (~11 crates, including a regex engine for `EnvFilter`) | The codebase never opens a span; every call site is a flat event. |
+| `src/proxy/shardmap.rs` — sharded concurrent map | `dashmap`, `crossbeam-utils` | Over `parking_lot`, which tokio already compiles in. |
+| `src/cidr.rs`, `src/encoding.rs`, `src/rng.rs::uuid_v4`, hand-written error impls | `ipnet`, `hex`, `base64`, `uuid`, `thiserror` | Each was a few dozen lines used through a handful of calls. Base64 now comes from `base64ct`, which argon2 already compiles in. |
+
+Earlier passes did the same for 2FA (hand-rolled HMAC-SHA1 TOTP over `hmac`/`sha1` rather than a TOTP crate dragging in the `url`/ICU stack), the Reality dest-probe's certificate SAN extraction (a small in-house DER walk instead of a full X.509 parser), date handling (`time` rather than a second `chrono` tree) and randomness (the OS CSPRNG via `getrandom`, see `src/rng.rs`, instead of the `rand` userspace generator).
+
+Two consequences worth stating plainly:
+
+- **QR codes for payloads with long digit runs may be one version larger.** The `qrcode` crate ran a segment optimiser that could encode a run of digits in numeric mode; ours is byte-mode only. The AmneziaWG config, `vless://` and `mdnsvpn://` payloads are unaffected (they are mixed-case throughout, so the optimiser chose byte mode too); a `tg://proxy` link with a 70-hex-digit secret renders at 49 modules instead of 45. Both scan.
+- **The HTTP server is ours now.** It is the most exposed code in the project. It is strict by construction (see `src/http/server.rs`), covered by wire-level tests, and unchanged in behaviour for every route the panel serves — but it is a hand-written parser on an internet-facing port, and it should be read as such. Keep the reverse proxy in front of it.
 
 The bundled binary blobs (`vendor/*.gz`) are **not** committed to the repo — they're CI artifacts produced from the audited pin files in `vendor/*_VERSION`. To get a fully-bundled release binary, run:
 
@@ -375,7 +392,7 @@ For a quick iterating-on-Rust loop without re-fetching upstreams, the .gz blobs 
 ```bash
 scripts/build.sh --cargo-only          # use cached vendor blobs
 scripts/build.sh --skip tor --skip xray  # skip specific binaries
-cargo test                              # 480+ tests, ~3 minutes
+cargo test                              # 800+ tests, ~4 minutes
 cargo build                             # plain debug build
                                         # (build.rs is tolerant of
                                         # missing blobs — code paths
@@ -424,11 +441,11 @@ sudo ./target/x86_64-unknown-linux-musl/release/awg-easy-rs
 ┌──────────────────────────────────────────────────────────────┐
 │ Single binary (~20 MB stripped, musl-static, distro-agnostic)│
 │                                                              │
-│  Axum 0.7 ──── HTTP server                                   │
+│  src/http/ ─── in-house HTTP/1.1 server + router             │
 │  rusqlite ──── SQLite (WAL, FK on)                           │
 │  argon2 ────── password hashing                              │
 │  hmac+sha1 ─── in-house RFC 6238 TOTP 2FA                    │
-│  qrcode ────── SVG QR (vless:// + tg:// + mdnsvpn:// + AWG)  │
+│  src/qr.rs ─── in-house SVG QR (vless:// tg:// mdnsvpn:// AWG)│
 │  tokio-rustls ─ TLS 1.3 dest probe for Reality               │
 │                                                              │
 │  Static UI: index.html + app.js (embedded via include_str!)  │

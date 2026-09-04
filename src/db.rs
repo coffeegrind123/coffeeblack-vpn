@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use anyhow::{anyhow, Context, Result};
-use ipnet::{Ipv4Net, Ipv6Net};
+use crate::cidr::{Ipv4Net, Ipv6Net};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -144,7 +144,7 @@ fn enc(v: &str) -> Result<String> {
 /// and loudly.
 fn dec(v: &str) -> rusqlite::Result<String> {
     crate::crypto::decrypt(v).map_err(|e| {
-        tracing::error!("could not decrypt a stored secret: {e:#}");
+        crate::error!("could not decrypt a stored secret: {e:#}");
         rusqlite::Error::FromSqlConversionFailure(
             0,
             rusqlite::types::Type::Text,
@@ -1900,7 +1900,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE clients_table ADD COLUMN advanced_security INTEGER",
         )?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added clients_table.advanced_security (per-peer AdvancedSecurity flag)"
         );
     }
@@ -1911,7 +1911,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE users_table ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0",
         )?;
-        tracing::info!("DB migration: added users_table.totp_last_step (TOTP replay guard)");
+        crate::info!("DB migration: added users_table.totp_last_step (TOTP replay guard)");
     }
     // additional_config: free-form append-to-config text. Mirrors amnezia-client's
     // additionalServerConfig / additionalClientConfig escape hatch — operators
@@ -1921,7 +1921,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE interfaces_table ADD COLUMN additional_config TEXT NOT NULL DEFAULT ''",
         )?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added interfaces_table.additional_config (free-form Interface append)"
         );
     }
@@ -1929,7 +1929,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE clients_table ADD COLUMN additional_config TEXT",
         )?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added clients_table.additional_config (per-peer free-form append)"
         );
     }
@@ -1937,7 +1937,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE user_configs_table ADD COLUMN default_additional_config TEXT NOT NULL DEFAULT ''",
         )?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added user_configs_table.default_additional_config"
         );
     }
@@ -1960,7 +1960,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
             conn.execute_batch(&format!(
                 "ALTER TABLE interfaces_table ADD COLUMN {col} {ddl}"
             ))?;
-            tracing::info!("DB migration: added interfaces_table.{col} (AmneziaWG 3)");
+            crate::info!("DB migration: added interfaces_table.{col} (AmneziaWG 3)");
         }
     }
 
@@ -1972,7 +1972,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE interfaces_table ADD COLUMN dns_lockdown INTEGER NOT NULL DEFAULT 0",
         )?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added interfaces_table.dns_lockdown (DNS leak-prevention master switch)"
         );
     }
@@ -1980,7 +1980,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE interfaces_table ADD COLUMN dns_lockdown_target TEXT NOT NULL DEFAULT ''",
         )?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added interfaces_table.dns_lockdown_target (resolver IP DNAT redirects to)"
         );
     }
@@ -1988,7 +1988,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE interfaces_table ADD COLUMN dns_block_external INTEGER NOT NULL DEFAULT 1",
         )?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added interfaces_table.dns_block_external (drop residual peer :53/:853 leaks)"
         );
     }
@@ -2001,7 +2001,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE xray_inbound_table ADD COLUMN transport TEXT NOT NULL DEFAULT 'tcp'",
         )?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added xray_inbound_table.transport (tcp|xhttp)"
         );
     }
@@ -2009,7 +2009,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE xray_inbound_table ADD COLUMN xhttp_path TEXT NOT NULL DEFAULT ''",
         )?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added xray_inbound_table.xhttp_path (xhttpSettings.path)"
         );
     }
@@ -2019,17 +2019,17 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "ALTER TABLE proxy_settings_table ADD COLUMN max_sessions INTEGER NOT NULL DEFAULT 2048",
         )?;
-        tracing::info!("DB migration: added proxy_settings_table.max_sessions");
+        crate::info!("DB migration: added proxy_settings_table.max_sessions");
     }
     if !column_exists(conn, "proxy_settings_table", "session_ttl")? {
         conn.execute_batch(
             "ALTER TABLE proxy_settings_table ADD COLUMN session_ttl INTEGER NOT NULL DEFAULT 120",
         )?;
-        tracing::info!("DB migration: added proxy_settings_table.session_ttl");
+        crate::info!("DB migration: added proxy_settings_table.session_ttl");
     }
     if !column_exists(conn, "one_time_links_table", "token_enc")? {
         conn.execute_batch("ALTER TABLE one_time_links_table ADD COLUMN token_enc TEXT")?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added one_time_links_table.token_enc \
              (tokens are now stored hashed, with an encrypted copy for display)"
         );
@@ -2046,7 +2046,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
             "ALTER TABLE general_table ADD COLUMN private_key_retention \
              TEXT NOT NULL DEFAULT '{RETENTION_NEVER}'"
         ))?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added general_table.private_key_retention \
              (default '{RETENTION_NEVER}' — new peers no longer store private keys)"
         );
@@ -2056,7 +2056,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
             "ALTER TABLE general_table ADD COLUMN activity_retention_days \
              INTEGER NOT NULL DEFAULT {DEFAULT_ACTIVITY_RETENTION_DAYS}"
         ))?;
-        tracing::info!(
+        crate::info!(
             "DB migration: added general_table.activity_retention_days \
              (activity history window, 0 = disabled)"
         );
@@ -2079,7 +2079,7 @@ fn apply_migrations(conn: &Connection) -> Result<()> {
             "UPDATE hooks_table SET post_up = ?1, post_down = ?2 WHERE id = 'awg0'",
             params![POST_UP_TEMPLATE, POST_DOWN_TEMPLATE],
         )?;
-        tracing::info!(
+        crate::info!(
             "DB migration: replaced legacy iptables hooks with native nftables defaults"
         );
     }
@@ -2277,7 +2277,7 @@ fn seed_if_empty(conn: &Connection) -> Result<()> {
     // Generate a random 512-character session password (256 bytes hex-encoded).
     let mut rand_bytes = [0u8; 256];
     crate::rng::fill(&mut rand_bytes);
-    let session_pass = hex::encode(rand_bytes);
+    let session_pass = crate::encoding::hex_encode(rand_bytes);
 
     // interfaces_table default
     conn.execute(
@@ -2383,7 +2383,7 @@ fn seed_if_empty(conn: &Connection) -> Result<()> {
         params!["mdnsvpn0"],
     )?;
 
-    tracing::info!("Seeded default database rows");
+    crate::info!("Seeded default database rows");
     Ok(())
 }
 
@@ -2423,14 +2423,14 @@ pub fn init_db() -> Result<()> {
             &CONFIG.db_path,
             std::fs::Permissions::from_mode(0o600),
         ) {
-            tracing::warn!("could not chmod 0600 the database file: {e}");
+            crate::warn!("could not chmod 0600 the database file: {e}");
         }
     }
     create_tables(&c)?;
     seed_if_empty(&c)?;
     let mut guard = db_slot().lock().expect("Database lock poisoned");
     *guard = Some(c);
-    tracing::info!("Database ready at {}", CONFIG.db_path);
+    crate::info!("Database ready at {}", CONFIG.db_path);
     Ok(())
 }
 
@@ -2455,7 +2455,7 @@ fn init_in_memory_db() -> Result<()> {
     let restored = match &CONFIG.persist_db_path {
         Some(path) if snapshot_is_restorable(path) => match restore_from(&mut c, path) {
             Ok(()) => {
-                tracing::info!("Restored in-memory database from snapshot {path}");
+                crate::info!("Restored in-memory database from snapshot {path}");
                 true
             }
             Err(e) => {
@@ -2496,10 +2496,10 @@ fn init_in_memory_db() -> Result<()> {
     let mut guard = db_slot().lock().expect("Database lock poisoned");
     *guard = Some(c);
     match &CONFIG.persist_db_path {
-        Some(path) => tracing::info!(
+        Some(path) => crate::info!(
             "Database ready in RAM (in-memory mode); snapshots persist to {path}"
         ),
-        None => tracing::info!(
+        None => crate::info!(
             "Database ready in RAM (in-memory mode); no persistence configured \
              (WG_EASY_PERSIST_DB unset) — state is lost on restart"
         ),
@@ -2590,7 +2590,7 @@ pub fn snapshot_to(dst_path: &str) -> Result<()> {
     let tmp_dir = parent.join(format!(
         ".{base}.snap.{}.{}",
         std::process::id(),
-        hex::encode(rand_suffix)
+        crate::encoding::hex_encode(rand_suffix)
     ));
 
     std::fs::create_dir(&tmp_dir)
@@ -3500,7 +3500,7 @@ pub fn next_ipv4(cidr: &str, used_ips: &[String]) -> Result<String> {
 /// Find the first host address inside *cidr* that is not in *used_ips*.
 pub fn next_ipv6(cidr: &str, used_ips: &[String]) -> Result<String> {
     let net: Ipv6Net = cidr.parse().context("Invalid IPv6 CIDR")?;
-    // ipnet::Ipv6Net::hosts() includes the network address (IPv6 has no
+    // cidr::Ipv6Net::hosts() includes the network address (IPv6 has no
     // broadcast). Skip both the network address and the server IP
     // (network + 1, mirrored in wg::config_gen::server_ip).
     let network_addr = net.addr().to_string();

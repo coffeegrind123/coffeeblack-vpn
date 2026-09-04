@@ -342,7 +342,7 @@ async fn run(iface_name: String) {
         let retention_days = match db::get_general() {
             Ok(g) => g.activity_retention_days,
             Err(e) => {
-                tracing::warn!("activity poll skipped (general read failed): {e}");
+                crate::warn!("activity poll skipped (general read failed): {e}");
                 continue;
             }
         };
@@ -351,7 +351,7 @@ async fn run(iface_name: String) {
             if !purged_while_disabled {
                 let n = purge();
                 if n > 0 {
-                    tracing::info!("activity history disabled — purged {n} recorded day(s)");
+                    crate::info!("activity history disabled — purged {n} recorded day(s)");
                 }
                 purged_while_disabled = true;
             }
@@ -362,14 +362,14 @@ async fn run(iface_name: String) {
         if let Err(e) = poll_once(&iface_name).await {
             // Never let a failed tick kill the task — the interface may
             // simply be down, and the next tick should get another shot.
-            tracing::warn!("activity poll failed: {e:#}");
+            crate::warn!("activity poll failed: {e:#}");
         }
 
         let today = datetime::today_utc();
         if today != last_prune_day {
             let n = prune_before(&datetime::day_utc_ago(retention_days));
             if n > 0 {
-                tracing::info!(
+                crate::info!(
                     "activity retention: pruned {n} day bucket(s) older than {retention_days}d"
                 );
             }
@@ -398,7 +398,7 @@ pub async fn poll_once(iface_name: &str) -> anyhow::Result<usize> {
     // delete landed.
     let dropped = retain_clients(&clients.iter().map(|c| c.id).collect::<Vec<_>>());
     if dropped > 0 {
-        tracing::debug!("activity: dropped {dropped} record(s) for deleted peer(s)");
+        crate::debug!("activity: dropped {dropped} record(s) for deleted peer(s)");
     }
 
     let samples: Vec<ActivitySample> = clients
@@ -419,6 +419,6 @@ pub async fn poll_once(iface_name: &str) -> anyhow::Result<usize> {
     }
 
     let n = record_samples(&datetime::today_utc(), &datetime::now_rfc3339(), &samples);
-    tracing::debug!("activity poll: recorded {n} peer sample(s)");
+    crate::debug!("activity poll: recorded {n} peer sample(s)");
     Ok(n)
 }

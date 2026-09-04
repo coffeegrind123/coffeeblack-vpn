@@ -4,12 +4,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use dashmap::DashMap;
+use crate::proxy::shardmap::ShardMap;
 use serde::Serialize;
 use tokio::net::UdpSocket;
 use tokio::sync::{watch, Mutex, Semaphore};
 use tokio::time;
-use tracing::{debug, error, info, warn};
+use crate::{debug, error, info, warn};
 
 use crate::proxy::backend;
 use crate::proxy::config::{AwgParams, ProxyConfig};
@@ -108,17 +108,17 @@ pub struct Proxy {
     /// bypass is not a ceiling.
     probe_budget: Arc<GlobalProbeBudget>,
     fixed_protocol: Option<Protocol>,
-    client_protocols: Arc<DashMap<SocketAddr, Protocol>>,
+    client_protocols: Arc<ShardMap<SocketAddr, Protocol>>,
     awg_params: Option<Arc<AwgParams>>,
     dns_forward_enabled: bool,
     dns_upstream: Option<SocketAddr>,
     dns_upstream_timeout: Duration,
     quic_handshake: Option<Arc<Mutex<QuicHandshakeResponder>>>,
     /// Per-client SIP dialog state, maintained across INVITE/ACK/BYE.
-    sip_dialogs: Arc<DashMap<SocketAddr, SipDialog>>,
+    sip_dialogs: Arc<ShardMap<SocketAddr, SipDialog>>,
     /// Most recent DNS query (TXID + QNAME + QTYPE) observed per client, so
     /// DNS cover-traffic responses can echo the request (see `transform`).
-    dns_query_echo: Arc<DashMap<SocketAddr, DnsEcho>>,
+    dns_query_echo: Arc<ShardMap<SocketAddr, DnsEcho>>,
     /// Broadcast shutdown signal. `watch` is level-triggered (a task that
     /// checks after the signal still observes it) and wakes *all* receivers,
     /// unlike the single-waiter `Notify` it replaced — which meant one
@@ -128,9 +128,9 @@ pub struct Proxy {
     /// Per-session relay task handles, keyed by client address.
     /// Each task awaits data from the session's backend socket and relays it
     /// back to the client — fully event-driven, no polling.
-    relay_handles: Arc<DashMap<SocketAddr, RelayEntry>>,
+    relay_handles: Arc<ShardMap<SocketAddr, RelayEntry>>,
     /// Deferred SIP dialog response tasks, keyed by client address.
-    sip_deferred_handles: Arc<DashMap<SocketAddr, SipDeferredEntry>>,
+    sip_deferred_handles: Arc<ShardMap<SocketAddr, SipDeferredEntry>>,
     /// Monotonically increasing generation counter for relay tasks.
     relay_generation: AtomicU64,
     /// Monotonically increasing generation counter for deferred SIP tasks.
@@ -208,7 +208,7 @@ fn current_unix_millis() -> u64 {
 fn build_proxy_status_snapshot(
     sessions: &SessionTable,
     metrics: &MetricsStore,
-    protocols: &DashMap<SocketAddr, Protocol>,
+    protocols: &ShardMap<SocketAddr, Protocol>,
     fixed_protocol: Option<Protocol>,
     listen_addr: SocketAddr,
     target_addr: &str,
@@ -395,17 +395,17 @@ impl Proxy {
             sessions,
             metrics,
             fixed_protocol,
-            client_protocols: Arc::new(DashMap::new()),
+            client_protocols: Arc::new(ShardMap::new()),
             awg_params: awg_params.map(Arc::new),
             dns_forward_enabled,
             dns_upstream,
             dns_upstream_timeout,
             quic_handshake,
-            sip_dialogs: Arc::new(DashMap::new()),
-            dns_query_echo: Arc::new(DashMap::new()),
+            sip_dialogs: Arc::new(ShardMap::new()),
+            dns_query_echo: Arc::new(ShardMap::new()),
             shutdown_tx: watch::channel(false).0,
-            relay_handles: Arc::new(DashMap::new()),
-            sip_deferred_handles: Arc::new(DashMap::new()),
+            relay_handles: Arc::new(ShardMap::new()),
+            sip_deferred_handles: Arc::new(ShardMap::new()),
             relay_generation: AtomicU64::new(0),
             sip_deferred_generation: AtomicU64::new(0),
             dns_forward_semaphore: Arc::new(Semaphore::new(MAX_INFLIGHT_DNS_FORWARDS)),
@@ -428,17 +428,17 @@ impl Proxy {
             sessions,
             metrics,
             fixed_protocol: Some(protocol),
-            client_protocols: Arc::new(DashMap::new()),
+            client_protocols: Arc::new(ShardMap::new()),
             awg_params: awg_params.map(Arc::new),
             dns_forward_enabled: false,
             dns_upstream: None,
             dns_upstream_timeout: Duration::from_millis(1500),
             quic_handshake: None,
-            sip_dialogs: Arc::new(DashMap::new()),
-            dns_query_echo: Arc::new(DashMap::new()),
+            sip_dialogs: Arc::new(ShardMap::new()),
+            dns_query_echo: Arc::new(ShardMap::new()),
             shutdown_tx: watch::channel(false).0,
-            relay_handles: Arc::new(DashMap::new()),
-            sip_deferred_handles: Arc::new(DashMap::new()),
+            relay_handles: Arc::new(ShardMap::new()),
+            sip_deferred_handles: Arc::new(ShardMap::new()),
             relay_generation: AtomicU64::new(0),
             sip_deferred_generation: AtomicU64::new(0),
             dns_forward_semaphore: Arc::new(Semaphore::new(MAX_INFLIGHT_DNS_FORWARDS)),
@@ -454,10 +454,10 @@ impl Proxy {
             // indistinguishable from packet loss, which every real QUIC
             // endpoint already tolerates.
             //
-            // `continue`, not `break`: `handle_timeouts` batches responses for
-            // *many* connections into one Vec (quic_handshake.rs:220), so
-            // stopping at the first datagram that does not fit would suppress
-            // unrelated destinations that still had budget for smaller ones.
+            // `continue`, not `break`: a single call can return several
+            // datagrams (the server flight is split across them), so stopping
+            // at the first one that does not fit would suppress the rest even
+            // when the budget still covers a smaller datagram.
             if !self.probe_budget.try_consume(response.payload.len()) {
                 debug!(
                     destination = %response.destination,
@@ -552,12 +552,12 @@ impl Proxy {
             handle.abort();
         }
         // Abort all per-session relay tasks
-        self.relay_handles.iter().for_each(|entry| {
-            entry.value().handle.abort();
+        self.relay_handles.for_each(|_, entry| {
+            entry.handle.abort();
         });
         self.relay_handles.clear();
-        self.sip_deferred_handles.iter().for_each(|entry| {
-            entry.value().handle.abort();
+        self.sip_deferred_handles.for_each(|_, entry| {
+            entry.handle.abort();
         });
         self.sip_deferred_handles.clear();
         info!("proxy stopped");
@@ -680,7 +680,7 @@ impl Proxy {
         // protocol. In any fixed mode `client_protocols` is never populated
         // (it is written only in the auto-mode branch of `handle_probe`), so a
         // fixed non-DNS mode answers this statically without a per-packet
-        // DashMap lookup; only auto mode pays for the lookup.
+        // map lookup; only auto mode pays for the lookup.
         let dns_active = match self.fixed_protocol {
             Some(p) => p == Protocol::Dns,
             None => self.client_protocols.get(&client_addr).map(|p| *p) == Some(Protocol::Dns),
@@ -1365,7 +1365,7 @@ impl Proxy {
         // Cache this client's metrics handle once. The entry is created in
         // `handle_client_packet` before this relay is spawned and is removed
         // together with this task, so the `Arc` is stable for the session's
-        // lifetime — caching it avoids a DashMap lookup + `Arc` clone on every
+        // lifetime — caching it avoids a map lookup + `Arc` clone on every
         // outbound packet.
         let client_metrics = self.metrics.get(&client_addr);
 
@@ -1375,7 +1375,7 @@ impl Proxy {
             // insert-once per client (`handle_probe` never overwrites an
             // existing entry, and removal only happens together with this
             // relay's teardown), so after the first hit the per-packet
-            // DashMap lookup disappears from the outbound hot path.
+            // map lookup disappears from the outbound hot path.
             let mut locked_protocol: Option<Protocol> = None;
             loop {
                 match backend_sock.recv(&mut buf).await {
@@ -1404,7 +1404,7 @@ impl Proxy {
                             if let Some(protocol) = protocol {
                                 // The query echo only feeds DNS cover responses
                                 // (other protocols ignore it), so skip the
-                                // DashMap lookup entirely off the DNS path.
+                                // map lookup entirely off the DNS path.
                                 let echo = if protocol == Protocol::Dns {
                                     dns_query_echo.get(&client_addr)
                                 } else {
@@ -1525,11 +1525,11 @@ impl Proxy {
 struct ClientTeardown<'a> {
     sessions: &'a SessionTable,
     metrics: &'a MetricsStore,
-    client_protocols: &'a DashMap<SocketAddr, Protocol>,
-    sip_dialogs: &'a DashMap<SocketAddr, SipDialog>,
-    dns_query_echo: &'a DashMap<SocketAddr, DnsEcho>,
-    relay_handles: &'a DashMap<SocketAddr, RelayEntry>,
-    sip_deferred_handles: &'a DashMap<SocketAddr, SipDeferredEntry>,
+    client_protocols: &'a ShardMap<SocketAddr, Protocol>,
+    sip_dialogs: &'a ShardMap<SocketAddr, SipDialog>,
+    dns_query_echo: &'a ShardMap<SocketAddr, DnsEcho>,
+    relay_handles: &'a ShardMap<SocketAddr, RelayEntry>,
+    sip_deferred_handles: &'a ShardMap<SocketAddr, SipDeferredEntry>,
 }
 
 /// Tear down the state of `addr`'s expired session, whose relay generation
@@ -1614,11 +1614,11 @@ async fn forward_dns_query(
 
 impl Drop for Proxy {
     fn drop(&mut self) {
-        self.relay_handles.iter().for_each(|entry| {
-            entry.value().handle.abort();
+        self.relay_handles.for_each(|_, entry| {
+            entry.handle.abort();
         });
-        self.sip_deferred_handles.iter().for_each(|entry| {
-            entry.value().handle.abort();
+        self.sip_deferred_handles.for_each(|_, entry| {
+            entry.handle.abort();
         });
     }
 }
@@ -1724,7 +1724,7 @@ mod tests {
         let backend: SocketAddr = "127.0.0.1:51821".parse().unwrap();
         let sessions = SessionTable::new(backend, Duration::from_secs(300), 1000);
         let metrics = MetricsStore::new(16, 1000);
-        let protocols = DashMap::new();
+        let protocols = ShardMap::new();
         let client: SocketAddr = "203.0.113.10:45678".parse().unwrap();
 
         sessions.get_or_create(client).await.unwrap();
@@ -1770,7 +1770,7 @@ mod tests {
         let backend: SocketAddr = "127.0.0.1:51821".parse().unwrap();
         let sessions = SessionTable::new(backend, Duration::from_secs(300), 1000);
         let metrics = MetricsStore::new(16, 1000);
-        let protocols = DashMap::new();
+        let protocols = ShardMap::new();
         let client: SocketAddr = "203.0.113.10:45678".parse().unwrap();
 
         sessions.get_or_create(client).await.unwrap();

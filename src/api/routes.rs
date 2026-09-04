@@ -8,10 +8,10 @@
 //! | GET    | /api/information      | Version/release info      |
 //! | GET    | /api/interface        | Interface public info     |
 
-use axum::extract::Path;
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::IntoResponse;
-use axum::Json;
+use crate::http::Path;
+use crate::http::{header, HeaderMap, StatusCode};
+use crate::http::IntoResponse;
+use crate::http::Json;
 use serde_json::{json, Value};
 
 use super::{api_err, map_err, no_store_headers};
@@ -141,7 +141,7 @@ pub async fn one_time_link(
 
     let filename = format!("{}.conf", sanitize_filename(&client.name));
 
-    let mut headers = axum::http::HeaderMap::new();
+    let mut headers = crate::http::HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("application/x-wireguard-config"),
@@ -160,7 +160,7 @@ pub async fn one_time_link(
 // ---------------------------------------------------------------------------
 
 pub async fn metrics_json(
-    peer: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>,
+    peer: Option<crate::http::ConnectInfo<std::net::SocketAddr>>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let general = db::get_general().map_err(map_err)?;
@@ -177,7 +177,7 @@ pub async fn metrics_json(
         "metrics",
         crate::api::session::client_ip_for_limit(
             &headers,
-            peer.map(|axum::extract::ConnectInfo(a)| a),
+            peer.map(|crate::http::ConnectInfo(a)| a),
         )
         .as_deref(),
         30,
@@ -236,7 +236,7 @@ pub async fn metrics_json(
 // ---------------------------------------------------------------------------
 
 pub async fn metrics_prometheus(
-    peer: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>,
+    peer: Option<crate::http::ConnectInfo<std::net::SocketAddr>>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let general = db::get_general().map_err(map_err)?;
@@ -256,7 +256,7 @@ pub async fn metrics_prometheus(
         "metrics",
         crate::api::session::client_ip_for_limit(
             &headers,
-            peer.map(|axum::extract::ConnectInfo(a)| a),
+            peer.map(|crate::http::ConnectInfo(a)| a),
         )
         .as_deref(),
         30,

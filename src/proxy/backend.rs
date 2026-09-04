@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tokio::net::UdpSocket;
-use tracing::{debug, warn};
+use crate::{debug, warn};
 
 /// Apply the requested kernel receive/send buffer sizes (`SO_RCVBUF`/`SO_SNDBUF`)
 /// to a UDP socket. A `bytes` value of `0` is a no-op, leaving the OS defaults

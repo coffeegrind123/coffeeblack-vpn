@@ -216,7 +216,7 @@ async fn reconcile_dnscrypt(bundle: &db::DnsBundle, reset_crash: bool) -> Result
         // SIGHUP for hot reload.
         send_signal(running.pid, libc::SIGHUP)
             .with_context(|| format!("SIGHUP to dnscrypt-proxy pid {}", running.pid))?;
-        tracing::info!(
+        crate::info!(
             pid = running.pid,
             config = %path.display(),
             "dnscrypt-proxy reloaded (SIGHUP)"
@@ -400,13 +400,13 @@ async fn spawn(kind: ChildKind, bin: &PathBuf, argv: Vec<String>) -> Result<Chil
         .spawn()
         .with_context(|| format!("spawn {} ({})", kind.name(), bin.display()))?;
     if let Some(stdout) = child.stdout.take() {
-        spawn_log_pump(stdout, log_target(kind, "stdout"), tracing::Level::INFO);
+        spawn_log_pump(stdout, log_target(kind, "stdout"), crate::log::Level::Info);
     }
     if let Some(stderr) = child.stderr.take() {
-        spawn_log_pump(stderr, log_target(kind, "stderr"), tracing::Level::WARN);
+        spawn_log_pump(stderr, log_target(kind, "stderr"), crate::log::Level::Warn);
     }
     let pid = child.id().unwrap_or(0);
-    tracing::info!(
+    crate::info!(
         kind = kind.name(),
         pid,
         bin = %bin.display(),
@@ -426,7 +426,7 @@ fn log_target(kind: ChildKind, stream: &str) -> &'static str {
     }
 }
 
-fn spawn_log_pump<R>(reader: R, target: &'static str, level: tracing::Level)
+fn spawn_log_pump<R>(reader: R, target: &'static str, level: crate::log::Level)
 where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
 {
@@ -446,10 +446,10 @@ where
                 "tor"
             };
             match level {
-                tracing::Level::ERROR => tracing::error!(target: "dns", source = target, child = category, "{line}"),
-                tracing::Level::WARN  => tracing::warn!(target:  "dns", source = target, child = category, "{line}"),
-                tracing::Level::INFO  => tracing::info!(target:  "dns", source = target, child = category, "{line}"),
-                _                     => tracing::debug!(target: "dns", source = target, child = category, "{line}"),
+                crate::log::Level::Error => crate::error!(target: "dns", source = target, child = category, "{line}"),
+                crate::log::Level::Warn  => crate::warn!(target:  "dns", source = target, child = category, "{line}"),
+                crate::log::Level::Info  => crate::info!(target:  "dns", source = target, child = category, "{line}"),
+                _                     => crate::debug!(target: "dns", source = target, child = category, "{line}"),
             }
         }
     });
@@ -471,10 +471,10 @@ async fn stop_if_running(kind: ChildKind, reason: &str) {
 
     live.shutdown_requested.store(true, Ordering::SeqCst);
     let pid = live.pid;
-    tracing::info!(kind = kind.name(), pid, %reason, "stopping DNS bundle child");
+    crate::info!(kind = kind.name(), pid, %reason, "stopping DNS bundle child");
     if let Err(e) = send_signal(pid, libc::SIGTERM) {
         if e.raw_os_error() != Some(libc::ESRCH) {
-            tracing::warn!(kind = kind.name(), pid, error = ?e, "SIGTERM failed; will SIGKILL");
+            crate::warn!(kind = kind.name(), pid, error = ?e, "SIGTERM failed; will SIGKILL");
         }
     }
 
@@ -482,12 +482,12 @@ async fn stop_if_running(kind: ChildKind, reason: &str) {
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
         if !pid_alive(pid) {
-            tracing::info!(kind = kind.name(), pid, "child exited cleanly within grace period");
+            crate::info!(kind = kind.name(), pid, "child exited cleanly within grace period");
             return;
         }
         sleep(Duration::from_millis(50)).await;
     }
-    tracing::warn!(
+    crate::warn!(
         kind = kind.name(),
         pid,
         "child did not exit within {grace:?}, sending SIGKILL"
@@ -499,7 +499,7 @@ async fn stop_if_running(kind: ChildKind, reason: &str) {
         }
         sleep(Duration::from_millis(40)).await;
     }
-    tracing::error!(kind = kind.name(), pid, "child failed to exit even after SIGKILL");
+    crate::error!(kind = kind.name(), pid, "child failed to exit even after SIGKILL");
 }
 
 fn spawn_watchdog(kind: ChildKind, mut child: Child, shutdown_requested: Arc<AtomicBool>) {
@@ -525,7 +525,7 @@ fn spawn_watchdog(kind: ChildKind, mut child: Child, shutdown_requested: Arc<Ato
         };
 
         if shutdown_requested.load(Ordering::SeqCst) {
-            tracing::info!(
+            crate::info!(
                 kind = kind.name(),
                 pid,
                 exit = %exit_str,
@@ -534,7 +534,7 @@ fn spawn_watchdog(kind: ChildKind, mut child: Child, shutdown_requested: Arc<Ato
             return;
         }
 
-        tracing::warn!(
+        crate::warn!(
             kind = kind.name(),
             pid,
             exit = %exit_str,
@@ -546,7 +546,7 @@ fn spawn_watchdog(kind: ChildKind, mut child: Child, shutdown_requested: Arc<Ato
         let bundle = match db::get_dns_bundle() {
             Ok(b) => b,
             Err(e) => {
-                tracing::error!(kind = kind.name(), error = ?e, "watchdog: get_dns_bundle failed; giving up");
+                crate::error!(kind = kind.name(), error = ?e, "watchdog: get_dns_bundle failed; giving up");
                 return;
             }
         };
@@ -590,7 +590,7 @@ fn spawn_watchdog(kind: ChildKind, mut child: Child, shutdown_requested: Arc<Ato
         };
 
         if attempts > 10 {
-            tracing::error!(
+            crate::error!(
                 kind = kind.name(),
                 attempts,
                 "restart attempts exceeded; supervisor giving up"
@@ -598,7 +598,7 @@ fn spawn_watchdog(kind: ChildKind, mut child: Child, shutdown_requested: Arc<Ato
             return;
         }
         let backoff = restart_backoff(attempts);
-        tracing::info!(
+        crate::info!(
             kind = kind.name(),
             attempts,
             backoff_ms = backoff.as_millis() as u64,
@@ -608,7 +608,7 @@ fn spawn_watchdog(kind: ChildKind, mut child: Child, shutdown_requested: Arc<Ato
 
         // `false` = don't reset the crash counter — this is a restart.
         if let Err(e) = ensure_running_inner(false).await {
-            tracing::error!(kind = kind.name(), error = ?e, "restart failed");
+            crate::error!(kind = kind.name(), error = ?e, "restart failed");
         }
     });
 }

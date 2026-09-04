@@ -13,11 +13,11 @@
 //! | POST   | /api/client/:id/disable                | Disable client        |
 //! | POST   | /api/client/:id/generateOneTimeLink    | One-time config link  |
 
-use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode};
-use axum::response::IntoResponse;
-use axum::Json;
-use axum_extra::extract::cookie::CookieJar;
+use crate::http::{Path, Query, State};
+use crate::http::{header, StatusCode};
+use crate::http::IntoResponse;
+use crate::http::Json;
+use crate::http::CookieJar;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -508,7 +508,7 @@ pub async fn rotate_client_key(
         .transpose()
         .map_err(map_err)?;
 
-    tracing::info!(
+    crate::info!(
         "client {client_id} keypair rotated by user {} (retained: {retain})",
         user.username
     );
@@ -866,7 +866,7 @@ pub async fn client_configuration(
 
     let filename = format!("{}.conf", sanitize_filename(&client.name));
 
-    let mut headers = axum::http::HeaderMap::new();
+    let mut headers = crate::http::HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("application/x-wireguard-config"),
@@ -903,7 +903,7 @@ pub async fn client_qrcode(
 
     let svg = crate::qr::generate_qr_svg(&config).map_err(map_err)?;
 
-    let mut headers = axum::http::HeaderMap::new();
+    let mut headers = crate::http::HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("image/svg+xml"),
@@ -998,7 +998,7 @@ pub async fn generate_one_time_link(
     let _config = wg::get_client_config(client_id).map_err(map_err)?;
     let mut bytes = [0u8; 32];
     crate::rng::fill(&mut bytes);
-    let token = hex::encode(bytes);
+    let token = crate::encoding::hex_encode(bytes);
 
     // Expire in 5 minutes
     let expires =
@@ -1079,7 +1079,7 @@ pub(crate) fn validate_routing_entry(entry: &str) -> Result<(), String> {
     if e.is_empty() {
         return Err("empty entry".into());
     }
-    if e.parse::<std::net::IpAddr>().is_ok() || e.parse::<ipnet::IpNet>().is_ok() {
+    if e.parse::<std::net::IpAddr>().is_ok() || e.parse::<crate::cidr::IpNet>().is_ok() {
         Ok(())
     } else {
         Err(format!("'{e}' is not a valid IP address or CIDR"))

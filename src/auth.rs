@@ -36,12 +36,12 @@ pub fn verify_password(pw: &str, hash: &str) -> Result<bool> {
 pub fn generate_session_token() -> String {
     let mut bytes = [0u8; 256];
     crate::rng::fill(&mut bytes);
-    hex::encode(bytes)
+    crate::encoding::hex_encode(bytes)
 }
 
 /// Compute the SHA-256 hex digest of a string.
 pub fn sha256(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
-    hex::encode(hasher.finalize())
+    crate::encoding::hex_encode(hasher.finalize())
 }

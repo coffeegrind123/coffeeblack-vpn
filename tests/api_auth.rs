@@ -1,17 +1,16 @@
 //! Track 3: API auth tests — login, logout, session, rate limiter, TOTP,
 //! Secure cookie, setup wizard.
 //!
-//! Uses `axum::body::Body` and `tower::ServiceExt` to send HTTP requests
+//! Uses `awg_easy_rs::http::Body` and `Router::oneshot` to send HTTP requests
 //! against the full router with a test database.
 
 mod common;
 
 use awg_easy_rs::{api, auth, db};
-use axum::body::Body;
-use axum::http::{header, Request, StatusCode};
+use awg_easy_rs::http::Body;
+use awg_easy_rs::http::{header, Request, StatusCode};
 use serde_json::{json, Value};
 use serial_test::serial;
-use tower::ServiceExt;
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -21,7 +20,7 @@ fn seed() {
     common::seed();
 }
 
-fn router() -> axum::Router {
+fn router() -> awg_easy_rs::http::Router {
     api::build_router(api::AppState::new())
 }
 
@@ -40,7 +39,7 @@ fn create_admin() -> i64 {
     .unwrap()
 }
 
-async fn login(app: &axum::Router, username: &str, password: &str, totp_code: Option<&str>) -> (StatusCode, Value, Option<String>) {
+async fn login(app: &awg_easy_rs::http::Router, username: &str, password: &str, totp_code: Option<&str>) -> (StatusCode, Value, Option<String>) {
     let mut body = json!({ "username": username, "password": password });
     if let Some(code) = totp_code {
         body["totpCode"] = json!(code);
@@ -62,12 +61,12 @@ async fn login(app: &axum::Router, username: &str, password: &str, totp_code: Op
     let session_cookie = cookies
         .into_iter()
         .find(|c| c.starts_with("awg_session="));
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
     (status, body, session_cookie)
 }
 
-async fn get(app: &axum::Router, path: &str, cookie: Option<&str>) -> (StatusCode, Value) {
+async fn get(app: &awg_easy_rs::http::Router, path: &str, cookie: Option<&str>) -> (StatusCode, Value) {
     let mut builder = Request::builder().method("GET").uri(path);
     if let Some(c) = cookie {
         builder = builder.header(header::COOKIE, c);
@@ -75,7 +74,7 @@ async fn get(app: &axum::Router, path: &str, cookie: Option<&str>) -> (StatusCod
     let req = builder.body(Body::empty()).unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap_or(json!({}));
     (status, body)
 }
@@ -435,7 +434,7 @@ async fn setup_step2_short_password() {
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap();
     assert!(body["error"].as_str().unwrap().contains("at least 12"));
 }

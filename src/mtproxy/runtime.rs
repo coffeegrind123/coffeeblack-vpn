@@ -11,12 +11,11 @@
 //! future cleanup pass can deduplicate the two via a shared helper.
 
 use std::fs;
-use std::io::{self, Read, Write as _};
+use std::io::{Read, Write as _};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 
 use crate::config::CONFIG;
@@ -42,7 +41,7 @@ pub fn extract_bundled_binary() -> Result<PathBuf> {
     let target = dir.join("telemt");
 
     if matches_embedded_sha(&target).unwrap_or(false) {
-        tracing::debug!(
+        crate::debug!(
             path = %target.display(),
             "telemt ELF already extracted; skipping"
         );
@@ -51,10 +50,9 @@ pub fn extract_bundled_binary() -> Result<PathBuf> {
 
     let tmp = dir.join("telemt.partial");
     {
-        let mut decoder = GzDecoder::new(TELEMT_GZ);
         let mut out = fs::File::create(&tmp)
             .with_context(|| format!("create {}", tmp.display()))?;
-        io::copy(&mut decoder, &mut out)
+        crate::inflate::gunzip_to_writer(TELEMT_GZ, &mut out)
             .with_context(|| format!("decompress telemt ELF to {}", tmp.display()))?;
         out.flush().ok();
     }
@@ -75,7 +73,7 @@ pub fn extract_bundled_binary() -> Result<PathBuf> {
     fs::rename(&tmp, &target)
         .with_context(|| format!("rename {} → {}", tmp.display(), target.display()))?;
 
-    tracing::info!(
+    crate::info!(
         path = %target.display(),
         version = TELEMT_VERSION,
         sha256 = TELEMT_SHA256,
@@ -103,7 +101,7 @@ fn sha256_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(hex::encode(hasher.finalize()))
+    Ok(crate::encoding::hex_encode(hasher.finalize()))
 }
 
 #[cfg(test)]

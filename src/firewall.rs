@@ -559,7 +559,7 @@ pub fn rebuild_dns_lockdown(iface: &crate::db::Interface) -> Result<()> {
         txn.push('\n');
     }
     nft_apply(&txn)?;
-    tracing::info!(
+    crate::info!(
         iface = %iface.name,
         target = %target,
         family = ?family,
@@ -593,14 +593,14 @@ fn append_client_rules(
     // disposition as an invalid target: skip this client rather than abort the
     // rebuild, since default-deny means a skipped client is closed, not open.
     if src4.parse::<std::net::Ipv4Addr>().is_err() {
-        tracing::warn!(
+        crate::warn!(
             client = client.id, addr = %src4,
             "skipping per-client firewall rules: ipv4_address is not an IPv4 address"
         );
         return Ok(());
     }
     if src6.parse::<std::net::Ipv6Addr>().is_err() {
-        tracing::warn!(
+        crate::warn!(
             client = client.id, addr = %src6,
             "skipping per-client firewall rules: ipv6_address is not an IPv6 address"
         );
@@ -619,7 +619,7 @@ fn append_client_rules(
         let (ip, port, proto) = match parse_target(t) {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!(target = %t, error = %e, "skipping invalid firewall target");
+                crate::warn!(target = %t, error = %e, "skipping invalid firewall target");
                 continue;
             }
         };
@@ -670,7 +670,7 @@ fn sanitize_iface(iface: &str) -> String {
 /// the ruleset — mirroring the canonicalisation `parse_target_ip` already
 /// does for the DNS-lockdown target.
 fn checked_ip(ip: &str) -> Result<&str> {
-    if ip.parse::<std::net::IpAddr>().is_ok() || ip.parse::<ipnet::IpNet>().is_ok() {
+    if ip.parse::<std::net::IpAddr>().is_ok() || ip.parse::<crate::cidr::IpNet>().is_ok() {
         Ok(ip)
     } else {
         Err(anyhow!(
@@ -894,7 +894,7 @@ pub fn ensure_legacy_compat(iface: &str, port: i64, enable_ipv6: bool) -> Result
             for args in legacy_compat_rule_set(&iface, &port_str) {
                 ensure_iptables_rule(bin, &args)?;
             }
-            tracing::info!(
+            crate::info!(
                 bin,
                 iface = %iface,
                 port,
@@ -907,7 +907,7 @@ pub fn ensure_legacy_compat(iface: &str, port: i64, enable_ipv6: bool) -> Result
             for args in legacy_compat_rule_set(&iface, &port_str) {
                 ensure_iptables_rule(bin, &args)?;
             }
-            tracing::info!(
+            crate::info!(
                 bin,
                 iface = %iface,
                 port,
@@ -934,7 +934,7 @@ pub fn remove_legacy_compat(iface: &str, port: i64, enable_ipv6: bool) {
             for args in legacy_compat_rule_set(&iface, &port_str) {
                 delete_iptables_rule(bin, &args);
             }
-            tracing::info!(bin, "iptables-legacy compat: removed accept rules");
+            crate::info!(bin, "iptables-legacy compat: removed accept rules");
         }
     }
     if enable_ipv6 && ip6_tables_loaded() {
@@ -942,7 +942,7 @@ pub fn remove_legacy_compat(iface: &str, port: i64, enable_ipv6: bool) {
             for args in legacy_compat_rule_set(&iface, &port_str) {
                 delete_iptables_rule(bin, &args);
             }
-            tracing::info!(bin, "ip6tables-legacy compat: removed accept rules");
+            crate::info!(bin, "ip6tables-legacy compat: removed accept rules");
         }
     }
 }

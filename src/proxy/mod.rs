@@ -43,5 +43,7 @@ pub mod proxy;
 pub mod quic_handshake;
 pub mod responder;
 pub mod session;
+pub mod shardmap;
 pub mod supervisor;
 pub mod transform;
+pub mod x509;

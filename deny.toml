@@ -35,12 +35,9 @@ allow = [
     "Apache-2.0",                     # bulk of the tree (covers rustix/linux-raw-sys via OR)
     "ISC",                            # rustls-webpki, untrusted, ring (AND ISC)
     "BSD-2-Clause",                   # zerocopy
-    "BSD-3-Clause",                   # subtle; matchit/encoding_rs (AND)
-    "Zlib",                           # foldhash
+    "BSD-3-Clause",                   # subtle
     "Unicode-3.0",                    # unicode-ident (AND)
     "CDLA-Permissive-2.0",            # webpki-roots (Mozilla CA bundle data)
-    "BSL-1.0",                        # ryu (OR)
-    "0BSD",                           # adler2 (OR)
     "Unlicense",                      # memchr, aho-corasick (OR)
 ]
 
@@ -51,19 +48,15 @@ ignore = true
 
 [bans]
 # Duplicate major versions are denied so a careless dep bump that forks a common
-# crate into two compiled copies trips CI. The `skip` list is every duplicate
-# that exists TODAY — all forced by transitive deps we don't control (the second
-# copy's puller is noted). A NEW duplicate, or the disappearance of one of
-# these, surfaces here for a conscious decision.
+# crate into two compiled copies trips CI.
 multiple-versions = "deny"
 wildcards = "deny"
-skip = [
-    { crate = "thiserror@1.0.69" },      # quinn-proto pulls v2; rest still v1
-    { crate = "thiserror-impl@1.0.69" }, # proc-macro half of the same split
-    { crate = "getrandom@0.2.17" },      # argon2/password-hash chain; uuid/quinn pull 0.4
-    { crate = "rand_core@0.6.4" },       # argon2/password-hash; quinn's rand pulls 0.10
-    { crate = "cpufeatures@0.2.17" },    # sha2/sha1/argon2; quinn's chacha20 pulls 0.3
-]
+# Empty on purpose: the release graph currently contains no crate at two
+# versions at all. Every previous entry was forced by a transitive dependency
+# that has since left the graph (quinn-proto's `rand`/`thiserror`/`chacha20`
+# lines, and `uuid`'s `getrandom` 0.4), so a new duplicate now means a
+# conscious decision rather than inherited drift.
+skip = []
 
 [sources]
 # Only the public crates.io registry is trusted. A git or alternate-registry

@@ -13,10 +13,10 @@
 //! proxy is on, public when off), restarts the interface, reapplies the
 //! backend firewall lockdown, and (re)binds the proxy task.
 
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::Json;
-use axum_extra::extract::cookie::CookieJar;
+use crate::http::State;
+use crate::http::StatusCode;
+use crate::http::Json;
+use crate::http::CookieJar;
 use serde_json::{json, Value};
 
 use super::admin::require_admin;
@@ -214,7 +214,7 @@ pub async fn update_settings(
     // Non-fatal — the admin gets a 200 and the status endpoint surfaces
     // any reason the proxy declined to come up.
     if let Err(e) = crate::proxy::supervisor::apply_and_reconcile().await {
-        tracing::warn!(error = ?e, "proxy reconcile failed after admin update");
+        crate::warn!(error = ?e, "proxy reconcile failed after admin update");
     }
 
     Ok(ok_success())

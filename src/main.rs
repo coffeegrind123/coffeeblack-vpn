@@ -2,8 +2,7 @@ use awg_easy_rs::{activity, api, config, db, firewall, init_setup, wg};
 
 use std::net::SocketAddr;
 use std::sync::OnceLock;
-use axum::{Router, routing::get, response::Response, http::{header, HeaderMap, StatusCode}};
-use tracing_subscriber::EnvFilter;
+use awg_easy_rs::http::{header, routing::get, HeaderMap, Response, ResponseBuilder, Router, StatusCode};
 
 // Embedded frontend
 const INDEX_HTML: &str = include_str!("../static/index.html");
@@ -18,11 +17,7 @@ const MANIFEST_JSON: &[u8] = include_bytes!("../static/manifest.json");
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    awg_easy_rs::log::init();
 
     // `--privileged-helper` runs the root side and nothing else: no database,
     // no HTTP listener, no supervisors. Handled before any of that is set up
@@ -43,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     db::init_db()?;
-    tracing::info!("Database initialized");
+    awg_easy_rs::info!("Database initialized");
 
     // In-memory mode promises "entirely in RAM". The DB and the bundled
     // binaries honour that on their own (`:memory:` + memfd), but the
@@ -68,9 +63,9 @@ async fn main() -> anyhow::Result<()> {
         ] {
             match awg_easy_rs::memexec::is_ram_backed(dir) {
                 Some(true) => {
-                    tracing::info!("IN_MEMORY: {label} dir {dir} is tmpfs (RAM-backed)")
+                    awg_easy_rs::info!("IN_MEMORY: {label} dir {dir} is tmpfs (RAM-backed)")
                 }
-                Some(false) => tracing::warn!(
+                Some(false) => awg_easy_rs::warn!(
                     "IN_MEMORY is set but the {label} dir {dir} is NOT tmpfs — the \
                      credentials rendered there reach a block device. Mount it as \
                      tmpfs (the bundled docker-compose does). The files are written \
@@ -87,8 +82,8 @@ async fn main() -> anyhow::Result<()> {
     // unauthenticated first-run wizard on a public listener, letting whoever
     // reaches it first claim the admin account.
     if let Err(e) = run_init_setup() {
-        tracing::error!("INIT_ENABLED auto-setup failed: {e:#}");
-        tracing::error!(
+        awg_easy_rs::error!("INIT_ENABLED auto-setup failed: {e:#}");
+        awg_easy_rs::error!(
             "Refusing to start: the setup wizard would be reachable without \
              authentication and any client could claim the admin account."
         );
@@ -105,10 +100,10 @@ async fn main() -> anyhow::Result<()> {
     std::env::remove_var("INIT_PASSWORD");
 
     if let Err(e) = wg::startup() {
-        tracing::warn!("AmneziaWG startup failed (non-fatal): {e}");
-        tracing::warn!("Web UI will still be available. Fix AmneziaWG and use Restart from admin panel.");
+        awg_easy_rs::warn!("AmneziaWG startup failed (non-fatal): {e}");
+        awg_easy_rs::warn!("Web UI will still be available. Fix AmneziaWG and use Restart from admin panel.");
     } else {
-        tracing::info!("AmneziaWG started");
+        awg_easy_rs::info!("AmneziaWG started");
     }
 
     // iptables-legacy compat: on hosts running the xt_tables backend
@@ -122,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
             iface.port,
             !config::CONFIG.disable_ipv6,
         ) {
-            tracing::warn!("iptables-legacy compat startup failed (non-fatal): {e}");
+            awg_easy_rs::warn!("iptables-legacy compat startup failed (non-fatal): {e}");
         }
     }
 
@@ -131,7 +126,7 @@ async fn main() -> anyhow::Result<()> {
     // in the admin UI rather than a startup crash.
     #[cfg(xray_bundled)]
     if let Err(e) = awg_easy_rs::xray::supervisor::ensure_running().await {
-        tracing::warn!("Xray supervisor startup failed (non-fatal): {e}");
+        awg_easy_rs::warn!("Xray supervisor startup failed (non-fatal): {e}");
     }
 
     // Bring the bundled DNS stack online if it's been enabled. Same
@@ -140,7 +135,7 @@ async fn main() -> anyhow::Result<()> {
     // independently of the master switch (see DnsBundle.tor_enabled).
     #[cfg(dns_bundled)]
     if let Err(e) = awg_easy_rs::dns::supervisor::ensure_running().await {
-        tracing::warn!("DNS bundle supervisor startup failed (non-fatal): {e}");
+        awg_easy_rs::warn!("DNS bundle supervisor startup failed (non-fatal): {e}");
     }
 
     // Bring telemt (Telegram MTProxy) online if it's been enabled.
@@ -149,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
     // misconfigured tls_domain doesn't block the rest of the server.
     #[cfg(telemt_bundled)]
     if let Err(e) = awg_easy_rs::mtproxy::supervisor::ensure_running().await {
-        tracing::warn!("MTProxy supervisor startup failed (non-fatal): {e}");
+        awg_easy_rs::warn!("MTProxy supervisor startup failed (non-fatal): {e}");
     }
 
     // Bring MasterDnsVPN (DNS-tunnel mode) online if it's been enabled.
@@ -159,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
     // (matches the Xray / telemt / DNS-bundle posture).
     #[cfg(mdnsvpn_bundled)]
     if let Err(e) = awg_easy_rs::mdnsvpn::supervisor::ensure_running().await {
-        tracing::warn!("MasterDnsVPN supervisor startup failed (non-fatal): {e}");
+        awg_easy_rs::warn!("MasterDnsVPN supervisor startup failed (non-fatal): {e}");
     }
 
     // Bring the in-process DPI-imitation proxy online if it's been enabled.
@@ -170,11 +165,11 @@ async fn main() -> anyhow::Result<()> {
     // in the admin UI rather than a startup crash.
     if let Ok(iface) = db::get_interface() {
         if let Err(e) = firewall::apply_proxy_lockdown(&iface) {
-            tracing::warn!("proxy backend lockdown failed (non-fatal): {e}");
+            awg_easy_rs::warn!("proxy backend lockdown failed (non-fatal): {e}");
         }
     }
     if let Err(e) = awg_easy_rs::proxy::supervisor::ensure_running().await {
-        tracing::warn!("DPI proxy startup failed (non-fatal): {e}");
+        awg_easy_rs::warn!("DPI proxy startup failed (non-fatal): {e}");
     }
 
     // Bring the QQ-Tunnel UDP-over-DNS transport online if enabled. Disabled
@@ -183,7 +178,7 @@ async fn main() -> anyhow::Result<()> {
     // side-channel — so any bind failure is purely its own, surfaced as
     // Status::Crashed rather than a startup crash.
     if let Err(e) = awg_easy_rs::qqdns::supervisor::ensure_running().await {
-        tracing::warn!("QQ-DNS transport startup failed (non-fatal): {e}");
+        awg_easy_rs::warn!("QQ-DNS transport startup failed (non-fatal): {e}");
     }
 
     let app_state = api::AppState::new();
@@ -209,13 +204,13 @@ async fn main() -> anyhow::Result<()> {
                         tick.tick().await;
                         let p = path.clone();
                         match tokio::task::spawn_blocking(move || db::snapshot_to(&p)).await {
-                            Ok(Ok(())) => tracing::debug!("DB snapshot written to {path}"),
-                            Ok(Err(e)) => tracing::warn!("DB snapshot failed (non-fatal): {e:#}"),
-                            Err(e) => tracing::warn!("DB snapshot task join error: {e}"),
+                            Ok(Ok(())) => awg_easy_rs::debug!("DB snapshot written to {path}"),
+                            Ok(Err(e)) => awg_easy_rs::warn!("DB snapshot failed (non-fatal): {e:#}"),
+                            Err(e) => awg_easy_rs::warn!("DB snapshot task join error: {e}"),
                         }
                     }
                 });
-                tracing::info!(
+                awg_easy_rs::info!(
                     "In-memory DB snapshots every {interval}s → {}",
                     config::CONFIG.persist_db_path.as_deref().unwrap_or("")
                 );
@@ -233,10 +228,10 @@ async fn main() -> anyhow::Result<()> {
         // misconfigured deployment fails at startup with a clear message
         // rather than at the first peer change with a confusing one.
         match awg_easy_rs::privhelper::call(&awg_easy_rs::privhelper::Request::Ping) {
-            Ok(_) => tracing::info!(
+            Ok(_) => awg_easy_rs::info!(
                 "privileged helper: connected — this process needs no CAP_NET_ADMIN"
             ),
-            Err(e) => tracing::error!(
+            Err(e) => awg_easy_rs::error!(
                 "privileged helper configured but unreachable ({e:#}); \
                  interface and firewall changes will fail"
             ),
@@ -244,8 +239,8 @@ async fn main() -> anyhow::Result<()> {
     }
     match db::encrypt_plaintext_secrets() {
         Ok(0) => {}
-        Ok(n) => tracing::info!("encrypted {n} secret(s) previously stored as plaintext"),
-        Err(e) => tracing::error!("secret encryption migration failed (non-fatal): {e:#}"),
+        Ok(n) => awg_easy_rs::info!("encrypted {n} secret(s) previously stored as plaintext"),
+        Err(e) => awg_easy_rs::error!("secret encryption migration failed (non-fatal): {e:#}"),
     }
 
     // Start the activity poller: samples `awg show dump` every 30s into the
@@ -255,7 +250,7 @@ async fn main() -> anyhow::Result<()> {
     // UI takes effect within one interval without a restart.
     match db::get_interface() {
         Ok(iface) => activity::spawn(iface.name),
-        Err(e) => tracing::warn!("activity poller not started (interface read failed): {e}"),
+        Err(e) => awg_easy_rs::warn!("activity poller not started (interface read failed): {e}"),
     }
 
     // Start background cron job (every 60 seconds): expire clients/one-time
@@ -265,11 +260,11 @@ async fn main() -> anyhow::Result<()> {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             if let Err(e) = wg::cron_job() {
-                tracing::error!("Cron job failed: {e}");
+                awg_easy_rs::error!("Cron job failed: {e}");
             }
             match db::get_general() {
                 Ok(g) => api::prune_expired_sessions(&cron_state, g.session_timeout),
-                Err(e) => tracing::error!("session prune skipped (general read failed): {e}"),
+                Err(e) => awg_easy_rs::error!("session prune skipped (general read failed): {e}"),
             }
         }
     });
@@ -308,12 +303,12 @@ async fn main() -> anyhow::Result<()> {
         )
     })?;
     let addr = SocketAddr::from((host, config::CONFIG.port));
-    tracing::info!("awg-easy-rs starting on {}", addr);
+    awg_easy_rs::info!("awg-easy-rs starting on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     // Graceful shutdown future: SIGTERM (docker compose down, systemd stop)
-    // or SIGINT (Ctrl-C in foreground) flips the future. axum stops
+    // or SIGINT (Ctrl-C in foreground) flips the future. The server stops
     // accepting new connections and drains in-flight ones.
     let shutdown = async {
         let mut sigterm = match tokio::signal::unix::signal(
@@ -321,7 +316,7 @@ async fn main() -> anyhow::Result<()> {
         ) {
             Ok(s) => s,
             Err(e) => {
-                tracing::error!(error = ?e, "failed to install SIGTERM handler");
+                awg_easy_rs::error!(error = ?e, "failed to install SIGTERM handler");
                 std::future::pending::<()>().await;
                 unreachable!();
             }
@@ -331,24 +326,20 @@ async fn main() -> anyhow::Result<()> {
         ) {
             Ok(s) => s,
             Err(e) => {
-                tracing::error!(error = ?e, "failed to install SIGINT handler");
+                awg_easy_rs::error!(error = ?e, "failed to install SIGINT handler");
                 std::future::pending::<()>().await;
                 unreachable!();
             }
         };
         tokio::select! {
-            _ = sigterm.recv() => tracing::info!("SIGTERM received; shutting down"),
-            _ = sigint.recv()  => tracing::info!("SIGINT received; shutting down"),
+            _ = sigterm.recv() => awg_easy_rs::info!("SIGTERM received; shutting down"),
+            _ = sigint.recv()  => awg_easy_rs::info!("SIGINT received; shutting down"),
         }
     };
-    // Serve with connect-info so handlers can read the real peer socket
-    // address (used by the login rate limiter when TRUST_PROXY is off).
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown)
-    .await?;
+    // The server attaches the peer socket address to every request, so
+    // handlers can read it (the login rate limiter uses it when TRUST_PROXY
+    // is off).
+    awg_easy_rs::http::serve(listener, app, shutdown).await?;
 
     // Post-serve cleanup. Order matters: stop Xray + DNS + MTProxy
     // supervisor children first so they're reaped before we tear down
@@ -379,13 +370,13 @@ async fn main() -> anyhow::Result<()> {
     if config::CONFIG.in_memory {
         if let Some(path) = config::CONFIG.persist_db_path.as_deref() {
             match db::snapshot_to(path) {
-                Ok(()) => tracing::info!("Final DB snapshot written to {path}"),
-                Err(e) => tracing::warn!("Final DB snapshot failed (non-fatal): {e:#}"),
+                Ok(()) => awg_easy_rs::info!("Final DB snapshot written to {path}"),
+                Err(e) => awg_easy_rs::warn!("Final DB snapshot failed (non-fatal): {e:#}"),
             }
         }
     }
 
-    tracing::info!("awg-easy-rs exited cleanly");
+    awg_easy_rs::info!("awg-easy-rs exited cleanly");
     Ok(())
 }
 
@@ -425,11 +416,11 @@ fn matches_etag(headers: &HeaderMap, etag: &str) -> bool {
 }
 
 fn not_modified(etag: &str) -> Response {
-    Response::builder()
+    ResponseBuilder::new()
         .status(StatusCode::NOT_MODIFIED)
         .header(header::ETAG, etag)
         .header(header::CACHE_CONTROL, "no-cache")
-        .body(axum::body::Body::empty())
+        .body(awg_easy_rs::http::Body::empty())
         .unwrap()
 }
 
@@ -437,12 +428,12 @@ fn binary_response(headers: HeaderMap, content_type: &'static str, data: &'stati
     if matches_etag(&headers, etag) {
         return not_modified(etag);
     }
-    Response::builder()
+    ResponseBuilder::new()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::ETAG, etag)
-        .body(axum::body::Body::from(data))
+        .body(awg_easy_rs::http::Body::from(data))
         .unwrap()
 }
 
@@ -467,13 +458,13 @@ fn js_response(headers: HeaderMap, data: &'static str) -> Response {
     if matches_etag(&headers, etag) {
         return not_modified(etag);
     }
-    Response::builder()
+    ResponseBuilder::new()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/javascript; charset=utf-8")
         .header(header::CACHE_CONTROL, "no-cache")
         .header(header::ETAG, etag)
         .header("X-Content-Type-Options", "nosniff")
-        .body(axum::body::Body::from(data))
+        .body(awg_easy_rs::http::Body::from(data))
         .unwrap()
 }
 
@@ -482,7 +473,7 @@ fn html_response(headers: HeaderMap, data: &'static str) -> Response {
     if matches_etag(&headers, etag) {
         return not_modified(etag);
     }
-    Response::builder()
+    ResponseBuilder::new()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
         .header(header::CACHE_CONTROL, "no-cache")
@@ -510,7 +501,7 @@ fn html_response(headers: HeaderMap, data: &'static str) -> Response {
         .header("X-Frame-Options", "DENY")
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
-        .body(axum::body::Body::from(data))
+        .body(awg_easy_rs::http::Body::from(data))
         .unwrap()
 }
 
@@ -524,7 +515,7 @@ fn run_init_setup() -> anyhow::Result<()> {
     }
     let user_count = db::get_user_count().unwrap_or(0);
     if user_count > 0 {
-        tracing::debug!("INIT_ENABLED set but admin user already exists — skipping");
+        awg_easy_rs::debug!("INIT_ENABLED set but admin user already exists — skipping");
         return Ok(());
     }
     let username = cfg
@@ -548,7 +539,7 @@ fn run_init_setup() -> anyhow::Result<()> {
     };
 
     if init_setup::provision_initial_setup(&params)? {
-        tracing::info!("INIT_ENABLED: created admin user '{username}' and completed setup");
+        awg_easy_rs::info!("INIT_ENABLED: created admin user '{username}' and completed setup");
     }
     Ok(())
 }

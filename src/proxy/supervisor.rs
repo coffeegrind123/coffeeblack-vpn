@@ -225,7 +225,7 @@ fn build_awg_params(iface: &db::Interface) -> Option<AwgParams> {
     match pconfig::parse_awg_config(&text) {
         Ok(p) => Some(p),
         Err(e) => {
-            tracing::warn!(
+            crate::warn!(
                 error = %e,
                 "proxy: AmneziaWG params unusable; running without padding transform"
             );
@@ -366,7 +366,7 @@ async fn start(cfg: ProxyConfig, awg: Option<AwgParams>, cfg_hash: u64) -> Resul
     // clients would hit the (now loopback-locked) backend port directly and
     // get nothing — warn loudly rather than fail, since v4 clients are fine.
     if !CONFIG.disable_ipv6 {
-        tracing::warn!(
+        crate::warn!(
             "DPI proxy binds IPv4 (0.0.0.0) only — IPv6 clients cannot reach it \
              while the proxy is enabled. Use an IPv4 endpoint for clients, or set \
              DISABLE_IPV6=true."
@@ -396,10 +396,10 @@ async fn start(cfg: ProxyConfig, awg: Option<AwgParams>, cfg_hash: u64) -> Resul
                 Ok(()) => {
                     // Clean self-exit without a stop request is unusual but
                     // not an error — leave no crash marker.
-                    tracing::info!("DPI proxy task exited");
+                    crate::info!("DPI proxy task exited");
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "DPI proxy task exited with error");
+                    crate::error!(error = %e, "DPI proxy task exited with error");
                     state.last_error = Some(format!("{e:#}"));
                 }
             }
@@ -420,7 +420,7 @@ async fn start(cfg: ProxyConfig, awg: Option<AwgParams>, cfg_hash: u64) -> Resul
     });
     state.disabled_reason = None;
     state.last_error = None;
-    tracing::info!(%listen, %backend, %protocol, "DPI proxy started");
+    crate::info!(%listen, %backend, %protocol, "DPI proxy started");
     Ok(())
 }
 
@@ -433,14 +433,14 @@ async fn stop_if_running(reason: &str) {
         live
     };
     let Some(live) = live else { return };
-    tracing::info!(%reason, "stopping DPI proxy");
+    crate::info!(%reason, "stopping DPI proxy");
     // Signal the run loop to drain and return, then wait for the task to
     // actually finish so a follow-up rebind/start can reclaim the port.
     live.shutdown.shutdown();
     match tokio::time::timeout(std::time::Duration::from_secs(5), live.join).await {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::warn!(error = %e, "DPI proxy task join error"),
-        Err(_) => tracing::warn!("DPI proxy task did not stop within 5s"),
+        Ok(Err(e)) => crate::warn!(error = %e, "DPI proxy task join error"),
+        Err(_) => crate::warn!("DPI proxy task did not stop within 5s"),
     }
 }
 
@@ -505,7 +505,7 @@ pub async fn apply_and_reconcile() -> Result<()> {
     // Re-render the AmneziaWG config so its ListenPort matches the new
     // proxy state (public port when disabled, backend port when enabled).
     if let Err(e) = crate::wg::save_config() {
-        tracing::warn!(error = %e, "wg save_config during proxy apply failed (non-fatal)");
+        crate::warn!(error = %e, "wg save_config during proxy apply failed (non-fatal)");
     }
     // Apply the backend-port firewall lockdown BEFORE restarting AmneziaWG.
     // Ordering matters: `restart` binds AmneziaWG on the loopback backend
@@ -531,7 +531,7 @@ pub async fn apply_and_reconcile() -> Result<()> {
             // direction stays non-fatal.
             let enabling = db::get_proxy_settings().map(|s| s.enabled).unwrap_or(false);
             if enabling {
-                tracing::error!(
+                crate::error!(
                     error = %e,
                     "proxy firewall lockdown failed; refusing to rebind AmneziaWG onto \
                      the backend port, which would leave the raw listener WAN-reachable"
@@ -540,7 +540,7 @@ pub async fn apply_and_reconcile() -> Result<()> {
                     "backend-port lockdown failed, proxy not enabled: {e}"
                 ));
             }
-            tracing::warn!(error = %e, "proxy lockdown teardown failed (non-fatal)");
+            crate::warn!(error = %e, "proxy lockdown teardown failed (non-fatal)");
         }
     }
     // Restart so the kernel/userspace listener actually moves and the public
@@ -548,7 +548,7 @@ pub async fn apply_and_reconcile() -> Result<()> {
     // failure still lets the proxy reconcile so the operator sees a coherent
     // status.
     if let Err(e) = crate::wg::restart() {
-        tracing::warn!(error = %e, "wg restart during proxy apply failed (non-fatal)");
+        crate::warn!(error = %e, "wg restart during proxy apply failed (non-fatal)");
     }
     ensure_running().await
 }

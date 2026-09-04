@@ -21,8 +21,7 @@ pub mod proxy;
 pub mod qqdns;
 pub mod xray;
 
-use axum::extract::FromRef;
-use axum::Router;
+use crate::http::Router;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -80,20 +79,12 @@ pub fn prune_expired_sessions(state: &AppState, timeout_secs: i64) {
     }
 }
 
-// Allow extracting parts of AppState individually (not used yet but
-// enables future middleware).
-impl FromRef<AppState> for Arc<Mutex<HashMap<String, SessionData>>> {
-    fn from_ref(state: &AppState) -> Self {
-        Arc::clone(&state.sessions)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Error helpers
 // ---------------------------------------------------------------------------
 
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
-use axum::Json;
+use crate::http::{header, HeaderMap, HeaderValue, StatusCode};
+use crate::http::Json;
 use serde_json::{json, Value};
 
 /// Convenience: build a JSON error response.
@@ -131,7 +122,7 @@ pub fn no_store_headers(headers: &mut HeaderMap) {
 /// (with chain) is logged server-side; clients only see a generic message
 /// so we don't leak internal paths, SQL state, or filesystem layout.
 pub fn map_err(e: anyhow::Error) -> (StatusCode, Json<Value>) {
-    tracing::error!("internal error: {:#}", e);
+    crate::error!("internal error: {:#}", e);
     api_err(
         StatusCode::INTERNAL_SERVER_ERROR,
         "Internal server error",
@@ -147,288 +138,288 @@ pub fn ok_success() -> Json<Value> {
 pub fn build_router(state: AppState) -> Router {
     let api = Router::new()
         // Information & interface
-        .route("/information", axum::routing::get(routes::information))
-        .route("/interface", axum::routing::get(routes::interface_info))
+        .route("/information", crate::http::routing::get(routes::information))
+        .route("/interface", crate::http::routing::get(routes::interface_info))
         // Activity history
         .route(
             "/activity/heatmap",
-            axum::routing::get(activity::heatmap),
+            crate::http::routing::get(activity::heatmap),
         )
-        .route("/activity", axum::routing::delete(activity::purge))
+        .route("/activity", crate::http::routing::delete(activity::purge))
         // Session
         .route(
             "/session",
-            axum::routing::get(session::get_session)
+            crate::http::routing::get(session::get_session)
                 .post(session::create_session)
                 .delete(session::delete_session),
         )
         // Setup
-        .route("/setup/2", axum::routing::post(setup::setup_step2))
+        .route("/setup/2", crate::http::routing::post(setup::setup_step2))
         .route(
             "/setup/4",
-            axum::routing::get(setup::setup_step4_get)
+            crate::http::routing::get(setup::setup_step4_get)
                 .post(setup::setup_step4_post),
         )
         // Clients
         .route(
             "/client",
-            axum::routing::get(clients::list_clients)
+            crate::http::routing::get(clients::list_clients)
                 .post(clients::create_client),
         )
         .route(
             "/client/:id",
-            axum::routing::get(clients::get_client)
+            crate::http::routing::get(clients::get_client)
                 .post(clients::update_client)
                 .delete(clients::delete_client),
         )
         .route(
             "/client/:id/configuration",
-            axum::routing::get(clients::client_configuration),
+            crate::http::routing::get(clients::client_configuration),
         )
         .route(
             "/client/:id/qrcode.svg",
-            axum::routing::get(clients::client_qrcode),
+            crate::http::routing::get(clients::client_qrcode),
         )
         .route(
             "/client/:id/enable",
-            axum::routing::post(clients::enable_client),
+            crate::http::routing::post(clients::enable_client),
         )
         .route(
             "/client/:id/disable",
-            axum::routing::post(clients::disable_client),
+            crate::http::routing::post(clients::disable_client),
         )
         .route(
             "/client/:id/rotateKey",
-            axum::routing::post(clients::rotate_client_key),
+            crate::http::routing::post(clients::rotate_client_key),
         )
         .route(
             "/client/:id/generateOneTimeLink",
-            axum::routing::post(clients::generate_one_time_link),
+            crate::http::routing::post(clients::generate_one_time_link),
         )
         // Admin
         .route(
             "/admin/general",
-            axum::routing::get(admin::get_general)
+            crate::http::routing::get(admin::get_general)
                 .post(admin::update_general),
         )
         .route(
             "/admin/hooks",
-            axum::routing::get(admin::get_hooks).post(admin::update_hooks),
+            crate::http::routing::get(admin::get_hooks).post(admin::update_hooks),
         )
-        .route("/admin/ip-info", axum::routing::get(admin::get_ip_info))
+        .route("/admin/ip-info", crate::http::routing::get(admin::get_ip_info))
         .route(
             "/admin/userconfig",
-            axum::routing::get(admin::get_userconfig)
+            crate::http::routing::get(admin::get_userconfig)
                 .post(admin::update_userconfig),
         )
         .route(
             "/admin/interface",
-            axum::routing::get(admin::get_interface)
+            crate::http::routing::get(admin::get_interface)
                 .post(admin::update_interface),
         )
         .route(
             "/admin/interface/cidr",
-            axum::routing::post(admin::change_cidr),
+            crate::http::routing::post(admin::change_cidr),
         )
         .route(
             "/admin/interface/restart",
-            axum::routing::post(admin::restart_interface),
+            crate::http::routing::post(admin::restart_interface),
         )
         // Xray (Browsing mode) — admin
         .route(
             "/admin/xray/inbound",
-            axum::routing::get(xray::get_inbound).post(xray::update_inbound),
+            crate::http::routing::get(xray::get_inbound).post(xray::update_inbound),
         )
         .route(
             "/admin/xray/inbound/regenerate-keys",
-            axum::routing::post(xray::regenerate_keys),
+            crate::http::routing::post(xray::regenerate_keys),
         )
         .route(
             "/admin/xray/inbound/regenerate-xhttp-path",
-            axum::routing::post(xray::regenerate_xhttp_path),
+            crate::http::routing::post(xray::regenerate_xhttp_path),
         )
         .route(
             "/admin/xray/inbound/probe-dest",
-            axum::routing::post(xray::probe_dest),
+            crate::http::routing::post(xray::probe_dest),
         )
         .route(
             "/admin/xray/inbound/dest-candidates",
-            axum::routing::get(xray::dest_candidates),
+            crate::http::routing::get(xray::dest_candidates),
         )
         .route(
             "/admin/xray/status",
-            axum::routing::get(xray::supervisor_status),
+            crate::http::routing::get(xray::supervisor_status),
         )
         .route(
             "/admin/xray/restart",
-            axum::routing::post(xray::restart),
+            crate::http::routing::post(xray::restart),
         )
         // Bundled DNS stack (dnscrypt-proxy + tor + PTs) — admin
         .route(
             "/admin/dns/bundle",
-            axum::routing::get(dns::get_bundle).post(dns::update_bundle),
+            crate::http::routing::get(dns::get_bundle).post(dns::update_bundle),
         )
         .route(
             "/admin/dns/status",
-            axum::routing::get(dns::supervisor_status),
+            crate::http::routing::get(dns::supervisor_status),
         )
         .route(
             "/admin/dns/restart",
-            axum::routing::post(dns::restart),
+            crate::http::routing::post(dns::restart),
         )
         // Telegram MTProxy (telemt) — admin inbound + supervisor
         .route(
             "/admin/mtproxy/inbound",
-            axum::routing::get(mtproxy::get_inbound).post(mtproxy::update_inbound),
+            crate::http::routing::get(mtproxy::get_inbound).post(mtproxy::update_inbound),
         )
         .route(
             "/admin/mtproxy/status",
-            axum::routing::get(mtproxy::supervisor_status),
+            crate::http::routing::get(mtproxy::supervisor_status),
         )
         .route(
             "/admin/mtproxy/stats",
-            axum::routing::get(mtproxy::stats),
+            crate::http::routing::get(mtproxy::stats),
         )
         .route(
             "/admin/mtproxy/restart",
-            axum::routing::post(mtproxy::restart),
+            crate::http::routing::post(mtproxy::restart),
         )
         // Telegram MTProxy — admin user CRUD
         .route(
             "/admin/mtproxy/users",
-            axum::routing::get(mtproxy::list_users).post(mtproxy::create_user),
+            crate::http::routing::get(mtproxy::list_users).post(mtproxy::create_user),
         )
         .route(
             "/admin/mtproxy/users/:username",
-            axum::routing::get(mtproxy::get_user)
+            crate::http::routing::get(mtproxy::get_user)
                 .post(mtproxy::update_user)
                 .delete(mtproxy::delete_user),
         )
         .route(
             "/admin/mtproxy/users/:username/rotate-secret",
-            axum::routing::post(mtproxy::rotate_secret),
+            crate::http::routing::post(mtproxy::rotate_secret),
         )
         .route(
             "/admin/mtproxy/users/:username/qrcode.svg",
-            axum::routing::get(mtproxy::user_qrcode),
+            crate::http::routing::get(mtproxy::user_qrcode),
         )
         // DPI-imitation proxy (in-process, fronts the AmneziaWG UDP port)
         .route(
             "/admin/proxy/settings",
-            axum::routing::get(proxy::get_settings).post(proxy::update_settings),
+            crate::http::routing::get(proxy::get_settings).post(proxy::update_settings),
         )
         .route(
             "/admin/proxy/status",
-            axum::routing::get(proxy::supervisor_status),
+            crate::http::routing::get(proxy::supervisor_status),
         )
         .route(
             "/admin/proxy/restart",
-            axum::routing::post(proxy::restart),
+            crate::http::routing::post(proxy::restart),
         )
         // QQ-Tunnel UDP-over-DNS transport (in-process, side-channel to AWG)
         .route(
             "/admin/qqdns/settings",
-            axum::routing::get(qqdns::get_settings).post(qqdns::update_settings),
+            crate::http::routing::get(qqdns::get_settings).post(qqdns::update_settings),
         )
         .route(
             "/admin/qqdns/status",
-            axum::routing::get(qqdns::supervisor_status),
+            crate::http::routing::get(qqdns::supervisor_status),
         )
-        .route("/admin/qqdns/restart", axum::routing::post(qqdns::restart))
+        .route("/admin/qqdns/restart", crate::http::routing::post(qqdns::restart))
         .route(
             "/admin/qqdns/client-config",
-            axum::routing::get(qqdns::client_config),
+            crate::http::routing::get(qqdns::client_config),
         )
         // MasterDnsVPN (DNS-tunnel mode) — admin inbound + supervisor
         .route(
             "/admin/mdnsvpn/inbound",
-            axum::routing::get(mdnsvpn::get_inbound).post(mdnsvpn::update_inbound),
+            crate::http::routing::get(mdnsvpn::get_inbound).post(mdnsvpn::update_inbound),
         )
         .route(
             "/admin/mdnsvpn/inbound/regenerate-key",
-            axum::routing::post(mdnsvpn::regenerate_key),
+            crate::http::routing::post(mdnsvpn::regenerate_key),
         )
         .route(
             "/admin/mdnsvpn/status",
-            axum::routing::get(mdnsvpn::supervisor_status),
+            crate::http::routing::get(mdnsvpn::supervisor_status),
         )
         .route(
             "/admin/mdnsvpn/restart",
-            axum::routing::post(mdnsvpn::restart),
+            crate::http::routing::post(mdnsvpn::restart),
         )
         // MasterDnsVPN clients
         .route(
             "/mdnsvpn/clients",
-            axum::routing::get(mdnsvpn::list_clients).post(mdnsvpn::create_client),
+            crate::http::routing::get(mdnsvpn::list_clients).post(mdnsvpn::create_client),
         )
         .route(
             "/mdnsvpn/clients/:id",
-            axum::routing::get(mdnsvpn::get_client)
+            crate::http::routing::get(mdnsvpn::get_client)
                 .post(mdnsvpn::update_client)
                 .delete(mdnsvpn::delete_client),
         )
         .route(
             "/mdnsvpn/clients/:id/config.toml",
-            axum::routing::get(mdnsvpn::client_config_toml),
+            crate::http::routing::get(mdnsvpn::client_config_toml),
         )
         .route(
             "/mdnsvpn/clients/:id/resolvers.txt",
-            axum::routing::get(mdnsvpn::client_resolvers_txt),
+            crate::http::routing::get(mdnsvpn::client_resolvers_txt),
         )
         .route(
             "/mdnsvpn/clients/:id/config.json",
-            axum::routing::get(mdnsvpn::client_config_json),
+            crate::http::routing::get(mdnsvpn::client_config_json),
         )
         .route(
             "/mdnsvpn/clients/:id/share",
-            axum::routing::get(mdnsvpn::client_share_url),
+            crate::http::routing::get(mdnsvpn::client_share_url),
         )
         .route(
             "/mdnsvpn/clients/:id/bundle.zip",
-            axum::routing::get(mdnsvpn::client_bundle_zip),
+            crate::http::routing::get(mdnsvpn::client_bundle_zip),
         )
         .route(
             "/mdnsvpn/clients/:id/qrcode.svg",
-            axum::routing::get(mdnsvpn::client_qrcode),
+            crate::http::routing::get(mdnsvpn::client_qrcode),
         )
         // Xray clients
         .route(
             "/xray/clients",
-            axum::routing::get(xray::list_clients).post(xray::create_client),
+            crate::http::routing::get(xray::list_clients).post(xray::create_client),
         )
         .route(
             "/xray/clients/:id",
-            axum::routing::get(xray::get_client)
+            crate::http::routing::get(xray::get_client)
                 .post(xray::update_client)
                 .delete(xray::delete_client),
         )
         .route(
             "/xray/clients/:id/share",
-            axum::routing::get(xray::client_share_url),
+            crate::http::routing::get(xray::client_share_url),
         )
         .route(
             "/xray/clients/:id/qrcode.svg",
-            axum::routing::get(xray::client_qrcode),
+            crate::http::routing::get(xray::client_qrcode),
         )
         .route(
             "/xray/clients/:id/json",
-            axum::routing::get(xray::client_amnezia_json),
+            crate::http::routing::get(xray::client_amnezia_json),
         )
         // Me (current user)
-        .route("/me", axum::routing::post(session::update_me))
-        .route("/me/password", axum::routing::post(session::change_password))
-        .route("/me/totp", axum::routing::post(session::toggle_totp));
+        .route("/me", crate::http::routing::post(session::update_me))
+        .route("/me/password", crate::http::routing::post(session::change_password))
+        .route("/me/totp", crate::http::routing::post(session::toggle_totp));
 
     let api = api.with_state(state.clone());
 
     let root = Router::new()
-        .route("/cnf/:oneTimeLink", axum::routing::get(routes::one_time_link))
-        .route("/metrics/json", axum::routing::get(routes::metrics_json))
+        .route("/cnf/:oneTimeLink", crate::http::routing::get(routes::one_time_link))
+        .route("/metrics/json", crate::http::routing::get(routes::metrics_json))
         .route(
             "/metrics/prometheus",
-            axum::routing::get(routes::metrics_prometheus),
+            crate::http::routing::get(routes::metrics_prometheus),
         )
-        .route("/health", axum::routing::get(|| async { "OK" }))
+        .route("/health", crate::http::routing::get(|| async { "OK" }))
         .nest("/api", api);
     // Note: no CorsLayer is attached. The single-origin admin UI is served
     // from the same listener as the API, so cross-origin requests must not
@@ -444,7 +435,7 @@ pub fn build_router(state: AppState) -> Router {
 /// Extract a session user from the request cookie jar.  Returns 401 when
 /// there is no valid session.
 pub fn require_auth(
-    jar: &axum_extra::extract::cookie::CookieJar,
+    jar: &crate::http::CookieJar,
     state: &AppState,
 ) -> Result<crate::db::User, (StatusCode, Json<Value>)> {
     let token = jar
@@ -488,7 +479,7 @@ pub fn revoke_user_sessions(state: &AppState, user_id: i64, keep_token: Option<&
 }
 
 /// The caller's raw session token, when the request carried one.
-pub fn session_token(jar: &axum_extra::extract::cookie::CookieJar) -> Option<String> {
+pub fn session_token(jar: &crate::http::CookieJar) -> Option<String> {
     jar.get("awg_session").map(|c| c.value().to_string())
 }
 

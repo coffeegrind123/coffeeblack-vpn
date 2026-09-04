@@ -28,7 +28,7 @@ fn vectors() -> Value {
 }
 
 fn hexd(s: &str) -> Vec<u8> {
-    hex::decode(s).expect("valid hex")
+    awg_easy_rs::encoding::hex_decode(s).expect("valid hex")
 }
 
 #[test]

@@ -36,7 +36,6 @@
 //! [`proxy_conflict`] for the mechanism in each case.
 
 use anyhow::{anyhow, Result};
-use base64::Engine;
 
 /// Every AWG 3 range-valued key, as `(db column, config key)`. The order is
 /// the order they are rendered in.
@@ -100,9 +99,8 @@ pub fn validate_header_protection_key(value: &str) -> Result<()> {
     if v.is_empty() {
         return Ok(());
     }
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(v)
-        .map_err(|_| anyhow!("headerProtectionKey must be base64 (44 chars, like `awg genkey`)"))?;
+    let raw = crate::encoding::b64_decode(v)
+        .ok_or_else(|| anyhow!("headerProtectionKey must be base64 (44 chars, like `awg genkey`)"))?;
     if raw.len() != 32 {
         return Err(anyhow!(
             "headerProtectionKey must decode to 32 bytes, got {}",
@@ -122,7 +120,7 @@ pub fn validate_header_protection_key(value: &str) -> Result<()> {
 pub fn generate_header_protection_key() -> String {
     let mut raw = [0u8; 32];
     crate::rng::fill(&mut raw);
-    base64::engine::general_purpose::STANDARD.encode(raw)
+    crate::encoding::b64_encode(raw)
 }
 
 /// Check the S1–S4 precondition for header protection.
@@ -300,7 +298,7 @@ mod tests {
         validate_header_protection_key("").unwrap();
         assert!(validate_header_protection_key("not base64!").is_err());
         // 16 bytes, valid base64, wrong length.
-        let short = base64::engine::general_purpose::STANDARD.encode([0u8; 16]);
+        let short = crate::encoding::b64_encode([0u8; 16]);
         assert!(validate_header_protection_key(&short).is_err());
     }
 

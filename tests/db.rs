@@ -403,7 +403,7 @@ fn next_ipv4_invalid_cidr() {
 
 #[test]
 fn next_ipv6_first_available() {
-    // ipnet::Ipv6Net::hosts() for fdcc::/112 enumerates fdcc:: (network) and
+    // cidr::Ipv6Net::hosts() for fdcc::/112 enumerates fdcc:: (network) and
     // fdcc::1 (server) before fdcc::2 (first peer). The allocator skips both
     // the network address and the server IP, so peer #1 lands on fdcc::2.
     let ip = db::next_ipv6("fdcc::/112", &[]).unwrap();

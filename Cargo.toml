@@ -9,13 +9,18 @@ license = "MIT"
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
-# HTTP server. `tower` and `tower-http` are intentionally absent: no
-# middleware layers, CORS, or ServeDir are used (static assets are baked
-# in via include_bytes! in main.rs), and axum pulls the tower-layer/
-# tower-service traits it needs on its own. `tower` remains a dev-dependency
-# for the test harness's ServiceExt::oneshot.
-axum = { version = "0.7", features = ["macros"] }
-axum-extra = { version = "0.9", features = ["cookie"] }
+# HTTP. The server, router, extractors, responses and cookies are in-house
+# (src/http/) — see that module's docs. axum + hyper + tower + axum-extra came
+# to roughly thirty crates for an admin panel that speaks plaintext HTTP/1.1
+# behind a reverse proxy, with request bodies of a few kilobytes and responses
+# built entirely in memory.
+#
+# `http` itself stays: it is the ecosystem's shared definition of Request,
+# Response, HeaderMap, StatusCode, Method and Uri, its only dependencies are
+# `bytes` (which the proxy needs regardless) and `itoa` (which serde_json
+# pulls), and reimplementing a header map would trade a widely-audited type
+# layer for a bespoke one at no real saving.
+http = "1"
 
 # Database. `backup` enables the SQLite online-backup API used by the
 # in-memory mode to snapshot the RAM database to a durable file and to
@@ -40,33 +45,24 @@ ring = "0.17"
 # tree via its (unused) `otpauth` feature.
 hmac = "0.12"
 sha1 = "0.10"
-hex = "0.4"
-base64 = "0.22"
+# base64 comes from `base64ct`, which argon2's password-hash already compiles
+# in — its constant-time `Encoding` trait rejects non-canonical trailing bits,
+# which is the right reading for fixed-width key material. `hex` and the CIDR
+# math are in-house (src/encoding.rs, src/cidr.rs); `uuid` was 16 random bytes
+# and six fixed bits (src/rng.rs::uuid_v4).
+base64ct = { version = "1", features = ["alloc"] }
 # OS CSPRNG only (see src/rng.rs) — replaces the `rand` crate, whose userspace
 # generator (rand_chacha/ppv-lite86 + a second getrandom/rand_core line) we
 # never used. Pinned to 0.2 to unify with argon2's password-hash, adding no
 # new crate to the graph.
 getrandom = "0.2"
 
-# QR codes
-qrcode = { version = "0.14", default-features = false, features = ["svg"] }
-
-# Time. `time` is already mandatory (axum-extra's cookie jar), so all date
-# handling routes through it — see src/datetime.rs — instead of pulling
-# chrono's separate subtree. `formatting`/`parsing` drive RFC 3339 + the
-# datetime-local expiry shapes; `macros` compiles the two custom format
+# Time. All date handling routes through `time` — see src/datetime.rs —
+# instead of pulling chrono's separate subtree. `formatting`/`parsing` drive
+# RFC 3339, the datetime-local expiry shapes, the log timestamp and the
+# certificate validity window; `macros` compiles the custom format
 # descriptions at build time.
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
-
-# Networking
-ipnet = "2"
-
-# UUID for one-time links
-uuid = { version = "1", features = ["v4"] }
-
-# Gzip decoder for the bundled Xray ELF (vendor/xray-linux-*.gz).
-# `rust_backend` keeps us off zlib-sys so the build stays self-contained.
-flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 # TLS client for the Reality `dest` probe — opens a real TLS 1.3
 # handshake against the candidate site so we can reject duds before
@@ -87,27 +83,28 @@ libc = "0.2"
 # QUIC/DNS/STUN/SIP to DPI. Ported in-process from wiresock/amneziawg-proxy
 # — these are its transitive dependencies.
 bytes = "1"
-# Concurrent per-client session/metrics maps on the data path — lock-free
-# in steady state (see src/proxy/session.rs, src/proxy/metrics.rs).
-dashmap = "6"
+# Sharded concurrent maps for the data path are in-house
+# (src/proxy/shardmap.rs) over parking_lot, which tokio already compiles in —
+# so `dashmap` and `crossbeam-utils` leave the graph for ~200 lines.
+parking_lot = "0.12"
 # SO_RCVBUF/SO_SNDBUF sizing on the frontend + per-session backend sockets.
 socket2 = "0.6"
-# Stateful QUIC/TLS-1.3 handshake responder for QUIC-mode probes
-# (src/proxy/quic_handshake.rs). Pairs with rcgen for the self-signed
-# per-SNI server certificate.
-quinn-proto = "0.11"
-rcgen = { version = "0.13", default-features = false, features = ["ring"] }
-# Typed error enum for the proxy modules (src/proxy/errors.rs).
-thiserror = "1"
+# The QUIC/TLS-1.3 probe responder (src/proxy/quic_handshake.rs) is in-house
+# over rustls's `quic` module, which supplies the Initial key schedule, header
+# protection and the TLS state machine; the packet layer around it is ours, as
+# is the self-signed certificate generator (src/proxy/x509.rs) over ring.
+# `quinn-proto` (a full connection state machine — congestion control, loss
+# recovery, streams — none of which a one-shot responder uses) and `rcgen`
+# stay on as dev-dependencies, so the wire output is still validated against a
+# third-party QUIC implementation.
 
-# Logging.
-# `release_max_level_info` statically compiles out trace!/debug! callsites in
-# release builds. The proxy data path logs per-packet at debug; without this a
-# stray RUST_LOG=debug in production would collapse throughput, and each
-# callsite otherwise costs an atomic level check per datagram. Debug builds
-# keep full verbosity.
-tracing = { version = "0.1", features = ["release_max_level_info"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Logging is in-house (src/log.rs): RUST_LOG parsing, the level filter, the
+# formatter, and tracing-compatible event macros. `tracing` +
+# `tracing-subscriber` cost ten crates — a whole regex engine among them, for
+# EnvFilter — to serve a codebase that never opens a span. `log` is the facade
+# rustls and hyper emit through; src/log.rs installs itself there too, the job
+# tracing-log used to do, and the crate is already in the graph via rustls.
+log = "0.4"
 
 # Error handling
 anyhow = "1"
@@ -117,14 +114,34 @@ anyhow = "1"
 # RUSTSEC-2026-0205 (Array::insert double-free on a panicking comparator).
 # deny.toml keeps `ignore = []`, so the fix is the bump, not a silence.
 serial_test = { version = "4", features = ["async"] }
-http-body-util = "0.1"
-tower = { version = "0.5", features = ["util"] }
 
 # TOML parse for the proxy's ProxyConfig round-trip tests only. At runtime the
 # proxy config is built from the SQLite DB, never a file (see src/proxy/config.rs
 # — load_config/parse_config are #[cfg(test)]), so `toml` and its ~8-crate tree
 # stay out of the release binary.
 toml = "0.8"
+
+# Reference QUIC client and certificate generator for the probe responder's
+# tests: quinn-proto drives a real handshake against src/proxy/quic_handshake.rs
+# and must accept its flight, and rcgen produces the real-world certificate the
+# Reality dest-probe's DER walk is tested against.
+quinn-proto = "0.11"
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
+
+# Reference QR encoder for tests/qr_parity.rs. The encoder itself is in-house
+# (src/qr.rs); the crate stays on the test side so the in-house symbols are
+# compared against the reference implementation, module for module.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+
+# SHA-256 for tests/vendor_blobs.rs (the lib already depends on sha2, but an
+# integration test needs its own declaration).
+sha2 = "0.10"
+
+# Reference gzip *encoder* for the in-house inflater's tests (src/inflate.rs)
+# and the memfd round-trip in src/memexec.rs. Runtime decompression is ours;
+# keeping flate2 on the test side means the decoder is checked against the
+# reference implementation rather than against itself.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 # Ported proxy test modules (src/proxy/*.rs #[cfg(test)]): temp dirs for
 # config-file round-trips, and tokio's paused-clock test harness for the

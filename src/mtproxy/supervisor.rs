@@ -125,7 +125,7 @@ async fn ensure_running_inner(reset_crash: bool) -> Result<()> {
         // Telemt's notify watcher will hot-reload from the file we
         // just rewrote. We don't need to touch the process. The user
         // reconciler runs in the background to push roster changes.
-        tracing::info!(pid, config = %path.display(), "telemt config rewritten; relying on notify hot-reload");
+        crate::info!(pid, config = %path.display(), "telemt config rewritten; relying on notify hot-reload");
         spawn_user_reconciler();
         return Ok(());
     }
@@ -245,17 +245,17 @@ async fn spawn(bin: &PathBuf, config: &PathBuf) -> Result<Child> {
         .spawn()
         .with_context(|| format!("spawn {}", bin.display()))?;
     if let Some(stdout) = child.stdout.take() {
-        spawn_log_pump(stdout, "telemt.stdout", tracing::Level::INFO);
+        spawn_log_pump(stdout, "telemt.stdout", crate::log::Level::Info);
     }
     if let Some(stderr) = child.stderr.take() {
-        spawn_log_pump(stderr, "telemt.stderr", tracing::Level::WARN);
+        spawn_log_pump(stderr, "telemt.stderr", crate::log::Level::Warn);
     }
     let pid = child.id().unwrap_or(0);
-    tracing::info!(pid, config = %config.display(), "telemt spawned");
+    crate::info!(pid, config = %config.display(), "telemt spawned");
     Ok(child)
 }
 
-fn spawn_log_pump<R>(reader: R, target: &'static str, level: tracing::Level)
+fn spawn_log_pump<R>(reader: R, target: &'static str, level: crate::log::Level)
 where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
 {
@@ -267,10 +267,10 @@ where
                 continue;
             }
             match level {
-                tracing::Level::ERROR => tracing::error!(target: "telemt", source = target, "{line}"),
-                tracing::Level::WARN  => tracing::warn!(target:  "telemt", source = target, "{line}"),
-                tracing::Level::INFO  => tracing::info!(target:  "telemt", source = target, "{line}"),
-                _                     => tracing::debug!(target: "telemt", source = target, "{line}"),
+                crate::log::Level::Error => crate::error!(target: "telemt", source = target, "{line}"),
+                crate::log::Level::Warn  => crate::warn!(target:  "telemt", source = target, "{line}"),
+                crate::log::Level::Info  => crate::info!(target:  "telemt", source = target, "{line}"),
+                _                     => crate::debug!(target: "telemt", source = target, "{line}"),
             }
         }
     });
@@ -288,10 +288,10 @@ async fn stop_if_running(reason: &str) {
 
     live.shutdown_requested.store(true, Ordering::SeqCst);
     let pid = live.pid;
-    tracing::info!(pid, %reason, "stopping telemt");
+    crate::info!(pid, %reason, "stopping telemt");
     if let Err(e) = send_signal(pid, libc::SIGTERM) {
         if e.raw_os_error() != Some(libc::ESRCH) {
-            tracing::warn!(pid, error = ?e, "SIGTERM failed; will SIGKILL");
+            crate::warn!(pid, error = ?e, "SIGTERM failed; will SIGKILL");
         }
     }
 
@@ -299,12 +299,12 @@ async fn stop_if_running(reason: &str) {
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
         if !pid_alive(pid) {
-            tracing::info!(pid, "telemt exited cleanly within grace period");
+            crate::info!(pid, "telemt exited cleanly within grace period");
             return;
         }
         sleep(Duration::from_millis(50)).await;
     }
-    tracing::warn!(pid, "telemt did not exit within {grace:?}, sending SIGKILL");
+    crate::warn!(pid, "telemt did not exit within {grace:?}, sending SIGKILL");
     let _ = send_signal(pid, libc::SIGKILL);
     for _ in 0..50 {
         if !pid_alive(pid) {
@@ -312,7 +312,7 @@ async fn stop_if_running(reason: &str) {
         }
         sleep(Duration::from_millis(40)).await;
     }
-    tracing::error!(pid, "telemt failed to exit even after SIGKILL");
+    crate::error!(pid, "telemt failed to exit even after SIGKILL");
 }
 
 fn spawn_watchdog(mut child: Child, shutdown_requested: Arc<AtomicBool>) {
@@ -331,16 +331,16 @@ fn spawn_watchdog(mut child: Child, shutdown_requested: Arc<AtomicBool>) {
         };
 
         if shutdown_requested.load(Ordering::SeqCst) {
-            tracing::info!(pid, exit = %exit_str, "telemt exited (administrative)");
+            crate::info!(pid, exit = %exit_str, "telemt exited (administrative)");
             return;
         }
 
-        tracing::warn!(pid, exit = %exit_str, "telemt child exited unexpectedly");
+        crate::warn!(pid, exit = %exit_str, "telemt child exited unexpectedly");
 
         let inbound = match db::get_mtproxy_inbound() {
             Ok(i) => i,
             Err(e) => {
-                tracing::error!(error = ?e, "watchdog: get_mtproxy_inbound failed; giving up");
+                crate::error!(error = ?e, "watchdog: get_mtproxy_inbound failed; giving up");
                 return;
             }
         };
@@ -367,16 +367,16 @@ fn spawn_watchdog(mut child: Child, shutdown_requested: Arc<AtomicBool>) {
         };
 
         if attempts > 10 {
-            tracing::error!(attempts, "telemt restart attempts exceeded; supervisor giving up");
+            crate::error!(attempts, "telemt restart attempts exceeded; supervisor giving up");
             return;
         }
         let backoff = restart_backoff(attempts);
-        tracing::info!(attempts, backoff_ms = backoff.as_millis() as u64, "scheduling telemt restart");
+        crate::info!(attempts, backoff_ms = backoff.as_millis() as u64, "scheduling telemt restart");
         sleep(backoff).await;
 
         // `false` = don't reset the crash counter — this is a restart.
         if let Err(e) = ensure_running_inner(false).await {
-            tracing::error!(error = ?e, "telemt restart failed");
+            crate::error!(error = ?e, "telemt restart failed");
         }
     });
 }
@@ -415,7 +415,7 @@ pub async fn shutdown_for_exit() {
 pub fn spawn_user_reconciler() {
     tokio::spawn(async move {
         if let Err(e) = reconcile_users_now().await {
-            tracing::warn!(error = ?e, "telemt user reconciliation failed");
+            crate::warn!(error = ?e, "telemt user reconciliation failed");
         }
     });
 }
@@ -457,8 +457,8 @@ pub async fn reconcile_users_now() -> Result<()> {
                     ad_tag: u.ad_tag.as_deref(),
                 };
                 match client::create_user(&req).await {
-                    Ok(_) => tracing::info!(username = %u.username, "reconcile: created in telemt"),
-                    Err(e) => tracing::warn!(
+                    Ok(_) => crate::info!(username = %u.username, "reconcile: created in telemt"),
+                    Err(e) => crate::warn!(
                         username = %u.username,
                         error = ?e,
                         "reconcile: create failed"
@@ -488,12 +488,12 @@ pub async fn reconcile_users_now() -> Result<()> {
                         enabled: None,
                     };
                     match client::patch_user(&u.username, &patch).await {
-                        Ok(_) => tracing::info!(
+                        Ok(_) => crate::info!(
                             username = %u.username,
                             ad_tag = ?want_ad_tag,
                             "reconcile: ad_tag patched"
                         ),
-                        Err(e) => tracing::warn!(
+                        Err(e) => crate::warn!(
                             username = %u.username,
                             error = ?e,
                             "reconcile: ad_tag patch failed"
@@ -509,11 +509,11 @@ pub async fn reconcile_users_now() -> Result<()> {
     for live_name in live_map.keys() {
         if !db_names.contains(live_name) {
             match client::delete_user(live_name).await {
-                Ok(_) => tracing::info!(
+                Ok(_) => crate::info!(
                     username = %live_name,
                     "reconcile: deleted orphan from telemt"
                 ),
-                Err(e) => tracing::warn!(
+                Err(e) => crate::warn!(
                     username = %live_name,
                     error = ?e,
                     "reconcile: delete failed"

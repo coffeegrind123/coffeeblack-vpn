@@ -14,10 +14,10 @@
 //! actually runs the dnscrypt-proxy child — the shape is forward-
 //! compatible with a future `tor` field.
 
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::Json;
-use axum_extra::extract::cookie::CookieJar;
+use crate::http::State;
+use crate::http::StatusCode;
+use crate::http::Json;
+use crate::http::CookieJar;
 use serde_json::{json, Value};
 
 use super::admin::require_admin;
@@ -154,7 +154,7 @@ pub async fn update_bundle(
     // handles supervisor errors.
     #[cfg(dns_bundled)]
     if let Err(e) = crate::dns::supervisor::ensure_running().await {
-        tracing::warn!(error = ?e, "DNS supervisor reconcile failed after admin update");
+        crate::warn!(error = ?e, "DNS supervisor reconcile failed after admin update");
     }
 
     Ok(ok_success())

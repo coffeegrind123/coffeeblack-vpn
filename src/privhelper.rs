@@ -229,7 +229,7 @@ pub fn serve(cfg: HelperConfig) -> Result<()> {
         }
     };
 
-    tracing::info!(
+    crate::info!(
         "privileged helper listening on {} (interface {}, mode {:o})",
         cfg.socket_path.display(),
         cfg.interface,
@@ -242,10 +242,10 @@ pub fn serve(cfg: HelperConfig) -> Result<()> {
                 if let Err(e) = handle_connection(&cfg, s) {
                     // One bad connection must never take the helper down: it
                     // is the only path the main process has to the interface.
-                    tracing::warn!("helper connection failed: {e:#}");
+                    crate::warn!("helper connection failed: {e:#}");
                 }
             }
-            Err(e) => tracing::warn!("helper accept failed: {e}"),
+            Err(e) => crate::warn!("helper accept failed: {e}"),
         }
     }
     Ok(())
@@ -305,7 +305,7 @@ fn dispatch(cfg: &HelperConfig, req: Request) -> Response {
             // parses `include "<path>"`, so its diagnostics can quote file
             // content the unprivileged caller must not receive — the helper
             // exists precisely to stop that process reading root's files.
-            tracing::warn!("privileged operation failed: {e:#}");
+            crate::warn!("privileged operation failed: {e:#}");
             Response::err(
                 "privileged operation failed; see the helper's log for detail".to_string(),
             )
@@ -339,7 +339,7 @@ impl FirewallParams {
     /// that could add a command to the rendered hook.
     fn validate(&self) -> Result<()> {
         for (label, v) in [("ipv4Cidr", &self.ipv4_cidr), ("ipv6Cidr", &self.ipv6_cidr)] {
-            if v.parse::<ipnet::IpNet>().is_err() {
+            if v.parse::<crate::cidr::IpNet>().is_err() {
                 anyhow::bail!("firewall.{label} is not a CIDR: {v:?}");
             }
         }

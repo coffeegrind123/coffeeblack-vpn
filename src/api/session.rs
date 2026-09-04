@@ -9,10 +9,10 @@
 //! | POST   | /api/me/password | Change password      |
 //! | POST   | /api/me/totp     | Enable/disable TOTP  |
 
-use axum::extract::{ConnectInfo, State};
-use axum::http::{HeaderMap, StatusCode};
-use axum::Json;
-use axum_extra::extract::cookie::{Cookie, CookieJar};
+use crate::http::{ConnectInfo, State};
+use crate::http::{HeaderMap, StatusCode};
+use crate::http::Json;
+use crate::http::{Cookie, CookieJar};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -67,7 +67,7 @@ pub(crate) fn check_ip_attempt_limit(
 ) -> Result<(), (StatusCode, Json<Value>)> {
     let Some(ip) = ip else { return Ok(()) };
     let mut attempts = login_attempts().lock().map_err(|e| {
-        tracing::error!("Rate limit lock poisoned: {e}");
+        crate::error!("Rate limit lock poisoned: {e}");
         api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
     })?;
     let now = SystemTime::now()
@@ -101,7 +101,7 @@ pub(crate) fn check_ip_attempt_limit(
 
 /// Resolve the client IP for a limiter key, honouring TRUST_PROXY.
 pub(crate) fn client_ip_for_limit(
-    headers: &axum::http::HeaderMap,
+    headers: &crate::http::HeaderMap,
     peer: Option<std::net::SocketAddr>,
 ) -> Option<String> {
     resolve_client_ip(headers, peer)
@@ -199,7 +199,7 @@ pub async fn create_session(
     let client_ip = resolve_client_ip(&headers, peer.map(|ConnectInfo(a)| a));
     {
         let mut attempts = login_attempts().lock().map_err(|e| {
-            tracing::error!("Rate limit lock poisoned: {e}");
+            crate::error!("Rate limit lock poisoned: {e}");
             api_err(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
         })?;
         let now = SystemTime::now()
@@ -347,7 +347,7 @@ pub async fn create_session(
         .path("/")
         .http_only(true)
         .secure(secure)
-        .same_site(axum_extra::extract::cookie::SameSite::Strict);
+        .same_site(crate::http::SameSite::Strict);
 
     let cookie = if body.remember {
         cookie.max_age(time::Duration::days(30))

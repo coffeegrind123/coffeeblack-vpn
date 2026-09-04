@@ -23,11 +23,11 @@
 //! through `mtproxy::client`. On startup or config change, the
 //! supervisor's user-reconciler converges live state to DB state.
 
-use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::IntoResponse;
-use axum::Json;
-use axum_extra::extract::cookie::CookieJar;
+use crate::http::{Path, Query, State};
+use crate::http::{header, HeaderMap, StatusCode};
+use crate::http::IntoResponse;
+use crate::http::Json;
+use crate::http::CookieJar;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -157,7 +157,7 @@ pub async fn update_inbound(
     // will surface the reason).
     #[cfg(telemt_bundled)]
     if let Err(e) = crate::mtproxy::supervisor::ensure_running().await {
-        tracing::warn!(error = ?e, "MTProxy supervisor reconcile failed after admin update");
+        crate::warn!(error = ?e, "MTProxy supervisor reconcile failed after admin update");
     }
 
     Ok(ok_success())
@@ -360,7 +360,7 @@ pub async fn create_user(
         };
         match crate::mtproxy::client::create_user(&req).await {
             Ok(_) => {}
-            Err(e) => tracing::warn!(
+            Err(e) => crate::warn!(
                 username = %username,
                 error = ?e,
                 "MTProxy create_user: live push failed; reconciler will retry"
@@ -478,7 +478,7 @@ pub async fn update_user(
         // Only call PATCH if something is set.
         if patch.ad_tag.is_some() || patch.enabled.is_some() {
             if let Err(e) = crate::mtproxy::client::patch_user(&username, &patch).await {
-                tracing::warn!(
+                crate::warn!(
                     username = %username,
                     error = ?e,
                     "MTProxy update_user: live PATCH failed; reconciler will retry"
@@ -505,7 +505,7 @@ pub async fn delete_user(
     #[cfg(telemt_bundled)]
     {
         if let Err(e) = crate::mtproxy::client::delete_user(&username).await {
-            tracing::warn!(
+            crate::warn!(
                 username = %username,
                 error = ?e,
                 "MTProxy delete_user: live DELETE failed; reconciler will retry"
@@ -543,7 +543,7 @@ pub async fn rotate_secret(
             enabled: None,
         };
         if let Err(e) = crate::mtproxy::client::patch_user(&username, &patch).await {
-            tracing::warn!(
+            crate::warn!(
                 username = %username,
                 error = ?e,
                 "MTProxy rotate_secret: live PATCH failed; reconciler will retry"
@@ -675,7 +675,7 @@ fn validate_username(name: &str) -> Result<(), (StatusCode, Json<Value>)> {
 fn generate_secret_hex() -> String {
     let mut bytes = [0u8; 16];
     crate::rng::fill(&mut bytes);
-    hex::encode(bytes)
+    crate::encoding::hex_encode(bytes)
 }
 
 /// Pull `name → entry` out of telemt's `/v1/users` response. v3.4.11

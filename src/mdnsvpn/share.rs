@@ -46,7 +46,6 @@
 //! can edit per-client to scope a peer to a different mix.
 
 use anyhow::{anyhow, Result};
-use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde_json::{json, Value};
 use std::fmt::Write as _;
 
@@ -141,7 +140,7 @@ pub fn render_bundle(
         .unwrap_or_else(|_| "{}".to_string());
     let config_json_compact = serde_json::to_string(&config_json_value)
         .unwrap_or_else(|_| "{}".to_string());
-    let config_json_base64 = B64.encode(config_json_compact.as_bytes());
+    let config_json_base64 = crate::encoding::b64_encode(config_json_compact.as_bytes());
 
     Ok(ShareBundle {
         config_toml,
@@ -494,7 +493,7 @@ mod tests {
         assert_eq!(parsed["SOCKS5_AUTH"], false);
 
         // Base64
-        let decoded = B64.decode(&bundle.config_json_base64).unwrap();
+        let decoded = crate::encoding::b64_decode(&bundle.config_json_base64).unwrap();
         let s = std::str::from_utf8(&decoded).unwrap();
         assert!(s.contains("v.example.com"));
         assert!(s.contains("deadbeefcafebabe1234567890abcdef"));
@@ -571,7 +570,7 @@ mod tests {
             parsed.get("RESOLVERS").is_none(),
             "JSON still emits a dead RESOLVERS member"
         );
-        let decoded = B64.decode(&bundle.config_json_base64).unwrap();
+        let decoded = crate::encoding::b64_decode(&bundle.config_json_base64).unwrap();
         let blob: Value = serde_json::from_slice(&decoded).unwrap();
         assert!(blob.get("RESOLVERS").is_none());
     }
@@ -599,7 +598,7 @@ mod tests {
         let query = url.strip_prefix("mdnsvpn://b64?").unwrap();
         let payload = query.split('&').next().unwrap();
         assert_eq!(payload, bundle.config_json_base64);
-        let decoded = B64.decode(payload).expect("payload must stay valid std base64");
+        let decoded = crate::encoding::b64_decode(payload).expect("payload must stay valid std base64");
         let blob: Value = serde_json::from_slice(&decoded).unwrap();
         assert_eq!(blob["DOMAINS"][0], "v.example.com");
 
@@ -639,7 +638,7 @@ mod tests {
     #[test]
     fn json_base64_round_trips() {
         let bundle = render_bundle(&fixture_inbound(), &fixture_client()).unwrap();
-        let decoded = B64.decode(&bundle.config_json_base64).unwrap();
+        let decoded = crate::encoding::b64_decode(&bundle.config_json_base64).unwrap();
         let v: Value = serde_json::from_slice(&decoded).unwrap();
         assert_eq!(v["DOMAINS"][0], "v.example.com");
         assert_eq!(v["LISTEN_PORT"], 18000);

@@ -2,7 +2,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use dashmap::DashMap;
+use crate::proxy::shardmap::{Entry, ShardMap};
 
 /// Per-client metrics: packet counts and rate-limit state.
 ///
@@ -285,7 +285,7 @@ pub struct ClientMetricsSnapshot {
 
 /// Global metrics store keyed by client address.
 pub struct MetricsStore {
-    clients: DashMap<SocketAddr, Arc<ClientMetrics>>,
+    clients: ShardMap<SocketAddr, Arc<ClientMetrics>>,
     rate_limit_per_sec: u32,
     max_clients: usize,
     /// Atomic counter for the number of tracked clients, kept in sync with
@@ -296,7 +296,7 @@ pub struct MetricsStore {
 impl MetricsStore {
     pub fn new(rate_limit_per_sec: u32, max_clients: usize) -> Self {
         Self {
-            clients: DashMap::new(),
+            clients: ShardMap::new(),
             rate_limit_per_sec,
             max_clients,
             client_count: AtomicUsize::new(0),
@@ -308,7 +308,7 @@ impl MetricsStore {
     pub fn get_or_create(&self, addr: SocketAddr) -> Option<Arc<ClientMetrics>> {
         // Fast path: already exists (avoids acquiring the entry shard guard).
         if let Some(r) = self.clients.get(&addr) {
-            return Some(Arc::clone(r.value()));
+            return Some(Arc::clone(&r));
         }
         // Acquire the entry shard guard for `addr` *before* reserving a slot,
         // so concurrent callers for the same addr can never observe a
@@ -317,8 +317,8 @@ impl MetricsStore {
         // guard is held, ensuring the increment and the insert are atomic
         // with respect to other lookups of the same key.
         match self.clients.entry(addr) {
-            dashmap::mapref::entry::Entry::Occupied(o) => Some(Arc::clone(o.get())),
-            dashmap::mapref::entry::Entry::Vacant(v) => {
+            Entry::Occupied(o) => Some(Arc::clone(o.get())),
+            Entry::Vacant(v) => {
                 // Atomically reserve a slot; reject if at capacity.
                 loop {
                     let current = self.client_count.load(Ordering::Acquire);
@@ -349,7 +349,7 @@ impl MetricsStore {
 
     /// Get existing metrics for a client without creating a new entry.
     pub fn get(&self, addr: &SocketAddr) -> Option<Arc<ClientMetrics>> {
-        self.clients.get(addr).map(|r| Arc::clone(r.value()))
+        self.clients.get(addr).map(|r| Arc::clone(&r))
     }
 
     /// Number of tracked clients.

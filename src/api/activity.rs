@@ -9,10 +9,10 @@
 //! only, never in the database — see that module for why. This layer just
 //! reads it back in the shape the UI paints.
 
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::Json;
-use axum_extra::extract::cookie::CookieJar;
+use crate::http::{Query, State};
+use crate::http::StatusCode;
+use crate::http::Json;
+use crate::http::CookieJar;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -119,7 +119,7 @@ pub async fn purge(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let _admin = require_admin(&jar, &state)?;
     let deleted = activity::purge();
-    tracing::info!("activity history purged by admin ({deleted} day bucket(s) discarded)");
+    crate::info!("activity history purged by admin ({deleted} day bucket(s) discarded)");
     Ok(ok_success())
 }
 

@@ -14,10 +14,10 @@
 //! | POST   | /api/admin/interface/cidr       | Change CIDR + reassign IPs|
 //! | POST   | /api/admin/interface/restart    | Restart AmneziaWG         |
 
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::Json;
-use axum_extra::extract::cookie::CookieJar;
+use crate::http::State;
+use crate::http::StatusCode;
+use crate::http::Json;
+use crate::http::CookieJar;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -436,7 +436,7 @@ pub async fn update_general(
             if mode == db::RETENTION_NEVER {
                 let purged = db::purge_client_private_keys().map_err(map_err)?;
                 if purged > 0 {
-                    tracing::info!(
+                    crate::info!(
                         "private-key retention set to 'never' — purged stored keys for \
                          {purged} peer(s); their configs can no longer be re-displayed"
                     );
@@ -995,7 +995,7 @@ pub async fn update_interface(
             .any(|k| map.contains_key(*k));
             if proxy_relevant {
                 if let Err(e) = crate::proxy::supervisor::ensure_running().await {
-                    tracing::warn!("proxy reconcile after interface update failed: {e:#}");
+                    crate::warn!("proxy reconcile after interface update failed: {e:#}");
                 }
             }
         }

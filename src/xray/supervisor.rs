@@ -129,7 +129,7 @@ async fn ensure_running_inner(reset_crash: bool) -> Result<()> {
         // existing connections.
         send_signal(running.pid, libc::SIGHUP)
             .with_context(|| format!("SIGHUP to xray pid {}", running.pid))?;
-        tracing::info!(pid = running.pid, config = %path.display(), "xray reloaded (SIGHUP)");
+        crate::info!(pid = running.pid, config = %path.display(), "xray reloaded (SIGHUP)");
         state.disabled_reason = None;
         return Ok(());
     }
@@ -247,17 +247,17 @@ async fn spawn(bin: &PathBuf, config: &PathBuf) -> Result<Child> {
     // alongside everything else awg-easy-rs emits. `take()` removes the
     // pipes from the Child so it doesn't block on full pipe buffers.
     if let Some(stdout) = child.stdout.take() {
-        spawn_log_pump(stdout, "xray.stdout", tracing::Level::INFO);
+        spawn_log_pump(stdout, "xray.stdout", crate::log::Level::Info);
     }
     if let Some(stderr) = child.stderr.take() {
-        spawn_log_pump(stderr, "xray.stderr", tracing::Level::WARN);
+        spawn_log_pump(stderr, "xray.stderr", crate::log::Level::Warn);
     }
     let pid = child.id().unwrap_or(0);
-    tracing::info!(pid, config = %config.display(), "xray spawned");
+    crate::info!(pid, config = %config.display(), "xray spawned");
     Ok(child)
 }
 
-fn spawn_log_pump<R>(reader: R, target: &'static str, level: tracing::Level)
+fn spawn_log_pump<R>(reader: R, target: &'static str, level: crate::log::Level)
 where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
 {
@@ -269,10 +269,10 @@ where
                 continue;
             }
             match level {
-                tracing::Level::ERROR => tracing::error!(target: "xray", source = target, "{line}"),
-                tracing::Level::WARN  => tracing::warn!(target:  "xray", source = target, "{line}"),
-                tracing::Level::INFO  => tracing::info!(target:  "xray", source = target, "{line}"),
-                _                     => tracing::debug!(target: "xray", source = target, "{line}"),
+                crate::log::Level::Error => crate::error!(target: "xray", source = target, "{line}"),
+                crate::log::Level::Warn  => crate::warn!(target:  "xray", source = target, "{line}"),
+                crate::log::Level::Info  => crate::info!(target:  "xray", source = target, "{line}"),
+                _                     => crate::debug!(target: "xray", source = target, "{line}"),
             }
         }
     });
@@ -295,11 +295,11 @@ async fn stop_if_running(reason: &str) {
 
     live.shutdown_requested.store(true, Ordering::SeqCst);
     let pid = live.pid;
-    tracing::info!(pid, %reason, "stopping xray");
+    crate::info!(pid, %reason, "stopping xray");
     if let Err(e) = send_signal(pid, libc::SIGTERM) {
         // ESRCH means the child already exited under our feet — fine.
         if e.raw_os_error() != Some(libc::ESRCH) {
-            tracing::warn!(pid, error = ?e, "SIGTERM failed; will SIGKILL");
+            crate::warn!(pid, error = ?e, "SIGTERM failed; will SIGKILL");
         }
     }
 
@@ -308,12 +308,12 @@ async fn stop_if_running(reason: &str) {
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
         if !pid_alive(pid) {
-            tracing::info!(pid, "xray exited cleanly within grace period");
+            crate::info!(pid, "xray exited cleanly within grace period");
             return;
         }
         sleep(Duration::from_millis(50)).await;
     }
-    tracing::warn!(pid, "xray did not exit within {grace:?}, sending SIGKILL");
+    crate::warn!(pid, "xray did not exit within {grace:?}, sending SIGKILL");
     let _ = send_signal(pid, libc::SIGKILL);
     // Final reap window — the watchdog still owns the Child handle and
     // will collect the zombie via Child::wait inside its loop.
@@ -323,7 +323,7 @@ async fn stop_if_running(reason: &str) {
         }
         sleep(Duration::from_millis(40)).await;
     }
-    tracing::error!(pid, "xray failed to exit even after SIGKILL");
+    crate::error!(pid, "xray failed to exit even after SIGKILL");
 }
 
 /// Detached task that owns the `Child` handle and reacts to its exit.
@@ -347,17 +347,17 @@ fn spawn_watchdog(mut child: Child, shutdown_requested: Arc<AtomicBool>) {
         };
 
         if shutdown_requested.load(Ordering::SeqCst) {
-            tracing::info!(pid, exit = %exit_str, "xray exited (administrative)");
+            crate::info!(pid, exit = %exit_str, "xray exited (administrative)");
             return;
         }
 
-        tracing::warn!(pid, exit = %exit_str, "xray child exited unexpectedly");
+        crate::warn!(pid, exit = %exit_str, "xray child exited unexpectedly");
 
         // Decide whether to restart based on current DB state.
         let inbound = match db::get_xray_inbound() {
             Ok(i) => i,
             Err(e) => {
-                tracing::error!(error = ?e, "watchdog: get_xray_inbound failed; giving up");
+                crate::error!(error = ?e, "watchdog: get_xray_inbound failed; giving up");
                 return;
             }
         };
@@ -392,18 +392,18 @@ fn spawn_watchdog(mut child: Child, shutdown_requested: Arc<AtomicBool>) {
         };
 
         if attempts > 10 {
-            tracing::error!(attempts, "xray restart attempts exceeded; supervisor giving up");
+            crate::error!(attempts, "xray restart attempts exceeded; supervisor giving up");
             return;
         }
         let backoff = restart_backoff(attempts);
-        tracing::info!(attempts, backoff_ms = backoff.as_millis() as u64, "scheduling xray restart");
+        crate::info!(attempts, backoff_ms = backoff.as_millis() as u64, "scheduling xray restart");
         sleep(backoff).await;
 
         // ensure_running re-reads DB and spawns. Single source of
         // truth for "should we be running?". `false` = don't reset the
         // crash counter — this is a restart, not a manual reconcile.
         if let Err(e) = ensure_running_inner(false).await {
-            tracing::error!(error = ?e, "xray restart failed");
+            crate::error!(error = ?e, "xray restart failed");
         }
     });
 }

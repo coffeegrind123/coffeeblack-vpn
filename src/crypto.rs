@@ -45,7 +45,6 @@
 use std::sync::LazyLock;
 
 use anyhow::{anyhow, Context, Result};
-use base64::Engine;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM, NONCE_LEN};
 
 /// Marks a value as produced by [`encrypt`]. Anything lacking it is treated as
@@ -71,7 +70,7 @@ fn load_key() -> Option<LessSafeKey> {
                 // A configured-but-unreadable key is an operator error worth
                 // shouting about: it silently degrades to plaintext storage,
                 // which is precisely what they were trying to avoid.
-                tracing::error!(
+                crate::error!(
                     "WG_EASY_SECRET_KEY_PATH={path} could not be read ({e}); \
                      secrets will be stored unencrypted"
                 );
@@ -84,15 +83,15 @@ fn load_key() -> Option<LessSafeKey> {
         },
     };
 
-    let mut bytes = match base64::engine::general_purpose::STANDARD.decode(raw.trim()) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!("secret key is not valid base64 ({e}); secrets will be stored unencrypted");
+    let mut bytes = match crate::encoding::b64_decode(raw.trim()) {
+        Some(b) => b,
+        None => {
+            crate::error!("secret key is not valid base64; secrets will be stored unencrypted");
             return None;
         }
     };
     if bytes.len() != KEY_LEN {
-        tracing::error!(
+        crate::error!(
             "secret key must decode to {KEY_LEN} bytes, got {}; secrets will be stored unencrypted",
             bytes.len()
         );
@@ -120,9 +119,9 @@ pub fn is_configured() -> bool {
 /// which of the two states this instance is in without reading the database.
 pub fn log_status() {
     if is_configured() {
-        tracing::info!("secret encryption: enabled (AES-256-GCM, key supplied out of band)");
+        crate::info!("secret encryption: enabled (AES-256-GCM, key supplied out of band)");
     } else {
-        tracing::warn!(
+        crate::warn!(
             "secret encryption: DISABLED — TOTP secrets are stored in plaintext. \
              Set WG_EASY_SECRET_KEY_PATH (systemd credential) or WG_EASY_SECRET_KEY \
              (base64, 32 bytes) so a stolen database does not yield working second factors."
@@ -156,7 +155,7 @@ pub fn encrypt(plaintext: &str) -> Result<String> {
     out.extend_from_slice(&buf);
     Ok(format!(
         "{ENC_PREFIX}{}",
-        base64::engine::general_purpose::STANDARD.encode(&out)
+        crate::encoding::b64_encode(&out)
     ))
 }
 
@@ -176,8 +175,7 @@ pub fn decrypt(stored: &str) -> Result<String> {
         .as_ref()
         .context("value is encrypted but no secret key is configured (WG_EASY_SECRET_KEY_PATH / WG_EASY_SECRET_KEY)")?;
 
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
+    let raw = crate::encoding::b64_decode(encoded)
         .context("encrypted value is not valid base64")?;
     if raw.len() <= NONCE_LEN {
         return Err(anyhow!("encrypted value is truncated"));

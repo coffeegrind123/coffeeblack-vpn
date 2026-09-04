@@ -1,11 +1,12 @@
 //! Small date/time helpers over the `time` crate.
 //!
-//! `time` is already a mandatory dependency (axum-extra's cookie jar takes a
-//! `time::Duration` for `max_age`, and it's pulled transitively regardless), so
-//! routing our own date handling through it — instead of `chrono` — drops the
-//! entire chrono subtree (`chrono`, `iana-time-zone`, `num-traits`) for zero
-//! new cost. These wrappers keep the call sites terse and the `time` API
-//! (fallible `format`/`parse`) from leaking everywhere.
+//! Routing every date through `time` — instead of `chrono` — keeps the whole
+//! chrono subtree (`chrono`, `iana-time-zone`, `num-traits`) out of the build,
+//! and `time` earns its place several times over: RFC 3339 timestamps, the
+//! client-expiry shapes, cookie `Max-Age`, the log timestamp, and the
+//! certificate validity window in `src/proxy/x509.rs`. These wrappers keep the
+//! call sites terse and the `time` API (fallible `format`/`parse`) from
+//! leaking everywhere.
 
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;

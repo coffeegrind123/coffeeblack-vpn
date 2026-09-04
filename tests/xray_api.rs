@@ -9,17 +9,16 @@
 mod common;
 
 use awg_easy_rs::{api, auth, db};
-use axum::body::Body;
-use axum::http::{header, Request, StatusCode};
+use awg_easy_rs::http::Body;
+use awg_easy_rs::http::{header, Request, StatusCode};
 use serde_json::{json, Value};
 use serial_test::serial;
-use tower::ServiceExt;
 
 fn seed() {
     common::seed();
 }
 
-fn router() -> axum::Router {
+fn router() -> awg_easy_rs::http::Router {
     api::build_router(api::AppState::new())
 }
 
@@ -39,7 +38,7 @@ fn create_admin() -> (i64, String) {
     (id, "adminpass".into())
 }
 
-async fn login(app: &axum::Router, username: &str, password: &str) -> String {
+async fn login(app: &awg_easy_rs::http::Router, username: &str, password: &str) -> String {
     let body = json!({ "username": username, "password": password });
     let req = Request::builder()
         .method("POST")
@@ -66,7 +65,7 @@ async fn login(app: &axum::Router, username: &str, password: &str) -> String {
         .to_string()
 }
 
-async fn json_get(app: &axum::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
+async fn json_get(app: &awg_easy_rs::http::Router, path: &str, cookie: &str) -> (StatusCode, Value) {
     let req = Request::builder()
         .method("GET")
         .uri(path)
@@ -75,13 +74,13 @@ async fn json_get(app: &axum::Router, path: &str, cookie: &str) -> (StatusCode, 
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let body = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 64).unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     (status, v)
 }
 
 async fn json_post(
-    app: &axum::Router,
+    app: &awg_easy_rs::http::Router,
     path: &str,
     cookie: &str,
     body: Value,
@@ -95,12 +94,12 @@ async fn json_post(
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let body = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 64).unwrap();
     let v: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     (status, v)
 }
 
-async fn raw_get(app: &axum::Router, path: &str, cookie: &str) -> (StatusCode, String) {
+async fn raw_get(app: &awg_easy_rs::http::Router, path: &str, cookie: &str) -> (StatusCode, String) {
     let req = Request::builder()
         .method("GET")
         .uri(path)
@@ -109,7 +108,7 @@ async fn raw_get(app: &axum::Router, path: &str, cookie: &str) -> (StatusCode, S
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body = axum::body::to_bytes(resp.into_body(), 1024 * 64).await.unwrap();
+    let body = awg_easy_rs::http::to_bytes(resp.into_body(), 1024 * 64).unwrap();
     let s = String::from_utf8(body.to_vec()).unwrap_or_default();
     (status, s)
 }

@@ -24,11 +24,11 @@
 //! `client_resolvers.txt`, and a missing one aborts startup (see the
 //! `mdnsvpn::share` module docs for the exact lookup rules).
 
-use axum::extract::{Path, Query, State};
-use axum::http::{header, HeaderMap, StatusCode};
-use axum::response::IntoResponse;
-use axum::Json;
-use axum_extra::extract::cookie::CookieJar;
+use crate::http::{Path, Query, State};
+use crate::http::{header, HeaderMap, StatusCode};
+use crate::http::IntoResponse;
+use crate::http::Json;
+use crate::http::CookieJar;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -791,7 +791,7 @@ pub async fn client_qrcode(
 async fn reconcile_supervisor() {
     if let Err(e) = mdnsvpn::supervisor::ensure_running().await {
         // Non-fatal — the admin UI shows the failure via /status.
-        tracing::warn!(error = ?e, "mdnsvpn supervisor reconcile failed");
+        crate::warn!(error = ?e, "mdnsvpn supervisor reconcile failed");
     }
 }
 

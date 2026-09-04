@@ -18,12 +18,11 @@
 #![cfg(dns_bundled)]
 
 use std::fs;
-use std::io::{self, Read};
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 
 use crate::config::CONFIG;
@@ -150,7 +149,7 @@ fn extract_one(bin: &BundledBinary, bin_dir: &Path) -> Result<()> {
     let target = bin_dir.join(bin.name);
 
     if matches_embedded_sha(&target, bin.sha256).unwrap_or(false) {
-        tracing::debug!(
+        crate::debug!(
             name = bin.name,
             path = %target.display(),
             "DNS bundle: ELF already extracted; skipping"
@@ -165,10 +164,9 @@ fn extract_one(bin: &BundledBinary, bin_dir: &Path) -> Result<()> {
     // canonical name.
     let tmp = bin_dir.join(format!("{}.partial", bin.name));
     {
-        let mut decoder = GzDecoder::new(bin.gz);
         let mut out = fs::File::create(&tmp)
             .with_context(|| format!("create {}", tmp.display()))?;
-        io::copy(&mut decoder, &mut out)
+        crate::inflate::gunzip_to_writer(bin.gz, &mut out)
             .with_context(|| format!("decompress {} ELF to {}", bin.name, tmp.display()))?;
     }
 
@@ -191,7 +189,7 @@ fn extract_one(bin: &BundledBinary, bin_dir: &Path) -> Result<()> {
     fs::rename(&tmp, &target)
         .with_context(|| format!("rename {} → {}", tmp.display(), target.display()))?;
 
-    tracing::info!(
+    crate::info!(
         name = bin.name,
         path = %target.display(),
         version = bin.version,
@@ -222,7 +220,7 @@ fn sha256_file(path: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
     }
-    Ok(hex::encode(hasher.finalize()))
+    Ok(crate::encoding::hex_encode(hasher.finalize()))
 }
 
 #[cfg(test)]

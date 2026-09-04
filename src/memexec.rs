@@ -40,13 +40,12 @@
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use anyhow::{anyhow, bail, Context, Result};
-use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 
 /// `tmpfs` superblock magic (`include/uapi/linux/magic.h`). Used by
@@ -94,7 +93,7 @@ pub fn load(name: &str, gz: &[u8], expected_sha256: &str) -> Result<PathBuf> {
         .with_context(|| format!("load {name} into memfd"))?;
     let path = fd_path(fd.as_raw_fd());
     registry.insert(name.to_string(), fd);
-    tracing::info!(
+    crate::info!(
         binary = name,
         path = %path.display(),
         sha256 = expected_sha256,
@@ -114,15 +113,12 @@ fn create_sealed_memfd(name: &str, gz: &[u8], expected_sha256: &str) -> Result<O
     // Decompress fully into RAM and hash before committing anything to the
     // memfd. The largest blob (Xray) is ~35 MiB uncompressed — a transient
     // allocation we drop immediately, which is the whole point of this mode.
-    let mut elf = Vec::new();
-    GzDecoder::new(gz)
-        .read_to_end(&mut elf)
-        .context("gunzip bundled ELF")?;
+    let elf = crate::inflate::gunzip(gz).context("gunzip bundled ELF")?;
 
     let actual = {
         let mut hasher = Sha256::new();
         hasher.update(&elf);
-        hex::encode(hasher.finalize())
+        crate::encoding::hex_encode(hasher.finalize())
     };
     if actual != expected_sha256 {
         bail!(
@@ -210,7 +206,7 @@ mod tests {
     fn sha_hex(bytes: &[u8]) -> String {
         let mut h = Sha256::new();
         h.update(bytes);
-        hex::encode(h.finalize())
+        crate::encoding::hex_encode(h.finalize())
     }
 
     #[test]

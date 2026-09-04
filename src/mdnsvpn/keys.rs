@@ -29,7 +29,7 @@ pub const MIN_KEY_HEX_LEN: usize = 16;
 pub fn generate_key() -> String {
     let mut bytes = [0u8; DEFAULT_KEY_HEX_LEN / 2];
     crate::rng::fill(&mut bytes);
-    hex::encode(bytes)
+    crate::encoding::hex_encode(bytes)
 }
 
 /// Validate a key-as-stored: must be lowercase or uppercase hex, even

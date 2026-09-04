@@ -155,7 +155,7 @@ pub fn generate(inbound: &MdnsvpnInbound, mdnsvpn_dir: &Path) -> Result<String> 
         )
         .unwrap();
         writeln!(body, "# client config (the method is baked into each one).").unwrap();
-        tracing::warn!(
+        crate::warn!(
             method = inbound.encryption_method,
             method_name = keys::method_name(inbound.encryption_method),
             recommended = keys::RECOMMENDED_ENCRYPTION_METHOD,

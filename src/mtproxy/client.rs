@@ -115,11 +115,11 @@ pub async fn is_alive() -> Result<bool> {
     match request("GET", "/v1/health", None).await {
         Ok((200..=299, _)) => Ok(true),
         Ok((status, _)) => {
-            tracing::debug!(status, "telemt /v1/health not 2xx yet");
+            crate::debug!(status, "telemt /v1/health not 2xx yet");
             Ok(false)
         }
         Err(e) => {
-            tracing::trace!(error = ?e, "telemt /v1/health connect/IO error (not alive yet)");
+            crate::trace!(error = ?e, "telemt /v1/health connect/IO error (not alive yet)");
             Ok(false)
         }
     }

@@ -11,13 +11,13 @@ fn parse_json_arr(s: &str) -> Vec<String> {
 }
 
 fn server_ip(cidr: &str) -> String {
-    if let Ok(net) = cidr.parse::<ipnet::Ipv4Net>() {
+    if let Ok(net) = cidr.parse::<crate::cidr::Ipv4Net>() {
         // `checked_add` guards the (pathological) all-ones base address so a
         // debug build can't panic on overflow; wrap is fine on the max edge.
         let ip = std::net::Ipv4Addr::from(u32::from(net.addr()).wrapping_add(1));
         return format!("{}/{}", ip, net.prefix_len());
     }
-    if let Ok(net) = cidr.parse::<ipnet::Ipv6Net>() {
+    if let Ok(net) = cidr.parse::<crate::cidr::Ipv6Net>() {
         let ip = std::net::Ipv6Addr::from(u128::from(net.addr()).wrapping_add(1));
         return format!("{}/{}", ip, net.prefix_len());
     }

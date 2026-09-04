@@ -117,7 +117,7 @@ async fn ensure_running_inner(reset_crash: bool) -> Result<()> {
             .is_some()
     };
     if was_running {
-        tracing::info!(config = %path.display(), "mdnsvpn config changed; restarting");
+        crate::info!(config = %path.display(), "mdnsvpn config changed; restarting");
         stop_if_running("config-driven restart").await;
     }
 
@@ -255,7 +255,7 @@ async fn spawn(bin: &PathBuf, config: &PathBuf, encryption_key: &str) -> Result<
         spawn_log_pump(
             stdout,
             "mdnsvpn.stdout",
-            tracing::Level::INFO,
+            crate::log::Level::Info,
             scrubber.clone(),
         );
     }
@@ -263,7 +263,7 @@ async fn spawn(bin: &PathBuf, config: &PathBuf, encryption_key: &str) -> Result<
         spawn_log_pump(
             stderr,
             "mdnsvpn.stderr",
-            tracing::Level::WARN,
+            crate::log::Level::Warn,
             scrubber.clone(),
         );
     }
@@ -273,19 +273,19 @@ async fn spawn(bin: &PathBuf, config: &PathBuf, encryption_key: &str) -> Result<
     // upstream line used to provide — without the key itself.
     let trimmed_key = encryption_key.trim();
     if !trimmed_key.is_empty() {
-        tracing::info!(
+        crate::info!(
             fingerprint = %keys::key_fingerprint(trimmed_key),
             "mdnsvpn encryption key fingerprint (sha256 prefix; raw key never logged)"
         );
     }
-    tracing::info!(pid, config = %config.display(), "mdnsvpn spawned");
+    crate::info!(pid, config = %config.display(), "mdnsvpn spawned");
     Ok(child)
 }
 
 fn spawn_log_pump<R>(
     reader: R,
     target: &'static str,
-    level: tracing::Level,
+    level: crate::log::Level,
     scrubber: Arc<LogScrubber>,
 ) where
     R: tokio::io::AsyncRead + Send + Unpin + 'static,
@@ -302,10 +302,10 @@ fn spawn_log_pump<R>(
             let line = scrubber.scrub(line);
             let line = line.as_ref();
             match level {
-                tracing::Level::ERROR => tracing::error!(target: "mdnsvpn", source = target, "{line}"),
-                tracing::Level::WARN  => tracing::warn!(target:  "mdnsvpn", source = target, "{line}"),
-                tracing::Level::INFO  => tracing::info!(target:  "mdnsvpn", source = target, "{line}"),
-                _                     => tracing::debug!(target: "mdnsvpn", source = target, "{line}"),
+                crate::log::Level::Error => crate::error!(target: "mdnsvpn", source = target, "{line}"),
+                crate::log::Level::Warn  => crate::warn!(target:  "mdnsvpn", source = target, "{line}"),
+                crate::log::Level::Info  => crate::info!(target:  "mdnsvpn", source = target, "{line}"),
+                _                     => crate::debug!(target: "mdnsvpn", source = target, "{line}"),
             }
         }
     });
@@ -323,10 +323,10 @@ async fn stop_if_running(reason: &str) {
 
     live.shutdown_requested.store(true, Ordering::SeqCst);
     let pid = live.pid;
-    tracing::info!(pid, %reason, "stopping mdnsvpn");
+    crate::info!(pid, %reason, "stopping mdnsvpn");
     if let Err(e) = send_signal(pid, libc::SIGTERM) {
         if e.raw_os_error() != Some(libc::ESRCH) {
-            tracing::warn!(pid, error = ?e, "SIGTERM failed; will SIGKILL");
+            crate::warn!(pid, error = ?e, "SIGTERM failed; will SIGKILL");
         }
     }
 
@@ -334,12 +334,12 @@ async fn stop_if_running(reason: &str) {
     let deadline = Instant::now() + grace;
     while Instant::now() < deadline {
         if !pid_alive(pid) {
-            tracing::info!(pid, "mdnsvpn exited cleanly within grace period");
+            crate::info!(pid, "mdnsvpn exited cleanly within grace period");
             return;
         }
         sleep(Duration::from_millis(50)).await;
     }
-    tracing::warn!(pid, "mdnsvpn did not exit within {grace:?}, sending SIGKILL");
+    crate::warn!(pid, "mdnsvpn did not exit within {grace:?}, sending SIGKILL");
     let _ = send_signal(pid, libc::SIGKILL);
     for _ in 0..50 {
         if !pid_alive(pid) {
@@ -347,7 +347,7 @@ async fn stop_if_running(reason: &str) {
         }
         sleep(Duration::from_millis(40)).await;
     }
-    tracing::error!(pid, "mdnsvpn failed to exit even after SIGKILL");
+    crate::error!(pid, "mdnsvpn failed to exit even after SIGKILL");
 }
 
 fn spawn_watchdog(mut child: Child, shutdown_requested: Arc<AtomicBool>) {
@@ -366,16 +366,16 @@ fn spawn_watchdog(mut child: Child, shutdown_requested: Arc<AtomicBool>) {
         };
 
         if shutdown_requested.load(Ordering::SeqCst) {
-            tracing::info!(pid, exit = %exit_str, "mdnsvpn exited (administrative)");
+            crate::info!(pid, exit = %exit_str, "mdnsvpn exited (administrative)");
             return;
         }
 
-        tracing::warn!(pid, exit = %exit_str, "mdnsvpn child exited unexpectedly");
+        crate::warn!(pid, exit = %exit_str, "mdnsvpn child exited unexpectedly");
 
         let inbound = match db::get_mdnsvpn_inbound() {
             Ok(i) => i,
             Err(e) => {
-                tracing::error!(error = ?e, "watchdog: get_mdnsvpn_inbound failed; giving up");
+                crate::error!(error = ?e, "watchdog: get_mdnsvpn_inbound failed; giving up");
                 return;
             }
         };
@@ -402,11 +402,11 @@ fn spawn_watchdog(mut child: Child, shutdown_requested: Arc<AtomicBool>) {
         };
 
         if attempts > 10 {
-            tracing::error!(attempts, "mdnsvpn restart attempts exceeded; supervisor giving up");
+            crate::error!(attempts, "mdnsvpn restart attempts exceeded; supervisor giving up");
             return;
         }
         let backoff = restart_backoff(attempts);
-        tracing::info!(
+        crate::info!(
             attempts,
             backoff_ms = backoff.as_millis() as u64,
             "scheduling mdnsvpn restart"
@@ -415,7 +415,7 @@ fn spawn_watchdog(mut child: Child, shutdown_requested: Arc<AtomicBool>) {
 
         // `false` = don't reset the crash counter — this is a restart.
         if let Err(e) = ensure_running_inner(false).await {
-            tracing::error!(error = ?e, "mdnsvpn restart failed");
+            crate::error!(error = ?e, "mdnsvpn restart failed");
         }
     });
 }

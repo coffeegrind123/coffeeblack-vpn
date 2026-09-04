@@ -53,11 +53,11 @@ pub fn generate_psk() -> Result<String> {
 /// Full AmneziaWG startup sequence.
 pub fn startup() -> Result<()> {
     let mut iface = crate::db::get_interface()?;
-    tracing::info!("Starting AmneziaWG interface {}", iface.name);
+    crate::info!("Starting AmneziaWG interface {}", iface.name);
 
     // Generate keys if default placeholder
     if iface.private_key == "---default---" {
-        tracing::info!("Generating new AmneziaWG keypair...");
+        crate::info!("Generating new AmneziaWG keypair...");
         let (priv_key, pub_key) = generate_keypair()?;
         crate::db::update_key_pair(&pub_key, &priv_key)?;
         iface = crate::db::get_interface()?;
@@ -65,7 +65,7 @@ pub fn startup() -> Result<()> {
 
     // Generate random AWG obfuscation params on first run
     if iface.h1.is_empty() || iface.h1 == "0" {
-        tracing::info!("Generating random AmneziaWG obfuscation parameters...");
+        crate::info!("Generating random AmneziaWG obfuscation parameters...");
         let awg_params = params::generate_awg_params();
         crate::db::update_interface_awg_params(&awg_params)?;
         iface = crate::db::get_interface()?;
@@ -77,7 +77,7 @@ pub fn startup() -> Result<()> {
     // lockdown BEFORE AmneziaWG binds that port, so the raw listener is
     // never briefly WAN-reachable during bring-up. No-op when inactive.
     if let Err(e) = crate::firewall::apply_proxy_lockdown(&iface) {
-        tracing::warn!("proxy backend lockdown at startup failed (non-fatal): {e}");
+        crate::warn!("proxy backend lockdown at startup failed (non-fatal): {e}");
     }
     cli::awg_down(&iface.name).ok(); // ignore if not yet up
     cli::awg_up(&iface.name)?;
@@ -88,7 +88,7 @@ pub fn startup() -> Result<()> {
         crate::firewall::rebuild_rules().ok();
     }
 
-    tracing::info!("AmneziaWG interface {} started successfully", iface.name);
+    crate::info!("AmneziaWG interface {} started successfully", iface.name);
     Ok(())
 }
 
@@ -165,7 +165,7 @@ fn suppress_awg3_conflicts(gen_iface: &mut crate::db::Interface) {
         &gen_iface.header_protection_key,
         gen_iface.random_trailers,
     ) {
-        tracing::warn!(
+        crate::warn!(
             "dropping an AmneziaWG 3 setting from the rendered config while the \
              DPI-imitation proxy is active: {reason}"
         );
@@ -346,7 +346,7 @@ pub fn cron_job() -> Result<()> {
         if let Some(ref expires) = client.expires_at {
             if let Some(exp) = crate::datetime::parse_expiry(expires) {
                 if now > exp {
-                    tracing::info!("Client {} ({}) expired, disabling", client.id, client.name);
+                    crate::info!("Client {} ({}) expired, disabling", client.id, client.name);
                     crate::db::toggle_client(client.id, false)?;
                     needs_save = true;
                 }
