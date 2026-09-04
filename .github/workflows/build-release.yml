@@ -30,12 +30,18 @@ jobs:
       # version is pinned by rust-toolchain.toml, which rustup honours here
       # (auto-installing that exact stable), so CI, dev, and the Docker
       # builder all compile with the same rustc.
-      - name: Install Rust musl target + clippy + musl-tools
+      - name: Install Rust musl target + clippy + musl-tools + minisign
         run: |
           rustup target add x86_64-unknown-linux-musl
           rustup component add clippy
           sudo apt-get update -qq
-          sudo apt-get install -y -qq musl-tools
+          # minisign verifies dnscrypt-proxy's upstream .minisig signature in
+          # vendor/update.sh. Without it a COLD vendor materialisation aborts
+          # ("minisign not installed"), which only ever surfaced when the blob
+          # cache missed — so this job could not build from scratch. Do not
+          # substitute ALLOW_UNVERIFIED_VENDOR=1: that downgrades a signature
+          # check to bare HTTPS on a binary we ship inside the release artifact.
+          sudo apt-get install -y -qq musl-tools minisign
 
       # Dependency policy gate — first thing after the toolchain, before the
       # multi-minute vendor materialisation and build, so a supply-chain
@@ -82,17 +88,28 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-
 
-      # Cache the materialised vendor blobs across runs whenever the
-      # pin files are unchanged. tor-from-source alone is ~10 min;
-      # without this every release run pays that cost.
-      #
-      # Cache key includes the union of every pin file's content, so
-      # bumping any binary version invalidates the cache exactly once.
+      # Digest of the pin files' VALUES only — every non-comment, non-blank
+      # line, sorted. hashFiles() would hash the whole file, so editing a
+      # comment in a pin file invalidated the blob cache and forced a full
+      # cold rebuild (~10 min for tor alone). A rebrand that rewrote one
+      # comment line per pin file did exactly that. Version and SHA lines are
+      # not comments, so a real bump still invalidates the cache exactly once.
+      - name: Compute vendor pin digest
+        id: pins
+        run: |
+          digest="$(cat vendor/*_VERSION | grep -vE '^[[:space:]]*#|^[[:space:]]*$' \
+                    | sort | sha256sum | cut -d' ' -f1)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "vendor pin digest: $digest"
+
+      # Cache the materialised vendor blobs across runs whenever the pinned
+      # versions are unchanged. tor-from-source alone is ~10 min; without this
+      # every release run pays that cost.
       - name: Cache vendor binary blobs
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: vendor/*.gz
-          key: vendor-${{ runner.os }}-${{ hashFiles('vendor/*_VERSION') }}
+          key: vendor-${{ runner.os }}-${{ steps.pins.outputs.digest }}
 
       # Materialise the vendored binary blobs first (xray/telemt/mdnsvpn/
       # dnscrypt/tor/PTs). The quality gate and tests below must run with the
