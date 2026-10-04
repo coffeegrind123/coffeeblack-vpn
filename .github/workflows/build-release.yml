@@ -24,6 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      # The vendored DPI proxy must match VENDOR.lock: local changes belong in
+      # src/proxy/patches/, or the next sync silently reverts them. Offline,
+      # sha256 only. It went unchecked once and drifted by ~1,600 lines.
+      - name: Vendored proxy matches its lock
+        run: bash scripts/vendor-proxy.sh verify
+
       # Rustup ships with the runner; we just need the musl target +
       # musl-tools (provides the musl-gcc linker our RUSTFLAGS asks
       # for) and the clippy component for the quality gate. The toolchain

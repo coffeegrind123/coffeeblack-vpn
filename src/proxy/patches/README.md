@@ -36,6 +36,25 @@ applied with `patch -p0` inside the staging dir.
   every `sync`, whereas a hand-edit would be reverted on the next
   upgrade and silently re-inflate the binary.
 
+- **`0003-coffeeblack-in-house-deps-and-hardening.patch`** — every other
+  divergence from upstream, recorded after the fact. Three commits edited
+  the vendored files directly instead of adding patches, so `verify` had
+  failed since `ff2b441` and a `sync` would have reverted all of it:
+  - `ff2b441` — dependency removal: `dashmap` → `shardmap.rs`, `tracing` →
+    `crate::log`, `thiserror` → hand-written error impls, and
+    `quic_handshake.rs` rebuilt on rustls's `quic` module with the in-house
+    `x509.rs` in place of `quinn-proto` + `rcgen` (now dev-dependencies).
+  - `dd024a7` — audit fixes: no session for unauthenticated datagrams, the
+    quinn `Incoming` endpoint leak, cover-traffic PRNG keyed from the OS
+    CSPRNG, DNS answers truncated with TC=1 and amplification-prone qtypes
+    refused, undersized SIP probes ignored, QUIC handshake CPU charged
+    before the crypto.
+  - `2069783` — comment renames from the rebrand.
+
+  It is one patch rather than three because the commits overlap in the same
+  hunks. CI runs `scripts/vendor-proxy.sh verify`, so a hand edit to a
+  vendored file now fails the build instead of waiting for the next sync.
+
 ## Adding / refreshing a patch
 
 1. Snapshot the current pristine (post-transform) file, edit the vendored file

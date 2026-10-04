@@ -274,7 +274,7 @@ chain, and the proxy takes the public port. **Client `Endpoint` lines are unchan
 Modes are `quic`, `dns`, `stun`, `sip`, or `auto`. It is supervised as a Tokio task with
 no subprocess and no bundled blob. Ported in-process from
 [wiresock/amneziawg-proxy](https://github.com/wiresock/amneziawg-install), synced to
-v0.1.9 — including the global probe-reply byte budget, a source-independent amplification
+v0.1.12 — including the global probe-reply byte budget, a source-independent amplification
 ceiling that source spoofing cannot refresh, unlike a per-source rate limiter.
 Bidirectional imitation is fully unlocked with
 [WireSock Secure Connect 3.5+](https://www.wiresock.net/) on the client.

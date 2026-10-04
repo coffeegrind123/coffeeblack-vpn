@@ -3,21 +3,22 @@
 # transformed with sed 's/crate::/crate::proxy::/g', then the local patches in
 # src/proxy/patches/ applied. Regenerate via scripts/vendor-proxy.sh.
 repo=https://github.com/wiresock/amneziawg-install
-ref=ee9a03fa0c4111661f4e669300fbc97d5844442c
-requested_ref=proxy-v0.1.9
+ref=9f5a1afb87f73fd44b83e8abc8a0388efceeb8d5
+requested_ref=proxy-v0.1.12
 subdir=amneziawg-proxy/src
 transform=s/crate::/crate::proxy::/g
-proxy_version=0.1.9
+proxy_version=0.1.12
 # sha256 of each vendored file AS WRITTEN into src/proxy/ (post-transform, post-patch):
-backend.rs=b8b7c293d900b70ebbbf1cd07cdcf05fdbca2ae861a0ffc2ae58d31ac1d9f50a
-config.rs=eb9b7af0a58a24316358595d88f78b73e9f9553066223a099a0d2f200016b8e5
-errors.rs=d2b184a641b7cef20c782777877ac101787c62023a257d33b26d79a905e28427
-metrics.rs=339b3f46963b0fc7773757e4966fd1436c1434366771c15984bce4223552493d
-proxy.rs=e184a88aa4461f7217bb2faca679808f84959d70bed3bc6bdb695f6b9d0199cb
-quic_handshake.rs=8ed66bcec882f778be9fdbd471fe1161dae0bb40548185dd6cb9565b86cc3b69
-responder.rs=55e7e88245b17779c3fb2284c881e24f44c923727a1d1f6462a5b29facd8aada
-session.rs=d9a40de544c4e8811a3a664668c0950033abadfd36e9a2d2a995086439e61f5c
-transform.rs=3a3cd40b8e3af4cef7285d20a7b11b07169078ed315675f7334cb4789c6d19a9
+backend.rs=887f0c2e37bf2409e81d05f9631e253226487b76a22b7893c292e38355d1dfa2
+config.rs=e8835c07ea0b953886eced0e260433604a25012d2d1dd3211a92346a86b33637
+errors.rs=b23145fd28f52bdffe6ac1f606bbbe0800395ae5bda8d4c7b75b48b644667d8a
+metrics.rs=279a6f2e35546acfacac059f59d6daaed8279237be33b492cadd72139e617488
+proxy.rs=2ae89d6b9c1f273e14d5b80eb3cb9b8404d00bc8693df4063dc2f4a20303a012
+quic_handshake.rs=bd535f0e6b996547a79314602cdbb05af21fb404e59af55714d9b53951830e5d
+responder.rs=b5394a2c4c585c1a76bcf20af710b87f102bfbc776f37080c0b2f912d50fc085
+session.rs=4bf8deb108ef193f4beb4051de4f4388266ad6d73f8f799824d64de4f7cf68d1
+transform.rs=c21a068b0b5d656dc9ccd9ec7b3ed6e6ea3356fea577c0c3629da67720b33c81
 # sha256 of each local security patch (applied after the transform):
-patch/0001-deconstant-dns-sip-fingerprints.patch=4ee744a6155a125b6461929bf4414fc335163ea2805758b62868fd2c93634a1a
+patch/0001-deconstant-dns-sip-fingerprints.patch=2734ee811332b3537dc5deb4d8ae6565386bc98ed1b873073991f47a50b66e67
 patch/0002-cfg-test-gate-toml-config-loader.patch=9351bd98997de5b3223c34c442742f6f289ee05079c8d19846661e8aa5a8ea47
+patch/0003-coffeeblack-in-house-deps-and-hardening.patch=754b0e45980a2b381ff710a59d85a69339ec9b89f22b403fa466900188fa147c
