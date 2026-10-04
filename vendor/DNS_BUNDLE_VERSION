@@ -61,5 +61,5 @@ SNOWFLAKE_AMD64_SHA256 = 401969220fb15616106df72d1e3f0d41ea2440c917fa70aceaddcae
 # in censored networks that allow HTTPS but DPI-block direct tor.
 # Upstream: https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel/-/releases
 # ---------------------------------------------------------------------------
-WEBTUNNEL_VERSION = v0.0.6
-WEBTUNNEL_AMD64_SHA256 = e3bd4e33e6f32434da72db837a4865b35cc2ee6123ee89e805b09cb66e814631
+WEBTUNNEL_VERSION = v0.0.7
+WEBTUNNEL_AMD64_SHA256 = 9e509dff6c743b5a4ac48f8a6588489bffed9e72542ea840b1c98c9916b8ceeb
