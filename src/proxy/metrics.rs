@@ -38,6 +38,18 @@ fn coarse_now_secs() -> u32 {
     epoch.elapsed().as_secs() as u32
 }
 
+/// Wait until `coarse_now_secs` ticks over. The token bucket refills on that
+/// tick, so a test asserting that two packets share one second's budget must
+/// start right after it; otherwise a tick between them, however close
+/// together they are, refills the bucket and lets the second one through.
+#[cfg(test)]
+pub(crate) async fn wait_for_coarse_second() {
+    let start = coarse_now_secs();
+    while coarse_now_secs() == start {
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+}
+
 /// Pack millitoken count and timestamp into a single u64.
 fn pack(millitokens: u32, ts: u32) -> u64 {
     ((millitokens as u64) << 32) | (ts as u64)

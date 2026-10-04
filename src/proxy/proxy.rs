@@ -3061,6 +3061,9 @@ mod tests {
 
         let mut buf = [0u8; 4096];
 
+        // Both probes must land in the same coarse second; see
+        // wait_for_coarse_second.
+        crate::proxy::metrics::wait_for_coarse_second().await;
         proxy.handle_client_packet(&quic_pkt, client_addr).await;
         let (n, from) =
             tokio::time::timeout(Duration::from_millis(200), client.recv_from(&mut buf))

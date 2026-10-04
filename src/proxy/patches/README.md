@@ -55,6 +55,15 @@ applied with `patch -p0` inside the staging dir.
   hunks. CI runs `scripts/vendor-proxy.sh verify`, so a hand edit to a
   vendored file now fails the build instead of waiting for the next sync.
 
+- **`0004-deflake-quic-probe-rate-limit-test.patch`** — test-only.
+  `quic_fallback_probe_respects_rate_limit` sends two probes and expects
+  the second to be refused at 1 token/s, but the bucket refills on a
+  whole-second tick (`coarse_now_secs`), so a tick between the probes let
+  the second through however close together they were (failed CI run
+  37211597087). The test now starts right after a tick via a
+  `#[cfg(test)]` helper; release code is unchanged. Upstream's test has
+  the same race.
+
 ## Adding / refreshing a patch
 
 1. Snapshot the current pristine (post-transform) file, edit the vendored file
