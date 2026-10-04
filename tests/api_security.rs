@@ -1500,6 +1500,39 @@ async fn init_spec_rejects_oversize_total_packet() {
 }
 
 // ---------------------------------------------------------------------------
+// Kernel module generation
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[serial(db)]
+async fn pre2_kernel_module_is_reported_and_blocks_the_awg3_gate() {
+    // A 3.x `awg` driving a pre-2.0 module (the Fedora COPR build) used to
+    // pass the AWG 3 check: only the tools were asked. The module's genl
+    // version now has the last word in kernel mode. Overrides pin both
+    // probes; `#[serial(db)]` keeps them from racing other tests.
+    use coffeeblack_vpn::wg::kernel::{set_gen_override, set_mode_override, GamingMode, ModuleGen};
+    seed();
+    create_user("admin", "adminpass", 1);
+    let app = router();
+    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+
+    set_mode_override(Some(GamingMode::Kernel));
+    set_gen_override(Some(ModuleGen::Pre2));
+    let (status, pre2) = get_req(&app, "/api/admin/interface", &cookie).await;
+    set_gen_override(Some(ModuleGen::Awg3));
+    let (_, awg3) = get_req(&app, "/api/admin/interface", &cookie).await;
+    set_gen_override(None);
+    set_mode_override(None);
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(pre2["gamingMode"], json!("kernel"));
+    assert_eq!(pre2["moduleGen"], json!("pre2"));
+    assert_eq!(pre2["cb3Supported"], json!(false));
+    assert_eq!(awg3["moduleGen"], json!("awg3"));
+    assert_ne!(awg3["cb3Supported"], json!(false), "an AWG 3 module must not block the gate");
+}
+
+// ---------------------------------------------------------------------------
 // AdvancedSecurity per-peer flag
 // ---------------------------------------------------------------------------
 

@@ -1330,11 +1330,33 @@ async function showAdminTab(tab, e) {
         : gamingMode === 'userspace'
           ? '<span class="pill" title="Kernel module not loaded; awg-quick will use the amneziawg-go userspace TUN fallback. Per-peer AdvancedSecurity = on|off is disabled in this mode.">Userspace (amneziawg-go)</span>'
           : '<span class="pill" title="Could not detect — non-Linux host or /sys not mounted">Unknown</span>';
+      // Generation of the loaded module, from its generic-netlink family
+      // version. Only meaningful in kernel mode: userspace runs the image's
+      // amneziawg-go, which is always 3.x.
+      const moduleGen = iface.moduleGen || 'unknown';
+      const genLabel = { 'awg3': 'AWG 3', 'awg2': 'AWG 2', 'pre2': 'pre-2.0' }[moduleGen];
+      const genBadge = gamingMode !== 'kernel' || !genLabel ? ''
+        : moduleGen === 'awg3'
+          ? `&nbsp;<span class="tag tag--ok">${genLabel}</span>`
+          : `&nbsp;<span class="tag tag--danger">${genLabel}</span>`;
+      const genNotice = gamingMode !== 'kernel' ? ''
+        : moduleGen === 'pre2'
+          ? `<div class="notice notice--danger" style="margin-bottom:14px">
+              <svg><use href="#i-alert"/></svg>
+              <div>The loaded amneziawg kernel module <b>predates AmneziaWG 2.0</b>. It rejects the S3/S4 and H1–H4 range settings every generated config uses, so peers cannot connect. Reinstall the module with <span class="mono">install.sh upgrade</span>.</div>
+            </div>`
+          : moduleGen === 'awg2'
+            ? `<div class="notice notice--warn" style="margin-bottom:14px">
+                <svg><use href="#i-alert"/></svg>
+                <div>The loaded amneziawg kernel module is <b>AmneziaWG 2.x</b>. AWG 3 settings below will be refused until it is upgraded with <span class="mono">install.sh upgrade</span>.</div>
+              </div>`
+            : '';
       el.innerHTML = `
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;font-size:13px;color:var(--fg-mute)">
           <svg style="width:14px;height:14px;color:var(--fg-mute)"><use href="#i-server"/></svg>
-          AmneziaWG implementation:&nbsp;${modeBadge}
+          AmneziaWG implementation:&nbsp;${modeBadge}${genBadge}
         </div>
+        ${genNotice}
         <div class="notice notice--warn" style="margin-bottom:14px">
           <svg><use href="#i-alert"/></svg>
           <div>Changing interface keys, ports, or AmneziaWG header magic <b>invalidates every existing peer config</b>. You'll need to redistribute QR codes or one-time links.</div>
@@ -1489,12 +1511,13 @@ async function showAdminTab(tab, e) {
               <div>
                 <div class="card-title">AmneziaWG 3 <span class="opt">${
                   iface.cb3Supported === true ? '<span class="pill pill--ok">supported</span>'
-                  : iface.cb3Supported === false ? '<span class="pill pill--err">awg is pre-3.x</span>'
+                  : iface.cb3Supported === false
+                    ? `<span class="pill pill--err">${gamingMode === 'kernel' && (moduleGen === 'awg2' || moduleGen === 'pre2') ? 'kernel module is pre-3.x' : 'awg is pre-3.x'}</span>`
                   : '<span class="pill">version unknown</span>'
                 }</span></div>
                 <div class="card-sub">Optional AWG 3 device knobs, all off by default — leave a field empty and no config line is written. Timers and padding take a single number or an <span class="mono">N-M</span> range (0-65535).${
                   iface.cb3Supported === false
-                    ? ' <strong>The installed awg predates AWG 3 and will refuse to bring the interface up if you set any of these.</strong>'
+                    ? ' <strong>The installed awg or the loaded kernel module predates AWG 3 and will refuse to bring the interface up if you set any of these.</strong>'
                     : ''
                 }</div>
               </div>

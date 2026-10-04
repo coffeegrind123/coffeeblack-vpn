@@ -216,6 +216,26 @@ pub fn tools_support_cb3() -> Option<bool> {
     parse_major_version(&out).map(|major| major >= 3)
 }
 
+/// Whether the whole data path can carry the AWG 3 keys: the tools that
+/// parse them and, in kernel mode, the module that receives them.
+///
+/// A 3.x `awg` driving a 2.x or pre-2.0 module passes the tools check and
+/// then fails `awg setconf`, so in kernel mode the module has the last word
+/// when it could be read. In userspace mode amneziawg-go (pinned to 3.x in
+/// the image) does the work and the module doesn't matter.
+pub fn stack_supports_cb3(
+    tools: Option<bool>,
+    mode: crate::wg::kernel::GamingMode,
+    gen: crate::wg::kernel::ModuleGen,
+) -> Option<bool> {
+    use crate::wg::kernel::{GamingMode, ModuleGen};
+
+    if mode == GamingMode::Kernel && matches!(gen, ModuleGen::Awg2 | ModuleGen::Pre2) {
+        return Some(false);
+    }
+    tools
+}
+
 /// Pull the major version out of an `awg --version` line.
 pub(crate) fn parse_major_version(line: &str) -> Option<u32> {
     // "amneziawg-tools v3.1.20260812 - https://amnezia.org"
@@ -264,6 +284,24 @@ pub fn config_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn kernel_mode_needs_an_awg3_module_as_well_as_awg3_tools() {
+        use crate::wg::kernel::{GamingMode::*, ModuleGen};
+        // The tools alone used to decide this; a 3.x `awg` driving a
+        // pre-3 module passed the check and then failed at `awg setconf`.
+        assert_eq!(stack_supports_cb3(Some(true), Kernel, ModuleGen::Awg3), Some(true));
+        assert_eq!(stack_supports_cb3(Some(true), Kernel, ModuleGen::Awg2), Some(false));
+        assert_eq!(stack_supports_cb3(Some(true), Kernel, ModuleGen::Pre2), Some(false));
+        // Couldn't read the module: fall back to the tools verdict.
+        assert_eq!(stack_supports_cb3(Some(true), Kernel, ModuleGen::Unknown), Some(true));
+        // Old tools lose regardless of the module.
+        assert_eq!(stack_supports_cb3(Some(false), Kernel, ModuleGen::Awg3), Some(false));
+        // Userspace: amneziawg-go does the work, the module is irrelevant.
+        assert_eq!(stack_supports_cb3(Some(true), Userspace, ModuleGen::NotLoaded), Some(true));
+        assert_eq!(stack_supports_cb3(None, Userspace, ModuleGen::NotLoaded), None);
+        assert_eq!(stack_supports_cb3(None, Kernel, ModuleGen::Pre2), Some(false));
+    }
 
     #[test]
     fn ranges_accept_single_values_and_ordered_pairs() {

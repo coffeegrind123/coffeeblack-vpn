@@ -746,6 +746,10 @@ pub async fn get_interface(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let _admin = require_admin(&jar, &state)?;
     let iface = db::get_interface().map_err(map_err)?;
+    // module_gen() first: its query can autoload the module, which detect()
+    // should then see.
+    let module_gen = crate::wg::kernel::module_gen();
+    let gaming_mode = crate::wg::kernel::detect();
 
     Ok(Json(json!({
         "name": iface.name,
@@ -786,11 +790,20 @@ pub async fn get_interface(
         "maxHandshakeAttempts": iface.max_handshake_attempts,
         "randomTrailers": iface.random_trailers,
         "disableCookies": iface.disable_cookies,
-        // Whether the installed `awg` speaks AWG 3 at all. `null` means the
-        // probe couldn't tell (no awg on PATH, unrecognised banner) — the
-        // UI shows the section without a confirmation rather than hiding a
-        // feature that may well work.
-        "cb3Supported": crate::wg::cb3::tools_support_cb3(),
+        // Whether the data path speaks AWG 3: the installed `awg` and, in
+        // kernel mode, the loaded module. `null` means the probe couldn't
+        // tell (no awg on PATH, unrecognised banner) — the UI shows the
+        // section without a confirmation rather than hiding a feature that
+        // may well work.
+        "cb3Supported": crate::wg::cb3::stack_supports_cb3(
+            crate::wg::cb3::tools_support_cb3(),
+            gaming_mode,
+            module_gen,
+        ),
+        // AmneziaWG generation of the loaded kernel module, from its
+        // generic-netlink family version. `pre2` in kernel mode means no
+        // generated config can come up; the UI says so.
+        "moduleGen": module_gen,
         // Set when the DPI-imitation proxy is on, naming the AWG 3 knobs it
         // cannot carry, so the UI can disable those two controls with the
         // reason instead of letting the operator discover it via a 400.

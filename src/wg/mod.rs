@@ -89,7 +89,32 @@ pub fn startup() -> Result<()> {
     }
 
     crate::info!("AmneziaWG interface {} started successfully", iface.name);
+    log_module_gen();
     Ok(())
+}
+
+/// Report which AmneziaWG generation the data path runs on. Called after
+/// bring-up because `awg-quick up` is what loads the module on most hosts.
+fn log_module_gen() {
+    use kernel::{GamingMode, ModuleGen};
+
+    let gen = kernel::module_gen();
+    let mode = kernel::detect();
+    crate::info!("AmneziaWG data path: mode={mode:?} module={gen:?}");
+    if mode != GamingMode::Kernel {
+        return;
+    }
+    match gen {
+        ModuleGen::Pre2 => crate::warn!(
+            "the loaded amneziawg kernel module predates AmneziaWG 2.0 and rejects the S3/S4 and \
+             H1-H4 range settings every generated config uses; reinstall it with install.sh"
+        ),
+        ModuleGen::Awg2 => crate::warn!(
+            "the loaded amneziawg kernel module is AmneziaWG 2.x; the AWG 3 settings will be \
+             refused until it is upgraded with install.sh"
+        ),
+        _ => {}
+    }
 }
 
 /// Save AmneziaWG config to disk and sync to running interface.
