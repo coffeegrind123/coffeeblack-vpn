@@ -98,27 +98,37 @@ pub struct CreateUser<'a> {
 pub struct PatchUser<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<&'a str>,
-    /// Serialized as `user_ad_tag` — see [`UserPayload::ad_tag`].
+    /// Serialized as `user_ad_tag` — see [`UserPayload::ad_tag`]. Telemt
+    /// applies JSON Merge Patch here: `None` leaves the tag alone,
+    /// `Some(None)` sends `null` and removes it, `Some(Some(tag))` sets it.
+    /// An empty string is not a clear; telemt rejects it with 400.
     #[serde(rename = "user_ad_tag", skip_serializing_if = "Option::is_none")]
-    pub ad_tag: Option<&'a str>,
+    pub ad_tag: Option<Option<&'a str>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
 }
 
+/// A stored ad tag, with the empty string read as "no tag". Releases
+/// before this one stored a cleared tag as "".
+fn non_empty(tag: Option<&str>) -> Option<&str> {
+    tag.filter(|t| !t.is_empty())
+}
+
 /// The ad tag to send when creating a user whose stored tag is `db`.
 pub fn create_ad_tag(db: Option<&str>) -> Option<&str> {
-    db
+    non_empty(db)
 }
 
 /// The PATCH that moves telemt's live ad tag to `want`, or `None` when
 /// they already agree.
 pub fn ad_tag_patch<'a>(live: Option<&str>, want: Option<&'a str>) -> Option<PatchUser<'a>> {
-    if live == want {
+    let want = non_empty(want);
+    if non_empty(live) == want {
         return None;
     }
     Some(PatchUser {
         secret: None,
-        ad_tag: Some(want.unwrap_or("")),
+        ad_tag: Some(want),
         enabled: None,
     })
 }
@@ -600,11 +610,14 @@ mod tests {
     fn patch_user_serializes_ad_tag_as_user_ad_tag() {
         let patch = PatchUser {
             secret: None,
-            ad_tag: Some(""),
+            ad_tag: Some(Some("ffffffffffffffffffffffffffffffff")),
             enabled: Some(false),
         };
         let v: Value = serde_json::to_value(&patch).unwrap();
-        assert_eq!(v.get("user_ad_tag").and_then(|t| t.as_str()), Some(""));
+        assert_eq!(
+            v.get("user_ad_tag").and_then(|t| t.as_str()),
+            Some("ffffffffffffffffffffffffffffffff")
+        );
         assert!(v.get("ad_tag").is_none());
         assert_eq!(v.get("enabled").and_then(|e| e.as_bool()), Some(false));
         assert!(v.get("secret").is_none());

@@ -440,7 +440,9 @@ pub async fn update_user(
             }
             fields.insert(
                 "ad_tag".into(),
-                parsed.clone().unwrap_or_default(), // empty string maps to NULL via UpdateMap? actually maps to "" — telemt treats "" as no-tag
+                // Stored as "" when cleared; client::create_ad_tag and
+                // client::ad_tag_patch read "" as "no tag".
+                parsed.clone().unwrap_or_default(),
             );
             #[cfg(telemt_bundled)]
             {
@@ -472,7 +474,8 @@ pub async fn update_user(
     {
         let patch = crate::mtproxy::client::PatchUser {
             secret: None,
-            ad_tag: new_ad_tag.as_ref().map(|o| o.as_deref().unwrap_or("")),
+            // `Some(None)` sends `null`, which is how telemt clears a tag.
+            ad_tag: new_ad_tag.as_ref().map(|o| o.as_deref()),
             enabled: new_enabled,
         };
         // Only call PATCH if something is set.
