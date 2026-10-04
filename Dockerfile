@@ -4,7 +4,7 @@
 # floating `:alpine` tag can silently change the toolchain (or be repointed by
 # a registry compromise) between builds. Refresh the digests deliberately when
 # bumping the toolchain (`docker buildx imagetools inspect rust:1-alpine`).
-FROM rust:1-alpine@sha256:a10e64dd139b7387337c7fbe8aca31b959b57b2fd4c8ae20a02cf1d6ea424dce AS builder
+FROM rust:1-alpine@sha256:a96ea6d18d4062e38f16cfbadd8b4541d622f2527dd0a5eca1fb36d301da4e88 AS builder
 WORKDIR /build
 
 # Install build dependencies
@@ -59,7 +59,7 @@ RUN cargo build --release --locked --target x86_64-unknown-linux-musl && \
     cp target/x86_64-unknown-linux-musl/release/coffeeblack-vpn /build/coffeeblack-vpn
 
 # Stage 2: Build amneziawg-go (needs Go >= 1.24)
-FROM golang:1-alpine@sha256:cf6fca6641884b8433441b2b0652976f975e1d0fdd26d177eaaf8596087f3125 AS awg-go-builder
+FROM golang:1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS awg-go-builder
 WORKDIR /build
 RUN apk add --no-cache git make
 # Pin to a release tag AND assert the resolved commit SHA. `--branch <tag>`
@@ -78,7 +78,7 @@ RUN git clone --depth 1 --branch "$AWG_GO_TAG" https://github.com/amnezia-vpn/am
     make
 
 # Stage 3: Build amneziawg-tools
-FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d AS awg-builder
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS awg-builder
 WORKDIR /build
 
 RUN apk add --no-cache git build-base linux-headers
@@ -98,7 +98,7 @@ RUN git clone --depth 1 --branch "$AWG_TOOLS_TAG" https://github.com/amnezia-vpn
     cd src && make
 
 # Stage 4: Minimal runtime
-FROM alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 WORKDIR /app
 
 # Install runtime dependencies. We use nftables natively now —
