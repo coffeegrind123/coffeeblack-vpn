@@ -14,5 +14,5 @@
 # build of the pin — and that failure silently disabled the clippy and test
 # gates for weeks. The workflow now runs cargo-deny as a plain runner step.
 [toolchain]
-channel = "1.98.1"
+channel = "1.99.0"
 profile = "minimal"

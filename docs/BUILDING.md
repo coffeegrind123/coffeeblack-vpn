@@ -13,7 +13,7 @@
 ## Toolchain
 
 The toolchain is pinned by [`rust-toolchain.toml`](../rust-toolchain.toml), currently
-**1.98.1**. rustup installs that exact stable automatically when you build in the repo, so
+**1.99.0**. rustup installs that exact stable automatically when you build in the repo, so
 CI, development machines and the Docker builder all compile with the same `rustc`. The code
 itself needs 1.80+ for `LazyLock`, `OnceLock` and edition 2021.
 

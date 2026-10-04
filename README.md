@@ -3,7 +3,7 @@
 [![Build and Release](https://github.com/coffeegrind123/coffeeblack-vpn/actions/workflows/build-release.yml/badge.svg)](https://github.com/coffeegrind123/coffeeblack-vpn/actions/workflows/build-release.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform: x86_64 Linux](https://img.shields.io/badge/platform-x86__64%20linux-lightgrey.svg)](#requirements)
-[![Rust 1.98](https://img.shields.io/badge/rust-1.98-orange.svg)](rust-toolchain.toml)
+[![Rust 1.99](https://img.shields.io/badge/rust-1.99-orange.svg)](rust-toolchain.toml)
 
 A self-hosted VPN and censorship-resistant proxy manager that ships as **one static
 binary** with a built-in web UI. Five transports, one admin panel, one SQLite database.
