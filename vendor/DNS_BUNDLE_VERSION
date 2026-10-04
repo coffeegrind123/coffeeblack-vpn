@@ -35,8 +35,8 @@ DNSCRYPT_PROXY_AMD64_SHA256 = f3544f66de84ec84bec7cf7895ca4b01489579770002dffe2d
 # source, or a from-source musl build).
 # Upstream: https://www.torproject.org/download/tor/
 # ---------------------------------------------------------------------------
-TOR_VERSION = 0.4.9.11
-TOR_AMD64_SHA256 = 43cbce6eb89f9412a1bdcfb4b624395c16229a6725e62ca866fd0412f94c247c
+TOR_VERSION = 0.4.9.13
+TOR_AMD64_SHA256 = c5b2c23a12321e349fcd80facc93060ce05e40f086c82e6085699f01abd55dfe
 
 # ---------------------------------------------------------------------------
 # lyrebird — obfs4 pluggable transport (Go, static). Spawned by tor
