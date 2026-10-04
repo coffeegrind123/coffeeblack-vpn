@@ -274,6 +274,11 @@ show_summary() {
 docker_build_to_file() {
     local image="$1" container_name="$2" build_script="$3"
     local container_path="$4" host_path="$5"
+    # Written by the build script after its own verify + strip, just before
+    # `exec sleep infinity`. Polling the artifact itself raced the linker:
+    # the output file turns non-empty while it is still being written, and
+    # a copy taken then is truncated garbage ("file says: data").
+    local done_marker="/tmp/.build-done"
 
     log "starting build container ($image)"
     docker pull "$image" >/dev/null 2>&1 || true
@@ -293,15 +298,12 @@ docker_build_to_file() {
         sh -c "$build_script" >/dev/null
     DOCKER_CONTAINERS+=("$container_name")
 
-    # Poll until the build artifact appears (and is non-empty) or the
-    # container exits. `test -s` instead of `test -f` because tor's
-    # Makefile creates `src/app/tor` as a 0-byte placeholder before
-    # the actual final link runs; with -f we'd race that placeholder
-    # and copy out an empty file, which then fails verify_static
-    # downstream with a confusing "file says: empty" error.
+    # Poll until the build script signals completion or the container
+    # exits. The script runs `set -e`, so the marker only appears after
+    # every step — link, verify, strip — has succeeded.
     log "waiting for build to complete (this can take 10+ minutes for tor)"
     local elapsed=0
-    while ! docker exec "$container_name" test -s "$container_path" 2>/dev/null; do
+    while ! docker exec "$container_name" test -f "$done_marker" 2>/dev/null; do
         if ! docker inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null \
                 | grep -q true; then
             warn "container exited before producing $container_path"
@@ -322,6 +324,8 @@ docker_build_to_file() {
         fi
     done
 
+    docker exec "$container_name" test -s "$container_path" \
+        || die "build finished but $container_path is missing or empty"
     log "extracting build output → $host_path"
     docker cp "${container_name}:${container_path}" "$host_path"
     docker rm -f "$container_name" >/dev/null
@@ -538,6 +542,7 @@ strip src/app/tor
 # prior failure already exited; reaching this line is the success
 # path. exec replaces sh so the container's PID 1 becomes sleep —
 # clean shutdown on docker rm -f.
+touch /tmp/.build-done
 exec sleep infinity
 "
     docker_build_to_file alpine:3.20 "coffeeblack-tor-build-$$" "$script" \
@@ -600,6 +605,7 @@ file /out/${out_binary} | grep -q 'ELF .* executable' || {
 }
 strip /out/${out_binary}
 # Keep alive for docker-cp; see update_tor for the rationale.
+touch /tmp/.build-done
 exec sleep infinity
 "
     docker_build_to_file golang:1.24-alpine "awg-go-build-$$" "$script" \
