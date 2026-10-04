@@ -57,9 +57,31 @@ readonly MODULES_LOAD_CONF="/etc/modules-load.d/amneziawg.conf"
 readonly RELEASE_URL="https://github.com/coffeegrind123/coffeeblack-vpn/releases/latest/download/coffeeblack-vpn"
 readonly SHA256SUMS_URL="https://github.com/coffeegrind123/coffeeblack-vpn/releases/latest/download/SHA256SUMS"
 readonly MUSL_TARGET="x86_64-unknown-linux-musl"
-# Full 40-char fingerprint of the AmneziaWG APT signing key. Short IDs are
-# collision-prone; always fetch and verify by full fingerprint.
-readonly AMNEZIAWG_APT_FPR="75C9DD72C799870E310542E24166F2C257290828"
+# AmneziaWG sources, built on the host from pinned tags instead of the
+# distro packages: the Fedora COPR stalled on a pre-2.0 module that rejects
+# every config this project generates, and the Ubuntu PPA is unversioned
+# (its builds are labelled 1.0.0 whatever they contain). Each tag is checked
+# against its commit SHA, because a tag can be repointed upstream. Bump a tag
+# and its SHA together. The tools pin must equal the Dockerfile's
+# AWG_TOOLS_TAG / AWG_TOOLS_SHA so the image and the host run the same `awg`;
+# tests/install_pins.rs fails the build when they drift.
+readonly AWG_KMOD_TAG="v3.1.20260906"
+readonly AWG_KMOD_SHA="4569c4c67f3a57414969260cafbbd04694fbaae0"
+readonly AWG_TOOLS_TAG="v3.1.20260812"
+readonly AWG_TOOLS_SHA="ee0f0a9aa34ff0a0da4b3433b9512781cfe02843"
+readonly AWG_KMOD_REPO="https://github.com/amnezia-vpn/amneziawg-linux-kernel-module.git"
+readonly AWG_TOOLS_REPO="https://github.com/amnezia-vpn/amneziawg-tools.git"
+# DKMS package version and what `modinfo -F version amneziawg` reports once
+# stamped (see stampKmodVersion).
+readonly AWG_KMOD_VERSION="${AWG_KMOD_TAG#v}"
+
+# Distro packages and repositories this installer used before the source
+# build; removed on install/upgrade so DKMS never holds two module versions.
+readonly AWG_LEGACY_APT_PKGS=(amneziawg amneziawg-dkms amneziawg-tools)
+readonly AWG_LEGACY_RPM_PKGS=(amneziawg-dkms amneziawg-tools)
+readonly AWG_LEGACY_APT_LIST="/etc/apt/sources.list.d/amneziawg.sources.list"
+readonly AWG_LEGACY_APT_KEYRING="/etc/apt/keyrings/amneziawg.gpg"
+readonly AWG_LEGACY_COPR="amneziavpn/amneziawg"
 
 readonly MANAGED_SENTINEL="# Managed by coffeeblack-vpn install.sh - safe to remove"
 
@@ -384,18 +406,6 @@ checkOS() {
 	esac
 }
 
-getTemporarilyDisabledRPMFamilyMessage() {
-	echo "Fedora, AlmaLinux, and Rocky Linux support is temporarily disabled because verified AmneziaWG 2.0 packages are not currently available for these RPM-based distributions. Please watch the upstream repository's releases and README for support status updates."
-}
-
-# Gate RPM-family module installs "temporarily disabled" exactly as upstream
-# does, while leaving OS detection intact so management/uninstall still work.
-ensureSupportedInstallDistro() {
-	if [[ "${OS}" == 'fedora' || "${OS}" == 'almalinux' || "${OS}" == 'rocky' ]]; then
-		die "$(getTemporarilyDisabledRPMFamilyMessage)"
-	fi
-}
-
 # ── Kernel module + tools ─────────────────────────────────────────────────────
 
 sanitizeAwgDkmsConf() {
@@ -503,124 +513,304 @@ ensureAmneziawgKernelModule() {
 	return 0
 }
 
-# Add the Debian AmneziaWG APT signing key by full-fingerprint fetch-verify-import.
-setupDebianKeyring() {
-	if ! command -v gpg >/dev/null 2>&1; then
-		apt-get update
-		apt-get install -y gnupg || die "Failed to install gnupg (required for key import)."
-	fi
-	if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
-		apt-get update
-		apt-get install -y curl || die "Failed to install curl (required for key download)."
-	fi
-	mkdir -p /etc/apt/keyrings
-	chmod 755 /etc/apt/keyrings
+is_rpm_family() {
+	[[ "${OS}" == 'fedora' || "${OS}" == 'centos' || "${OS}" == 'almalinux' || "${OS}" == 'rocky' ]]
+}
 
-	local key_url="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${AMNEZIAWG_APT_FPR}"
-	local tmp_asc
-	tmp_asc="$(mktemp /tmp/coffeeblack-apt-key.XXXXXX)" || die "Failed to create temp file for APT key."
+# Toolchain, DKMS and kernel headers for building the module and tools, plus
+# the runtime packages the service uses.
+installBuildDeps() {
+	local kver="${1:-$(uname -r)}"
+	if [[ "${OS}" == 'ubuntu' || "${OS}" == 'debian' ]]; then
+		apt-get update || return 1
+		apt-get install -y build-essential git ca-certificates dkms kmod \
+			iptables nftables qrencode || return 1
+	elif is_rpm_family; then
+		if [[ "${OS}" != 'fedora' ]]; then
+			# dkms and qrencode live in EPEL on the RHEL family; EPEL needs CRB.
+			dnf install -y dnf-plugins-core epel-release || return 1
+			dnf config-manager --set-enabled crb || true
+		fi
+		dnf install -y gcc make git ca-certificates dkms kmod elfutils-libelf-devel \
+			iptables nftables qrencode || return 1
+	fi
+	installKernelHeaders "${kver}"
+}
 
-	local fetched=0
-	if command -v curl >/dev/null 2>&1; then
-		curl -4 -fsSL "${key_url}" -o "${tmp_asc}" && fetched=1
-	elif command -v wget >/dev/null 2>&1; then
-		wget -4 -qO "${tmp_asc}" "${key_url}" && fetched=1
+# Shallow-clone <repo> at <tag> into <dest> and assert the commit SHA.
+fetchPinnedSource() {
+	local repo="$1" tag="$2" sha="$3" dest="$4"
+	git -c advice.detachedHead=false clone --quiet --depth 1 --branch "${tag}" "${repo}" "${dest}" \
+		|| { error "Failed to clone ${repo} at ${tag}."; return 1; }
+	local got
+	got="$(git -C "${dest}" rev-parse HEAD)"
+	if [[ "${got}" != "${sha}" ]]; then
+		error "${repo} ${tag} resolved to ${got}, expected ${sha}. Refusing to build."
+		return 1
 	fi
-	if [[ "${fetched}" -ne 1 || ! -s "${tmp_asc}" ]]; then
-		rm -f "${tmp_asc}"
-		die "Failed to download the AmneziaWG APT signing key. Check connectivity / that curl or wget and gnupg are installed."
+	info "Fetched ${repo##*/} ${tag} (${sha:0:12})."
+}
+
+# Replace exactly one line matching <regex> in <file> with <line>, failing if
+# the line is missing or ambiguous: a silent no-op would ship a module that
+# reports the wrong version.
+replaceOneLine() {
+	local file="$1" regex="$2" line="$3"
+	local count
+	count="$(grep -cE "${regex}" "${file}" || true)"
+	if [[ "${count}" != 1 ]]; then
+		error "Expected one line matching '${regex}' in ${file}, found ${count:-0}. Upstream layout changed."
+		return 1
+	fi
+	local tmp
+	tmp="$(mktemp "${file}.XXXXXX")" || return 1
+	awk -v re="${regex}" -v line="${line}" '$0 ~ re { print line; next } { print }' "${file}" > "${tmp}" \
+		&& mv "${tmp}" "${file}"
+}
+
+# Stamp the real version into the module source. Upstream hardcodes 1.0.0 in
+# src/Makefile and dkms.conf, and a DKMS build (which runs Kbuild directly,
+# not src/Makefile) falls back to version.h instead, which lags the tag. After
+# this, the DKMS package, `modinfo` and the load banner all report the tag.
+stampKmodVersion() {
+	local src="$1/src" ver="$2"
+	replaceOneLine "${src}/Makefile" '^WIREGUARD_VERSION = ' "WIREGUARD_VERSION = ${ver}" || return 1
+	replaceOneLine "${src}/dkms.conf" '^PACKAGE_VERSION=' "PACKAGE_VERSION=\"${ver}\"" || return 1
+	replaceOneLine "${src}/version.h" '^#define WIREGUARD_VERSION ' "#define WIREGUARD_VERSION \"${ver}\"" || return 1
+	# Deprecated in DKMS 3 and a pointless initramfs rebuild on every kernel.
+	sed -i '/^REMAKE_INITRD=/d' "${src}/dkms.conf"
+}
+
+# Compat fixes for RHEL-family kernels, applied on top of the pinned tag.
+# RHEL 9.8 and 10.2 backport the 6.16 timer_container_of() macro and RHEL
+# 10.2 the 6.17 netif_threaded_enable(); upstream's compat.h gates its
+# fallbacks on LINUX_VERSION_CODE alone, so on those kernels it redefines
+# timer_container_of to the removed from_timer() and re-declares
+# netif_threaded_enable static, and the build fails (upstream issue
+# amnezia-vpn/amneziawg-linux-kernel-module#173). Guard the first on the
+# macro itself; give the second stub its own symbol. No-op on mainline.
+# Drop this when a pinned tag carries the fix: `git apply` refuses a patch
+# that no longer applies, which fails the install loudly.
+kmodCompatPatch() {
+	cat <<'PATCH'
+diff --git a/src/compat/compat.h b/src/compat/compat.h
+--- a/src/compat/compat.h
++++ b/src/compat/compat.h
+@@ -1297,8 +1297,11 @@ static inline int timer_delete(struct timer_list *timer)
+ #endif
+ 
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 16, 0)
++#include <linux/timer.h>
++#ifndef timer_container_of
+ #define timer_container_of from_timer
+ #endif
++#endif
+ 
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 17, 0)
+ #include <linux/in6.h>
+@@ -1311,6 +1314,7 @@ struct sockaddr_inet {
+ 
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(6, 17, 0)
+ #include <linux/netdevice.h>
++#define netif_threaded_enable __compat_netif_threaded_enable
+ static inline void netif_threaded_enable(struct net_device *dev) { }
+ #endif
+ 
+PATCH
+}
+
+applyKmodPatches() {
+	local tree="$1"
+	kmodCompatPatch | git -C "${tree}" apply --whitespace=nowarn - \
+		|| { error "The RHEL compat patch no longer applies to ${AWG_KMOD_TAG}."; return 1; }
+}
+
+# Version of the amneziawg.ko installed for <kver>, empty if none.
+awgInstalledKmodVersion() {
+	modinfo -k "${1:-$(uname -r)}" -F version amneziawg 2>/dev/null || true
+}
+
+# Version of the module loaded right now, empty if not loaded.
+awgLoadedKmodVersion() {
+	cat /sys/module/amneziawg/version 2>/dev/null || true
+}
+
+# `awg --version` tag, e.g. v3.1.20260812, empty if awg is absent.
+awgToolsTag() {
+	command -v awg >/dev/null 2>&1 || return 0
+	awg --version 2>/dev/null | grep -oE 'v[0-9]+(\.[0-9]+)+' | head -n1 || true
+}
+
+# Every amneziawg version DKMS knows about, one per line.
+awgDkmsVersions() {
+	command -v dkms >/dev/null 2>&1 || return 0
+	dkms status -m amneziawg 2>/dev/null \
+		| sed -nE 's#^amneziawg/([^,: ]+).*#\1#p; s#^amneziawg, ([^,: ]+),.*#\1#p' \
+		| sort -u
+}
+
+awgIsCurrent() {
+	local kver="${1:-$(uname -r)}"
+	[[ "$(awgInstalledKmodVersion "${kver}")" == "${AWG_KMOD_VERSION}" ]] \
+		&& [[ "$(awgToolsTag)" == "${AWG_TOOLS_TAG}" ]]
+}
+
+# Remove the distro-packaged AmneziaWG this installer used to set up (Ubuntu
+# PPA, Debian keyring + PPA list, Fedora/RHEL COPR) and every DKMS version
+# other than the pinned one.
+removeLegacyAmneziaWG() {
+	local -a installed=()
+	local pkg
+	if [[ "${OS}" == 'ubuntu' || "${OS}" == 'debian' ]]; then
+		for pkg in "${AWG_LEGACY_APT_PKGS[@]}"; do
+			dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null | grep -q 'install ok installed' \
+				&& installed+=("${pkg}")
+		done
+		if (( ${#installed[@]} )); then
+			info "Removing distro AmneziaWG packages: ${installed[*]}"
+			apt-get remove -y "${installed[@]}" || return 1
+		fi
+		if [[ -f "${AWG_LEGACY_APT_LIST}" ]] && grep -q 'ppa.launchpadcontent.net/amnezia/ppa' "${AWG_LEGACY_APT_LIST}"; then
+			rm -f "${AWG_LEGACY_APT_LIST}" "${AWG_LEGACY_APT_KEYRING}"
+			info "Removed the Amnezia PPA source ${AWG_LEGACY_APT_LIST}."
+		fi
+		if compgen -G '/etc/apt/sources.list.d/amnezia-ubuntu-ppa*' >/dev/null; then
+			if command -v add-apt-repository >/dev/null 2>&1; then
+				add-apt-repository --remove -y ppa:amnezia/ppa || warn "Could not remove ppa:amnezia/ppa."
+			else
+				rm -f /etc/apt/sources.list.d/amnezia-ubuntu-ppa*
+			fi
+			info "Removed ppa:amnezia/ppa."
+		fi
+	elif is_rpm_family; then
+		for pkg in "${AWG_LEGACY_RPM_PKGS[@]}"; do
+			rpm -q "${pkg}" &>/dev/null && installed+=("${pkg}")
+		done
+		if (( ${#installed[@]} )); then
+			info "Removing distro AmneziaWG packages: ${installed[*]}"
+			# rpm -e, not dnf remove: dnf also autoremoves what these pulled
+			# in as dependencies (dkms, gcc, kernel-devel), which is exactly
+			# the toolchain the source build needs next. Their scriptlets
+			# still run, so the package's own `dkms remove` happens.
+			rpm -e "${installed[@]}" || return 1
+		fi
+		if compgen -G '/etc/yum.repos.d/_copr*amneziavpn*amneziawg*.repo' >/dev/null; then
+			dnf copr disable -y "${AWG_LEGACY_COPR}" 2>/dev/null || true
+			rm -f /etc/yum.repos.d/_copr*amneziavpn*amneziawg*.repo
+			info "Removed the ${AWG_LEGACY_COPR} COPR."
+		fi
 	fi
 
-	local got_fpr
-	got_fpr="$(gpg --show-keys --with-colons "${tmp_asc}" 2>/dev/null | awk -F: '/^fpr:/ { print $10; exit }')"
-	if [[ -z "${got_fpr}" ]]; then
-		rm -f "${tmp_asc}"; die "Unable to read fingerprint from downloaded AmneziaWG APT key."
-	fi
-	if [[ "${got_fpr^^}" != "${AMNEZIAWG_APT_FPR^^}" ]]; then
-		rm -f "${tmp_asc}"
-		die "Downloaded key fingerprint (${got_fpr}) does not match expected (${AMNEZIAWG_APT_FPR}). Aborting."
-	fi
+	local ver
+	while read -r ver; do
+		[[ -z "${ver}" || "${ver}" == "${AWG_KMOD_VERSION}" ]] && continue
+		info "Removing DKMS amneziawg/${ver}."
+		dkms remove -m amneziawg -v "${ver}" --all || warn "dkms remove amneziawg/${ver} failed."
+		rm -rf "/usr/src/amneziawg-${ver}"
+	done < <(awgDkmsVersions)
+}
 
-	local tmp_keyring
-	tmp_keyring="$(mktemp /etc/apt/keyrings/amneziawg.gpg.tmp.XXXXXX)" || {
-		rm -f "${tmp_asc}"; die "Failed to create temp keyring file."; }
-	if ! gpg --dearmor < "${tmp_asc}" > "${tmp_keyring}" 2>/dev/null; then
-		rm -f "${tmp_asc}" "${tmp_keyring}"; die "Failed to import AmneziaWG APT signing key."
+# Register the stamped source with DKMS and build + install it for <kver>.
+installKmodDkms() {
+	local tree="$1" kver="$2"
+	if awgDkmsVersions | grep -qxF "${AWG_KMOD_VERSION}"; then
+		dkms remove -m amneziawg -v "${AWG_KMOD_VERSION}" --all || true
 	fi
-	rm -f "${tmp_asc}"
-	[[ -s "${tmp_keyring}" ]] || { rm -f "${tmp_keyring}"; die "AmneziaWG APT keyring empty after import."; }
-	chmod 644 "${tmp_keyring}"
-	mv "${tmp_keyring}" /etc/apt/keyrings/amneziawg.gpg
+	rm -rf "/usr/src/amneziawg-${AWG_KMOD_VERSION}"
+	make -C "${tree}/src" dkms-install >/dev/null || return 1
+	dkms add -m amneziawg -v "${AWG_KMOD_VERSION}" || return 1
+	if ! dkms build -m amneziawg -v "${AWG_KMOD_VERSION}" -k "${kver}"; then
+		local log
+		log="$(find "/var/lib/dkms/amneziawg/${AWG_KMOD_VERSION}" -name make.log 2>/dev/null | head -n1)"
+		[[ -n "${log}" ]] && { warn "Last 30 lines of ${log}:"; tail -30 "${log}" || true; }
+		return 1
+	fi
+	dkms install -m amneziawg -v "${AWG_KMOD_VERSION}" -k "${kver}" --force
+}
 
-	local list=/etc/apt/sources.list.d/amneziawg.sources.list
-	if [[ ! -f "${list}" ]]; then
-		echo "# Managed by amneziawg-install" > "${list}"
-		chmod 644 "${list}"
+# Swap a loaded module that isn't the pinned build for the new one. Every
+# amneziawg interface pins the module, so the service is stopped and its
+# interfaces deleted first; the service is restarted if it was running.
+reloadAmneziawgModule() {
+	local loaded
+	loaded="$(awgLoadedKmodVersion)"
+	[[ -z "${loaded}" || "${loaded}" == "${AWG_KMOD_VERSION}" ]] && return 0
+
+	warn "Loaded amneziawg module is ${loaded}; reloading ${AWG_KMOD_VERSION}. Tunnels drop briefly."
+	local was_active=false
+	if systemctl is-active --quiet "${SERVICE_NAME}" 2>/dev/null; then
+		was_active=true
+		systemctl stop "${SERVICE_NAME}" || true
 	fi
-	if ! grep -q 'ppa.launchpadcontent.net/amnezia/ppa' "${list}"; then
-		echo "deb [signed-by=/etc/apt/keyrings/amneziawg.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" >> "${list}"
-		echo "deb-src [signed-by=/etc/apt/keyrings/amneziawg.gpg] https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu focal main" >> "${list}"
+	local link
+	while read -r link; do
+		[[ -n "${link}" ]] && ip link delete "${link}" 2>/dev/null || true
+	done < <(ip -o link show type amneziawg 2>/dev/null | awk -F': ' '{ sub(/@.*/, "", $2); print $2 }')
+
+	if ! modprobe -r amneziawg; then
+		warn "Could not unload the old module (still in use?). The new one loads on next reboot."
+	else
+		modprobe amneziawg || warn "modprobe amneziawg failed after unload."
+	fi
+	if [[ "${was_active}" == true ]]; then
+		systemctl start "${SERVICE_NAME}" || warn "Service failed to restart. Inspect: journalctl -u ${SERVICE_NAME} -e"
 	fi
 }
 
-# Install the AmneziaWG kernel module + tools for the detected distro.
+# Install the pinned AmneziaWG kernel module + tools from source.
 installAmneziaWGModule() {
-	step "Installing AmneziaWG kernel module + tools"
+	step "Installing AmneziaWG kernel module ${AWG_KMOD_TAG} + tools ${AWG_TOOLS_TAG}"
 
 	if [[ "${SKIP_MODULE}" == "true" ]]; then
 		warn "--skip-module set; skipping kernel module / tools installation."
 		return 0
 	fi
 
-	if command -v awg >/dev/null 2>&1 && command -v awg-quick >/dev/null 2>&1 \
-		&& lsmod 2>/dev/null | grep -q '^amneziawg '; then
-		info "amneziawg tools + module already present; running self-repair check only."
+	local kver
+	kver="$(uname -r)"
+	if awgIsCurrent "${kver}"; then
+		info "Pinned AmneziaWG module and tools already installed; running self-repair check only."
 		ensureAmneziawgKernelModule || true
+		reloadAmneziawgModule
 		return 0
 	fi
 
-	# RPM family is gated disabled (matches upstream). The code path below stays
-	# for when packages become available, but ensureSupportedInstallDistro exits.
-	ensureSupportedInstallDistro
-
 	enable_apt_ipv4
-	if [[ "${OS}" == 'ubuntu' ]]; then
-		apt-get update || { disable_apt_ipv4; die "Failed to refresh APT package index."; }
-		apt-get install -y software-properties-common || { disable_apt_ipv4; die "Failed to install software-properties-common."; }
-		add-apt-repository -y ppa:amnezia/ppa || { disable_apt_ipv4; die "Failed to add the Amnezia PPA."; }
-		apt-get update || { disable_apt_ipv4; die "Failed to update APT index after adding the Amnezia PPA."; }
-		installKernelHeaders "$(uname -r)"
-		apt-get install -y dkms iptables nftables amneziawg amneziawg-tools qrencode \
-			|| { disable_apt_ipv4; die "Package installation failed. Check connectivity and retry."; }
-	elif [[ "${OS}" == 'debian' ]]; then
-		setupDebianKeyring
-		apt-get update || { disable_apt_ipv4; die "Failed to update package index."; }
-		installKernelHeaders "$(uname -r)"
-		apt-get install -y dkms amneziawg amneziawg-tools qrencode iptables nftables \
-			|| { disable_apt_ipv4; die "Package installation failed. Check connectivity and retry."; }
-	elif [[ "${OS}" == 'fedora' || "${OS}" == 'centos' ]]; then
-		# Reachable only if ensureSupportedInstallDistro is later relaxed.
-		dnf config-manager --set-enabled crb || true
-		dnf install -y epel-release || true
-		dnf copr enable -y amneziavpn/amneziawg || { disable_apt_ipv4; die "Failed to enable the AmneziaWG COPR."; }
-		installKernelHeaders "$(uname -r)"
-		dnf install -y dkms amneziawg-dkms amneziawg-tools qrencode iptables nftables \
-			|| { disable_apt_ipv4; die "Package installation failed. Check connectivity and retry."; }
+	if ! installBuildDeps "${kver}"; then
+		disable_apt_ipv4
+		die "Failed to install build dependencies. Check connectivity and retry."
 	fi
 	disable_apt_ipv4
 
-	sanitizeAwgDkmsConf
-
-	if command -v dkms >/dev/null 2>&1; then
-		dkms autoinstall -k "$(uname -r)" || \
-			warn "dkms autoinstall failed for kernel $(uname -r). The module may not be available until headers are installed and it is rebuilt."
+	# Fetch and build everything that can fail before touching the host's
+	# existing AmneziaWG, so a network or compile error leaves it intact.
+	local work
+	work="$(mktemp -d /tmp/coffeeblack-awg.XXXXXX)" || die "Failed to create a build directory."
+	if ! fetchPinnedSource "${AWG_KMOD_REPO}" "${AWG_KMOD_TAG}" "${AWG_KMOD_SHA}" "${work}/kmod" \
+		|| ! fetchPinnedSource "${AWG_TOOLS_REPO}" "${AWG_TOOLS_TAG}" "${AWG_TOOLS_SHA}" "${work}/tools" \
+		|| ! stampKmodVersion "${work}/kmod" "${AWG_KMOD_VERSION}" \
+		|| ! applyKmodPatches "${work}/kmod" \
+		|| ! make -C "${work}/tools/src"; then
+		rm -rf "${work}"
+		die "Could not prepare AmneziaWG from source; the existing installation was left untouched."
 	fi
+
+	removeLegacyAmneziaWG || { rm -rf "${work}"; die "Failed to remove the distro AmneziaWG packages."; }
+
+	make -C "${work}/tools/src" install PREFIX=/usr WITH_WGQUICK=yes \
+		|| { rm -rf "${work}"; die "Failed to install amneziawg-tools."; }
+	info "Installed amneziawg-tools $(awgToolsTag)."
+
+	if installKmodDkms "${work}/kmod" "${kver}"; then
+		info "Installed amneziawg ${AWG_KMOD_VERSION} via DKMS for kernel ${kver}."
+	else
+		warn "DKMS build of amneziawg ${AWG_KMOD_VERSION} failed for kernel ${kver}."
+		warn "The tools are installed; the kernel data path stays unavailable until the module builds."
+	fi
+	rm -rf "${work}"
+
 	if command -v depmod >/dev/null 2>&1; then
-		depmod -a || warn "depmod -a failed; the module may not load until reboot."
-	fi
-
-	if [[ -z "$(find "/lib/modules/$(uname -r)" -name 'amneziawg.ko*' -print -quit 2>/dev/null)" ]]; then
-		warn "amneziawg kernel module was NOT built for kernel $(uname -r). Kernel headers may be missing or the DKMS build failed."
+		depmod -a "${kver}" || warn "depmod -a failed; the module may not load until reboot."
 	fi
 
 	# Autoload at boot.
@@ -630,8 +820,17 @@ installAmneziaWGModule() {
 	fi
 	chmod 644 "${MODULES_LOAD_CONF}"
 
+	reloadAmneziawgModule
 	# Build + load for the running kernel now (best-effort; non-fatal).
 	ensureAmneziawgKernelModule || true
+
+	local loaded
+	loaded="$(awgLoadedKmodVersion)"
+	if [[ "${loaded}" == "${AWG_KMOD_VERSION}" ]]; then
+		info "amneziawg ${loaded} is loaded."
+	else
+		warn "Loaded amneziawg module: '${loaded:-none}', expected ${AWG_KMOD_VERSION}."
+	fi
 }
 
 # ── Host sysctl ────────────────────────────────────────────────────────────────
@@ -1168,6 +1367,10 @@ cmd_upgrade() {
 	# Refresh the unit if the packaged template changed.
 	install_service_unit
 
+	# Move the module and tools to the pinned versions (a no-op when they
+	# already are); this is how hosts on the old distro packages get fixed.
+	installAmneziaWGModule
+
 	if [[ "${was_active}" == true || "${START_SERVICE}" == true ]]; then
 		if systemctl restart "${SERVICE_NAME}"; then
 			info "Service restarted on the new binary."
@@ -1175,8 +1378,6 @@ cmd_upgrade() {
 			warn "Service failed to restart. Inspect: journalctl -u ${SERVICE_NAME} -e"
 		fi
 	fi
-	# Best-effort self-repair of the module after a possible kernel change.
-	[[ "${SKIP_MODULE}" == "true" ]] || ensureAmneziawgKernelModule || true
 	info "Upgrade complete. Config and database were left untouched."
 }
 
@@ -1230,8 +1431,9 @@ cmd_uninstall() {
 		info "Removed config bridge /etc/amnezia/amneziawg."
 	fi
 
-	warn "The amneziawg kernel module and amneziawg-tools were left installed."
-	warn "Remove them manually if desired (e.g. apt remove -y amneziawg amneziawg-tools)."
+	warn "The amneziawg kernel module and amneziawg-tools were left installed. To remove them:"
+	warn "  dkms remove -m amneziawg -v ${AWG_KMOD_VERSION} --all && rm -rf /usr/src/amneziawg-${AWG_KMOD_VERSION}"
+	warn "  rm -f /usr/bin/awg /usr/bin/awg-quick"
 	info "Uninstall complete."
 }
 
@@ -1255,16 +1457,37 @@ cmd_status() {
 	enabled="$(systemctl is-enabled "${SERVICE_NAME}" 2>/dev/null || echo unknown)"
 	info "Service: active=${active} enabled=${enabled}"
 
-	if command -v awg >/dev/null 2>&1; then
-		info "Tools:   awg $(awg --version 2>/dev/null | head -n1 || echo present)"
-	else
+	local tools_tag
+	tools_tag="$(awgToolsTag)"
+	if [[ -z "${tools_tag}" ]]; then
 		warn "Tools:   awg not found (kernel data path unavailable)"
-	fi
-	if lsmod 2>/dev/null | grep -q '^amneziawg '; then
-		info "Module:  amneziawg loaded"
+	elif [[ "${tools_tag}" == "${AWG_TOOLS_TAG}" ]]; then
+		info "Tools:   awg ${tools_tag}"
 	else
-		warn "Module:  amneziawg NOT loaded"
+		warn "Tools:   awg ${tools_tag} (pinned ${AWG_TOOLS_TAG}; run: $0 upgrade)"
 	fi
+
+	local loaded installed
+	loaded="$(awgLoadedKmodVersion)"
+	installed="$(awgInstalledKmodVersion)"
+	if [[ -z "${loaded}" ]]; then
+		warn "Module:  amneziawg NOT loaded (installed: ${installed:-none})"
+	elif [[ "${loaded}" == "${AWG_KMOD_VERSION}" ]]; then
+		info "Module:  amneziawg ${loaded} loaded"
+	else
+		# 1.0.0 is what every distro build reports, whatever its generation.
+		warn "Module:  amneziawg ${loaded} loaded (pinned ${AWG_KMOD_VERSION}; run: $0 upgrade)"
+	fi
+	# The generic-netlink family version is the module's real generation:
+	# 1 = pre-2.0, 2 = AWG 2, 3 = AWG 3. Same signal the service reports.
+	if [[ -n "${loaded}" ]] && command -v genl >/dev/null 2>&1; then
+		local genl_ver
+		genl_ver="$(genl ctrl get name amneziawg 2>/dev/null | grep -oE 'version: (0x)?[0-9a-f]+' | awk '{ print $2 }')"
+		[[ -n "${genl_ver}" ]] && info "Netlink: amneziawg family version $((genl_ver))"
+	fi
+	local dkms_vers
+	dkms_vers="$(awgDkmsVersions | paste -sd ' ' -)"
+	[[ -n "${dkms_vers}" ]] && info "DKMS:    amneziawg ${dkms_vers}"
 	if ip link show cb0 >/dev/null 2>&1; then
 		info "Iface:   cb0 present"
 	else
@@ -1288,4 +1511,7 @@ main() {
 	esac
 }
 
-main "$@"
+# Sourcing the script (tests, debugging) defines the functions without running.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	main "$@"
+fi

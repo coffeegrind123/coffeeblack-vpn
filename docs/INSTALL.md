@@ -56,22 +56,55 @@ environment variables (`INIT_PASSWORD`, `INIT_HOST`, `PORT`, `HOST`, …).
 ## Prerequisites
 
 - A **systemd** Linux host on one of the supported distros:
-  - Debian ≥ 11, Ubuntu ≥ 22.04, Linux Mint ≥ 21 — **fully supported**
-    (apt `ppa:amnezia/ppa` + DKMS; Debian uses a manually verified keyring).
-  - Fedora ≥ 39, CentOS/AlmaLinux/Rocky ≥ 9 — the dnf COPR
-    (`amneziavpn/amneziawg`) + `amneziawg-dkms` path is present but
-    **temporarily disabled** upstream because verified AmneziaWG 2.0 RPMs are not
-    yet published. Management/uninstall on an existing install still work.
+  - Debian ≥ 11, Ubuntu ≥ 22.04, Linux Mint ≥ 21
+  - Fedora ≥ 39, CentOS Stream/AlmaLinux/Rocky ≥ 9 (EPEL is enabled for `dkms`)
 - **Root** (`sudo`).
 - Not inside **OpenVZ** or **LXC** (the kernel module must load on the host; the
   installer refuses these).
 - Outbound network access to the distro repos and, unless you build or supply
   the binary yourself, to GitHub releases.
 
-The installer pulls in kernel headers and DKMS so the `amneziawg` module builds
-for your running kernel. On some VPS providers IPv6 resolves but is unreachable;
+The installer pulls in a C toolchain, kernel headers and DKMS so the `amneziawg`
+module builds for your running kernel (see [AmneziaWG kernel module and
+tools](#amneziawg-kernel-module-and-tools)). On some VPS providers IPv6 resolves but is unreachable;
 the installer transparently forces IPv4 for package operations while it runs and
 reverts that afterwards.
+
+---
+
+## AmneziaWG kernel module and tools
+
+The installer builds both from pinned upstream tags rather than distro
+packages, on every supported distro:
+
+| Component | Pin | Installed as |
+|---|---|---|
+| `amneziawg-linux-kernel-module` | `AWG_KMOD_TAG` / `AWG_KMOD_SHA` in `install.sh` | DKMS package `amneziawg/<version>`, rebuilt automatically on kernel upgrades |
+| `amneziawg-tools` (`awg`, `awg-quick`) | `AWG_TOOLS_TAG` / `AWG_TOOLS_SHA`, equal to the `Dockerfile`'s | `/usr/bin` |
+
+Each tag is cloned and its commit SHA checked before anything is built. The
+module's version string is stamped with the tag, so `modinfo -F version
+amneziawg` reports e.g. `3.1.20260906`; upstream builds, including the PPA's,
+always say `1.0.0`.
+
+Why not the distro packages: the Fedora/RHEL COPR stopped at a pre-2.0 module
+(`amneziawg-dkms 1.0.20241112`) that rejects the `S3`/`S4` and `H1`–`H4` range
+settings every generated config contains, and the Ubuntu PPA is unversioned.
+
+`install` and `upgrade` both migrate hosts set up by older releases: the PPA or
+COPR packages and repositories are removed, older DKMS versions are deleted,
+and a loaded module that isn't the pinned build is reloaded. **Tunnels drop for
+a few seconds while the module reloads.** When the host is already on the
+pins, both commands only run the self-repair check.
+
+RHEL 9.8 and 10.2 backport kernel timer and NAPI APIs that the upstream compat
+layer doesn't expect; the installer applies a small compat patch so the module
+builds there (upstream issue
+[#173](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module/issues/173)).
+
+The service checks the loaded module's generation at runtime, from its
+generic-netlink family version, and the admin UI flags a module older than
+AWG 3 (Admin → Interface).
 
 ---
 
@@ -115,7 +148,9 @@ sudo ./scripts/install.sh install --skip-module
 ### upgrade
 
 Replace the installed binary (download / rebuild / `--binary-src`), refresh the
-service unit, and restart. **Config and the database are left untouched.**
+service unit, bring the AmneziaWG module and tools to the pinned versions (see
+[above](#amneziawg-kernel-module-and-tools)), and restart. **Config and the
+database are left untouched.**
 
 ```bash
 sudo ./scripts/install.sh upgrade                     # latest release
@@ -136,12 +171,20 @@ sudo ./scripts/install.sh uninstall --force         # no confirmation
 ```
 
 The `amneziawg` kernel module and `amneziawg-tools` are intentionally **left
-installed** (other tooling may rely on them); remove them by hand if you want
-(`sudo apt remove -y amneziawg amneziawg-tools`).
+installed** (other tooling may rely on them). To remove them by hand, with the
+version `status` reports under DKMS:
+
+```bash
+sudo dkms remove -m amneziawg -v <version> --all
+sudo rm -rf /usr/src/amneziawg-<version> /usr/bin/awg /usr/bin/awg-quick
+```
 
 ### status
 
-Report install/service/module health at a glance.
+Report install/service/module health at a glance, including the loaded and
+installed module versions against the pins, the module's netlink family version
+(1 = pre-2.0, 2 = AWG 2, 3 = AWG 3; needs `genl` from iproute2) and what DKMS
+holds.
 
 ```bash
 sudo ./scripts/install.sh status
@@ -377,7 +420,12 @@ apt/dnf while it runs; if you hit it outside the installer, prefer IPv4 (`curl -
 The `Secure` cookie needs HTTPS. Put a TLS proxy in front, or set `INSECURE=true`
 (trusted LAN only) and restart.
 
-**Fedora / RHEL family refuses to install the module.**
-That path is intentionally gated off upstream until verified AmneziaWG 2.0 RPMs
-ship. Use a Debian/Ubuntu host, or `--skip-module` if you have a working module
-from another source.
+**The admin UI says the kernel module predates AWG 3 (or AWG 2.0).**
+The host is still on a distro-packaged module. Run `sudo ./scripts/install.sh
+upgrade`, then check `sudo ./scripts/install.sh status`.
+
+**The DKMS build fails.**
+The installer prints the tail of DKMS's `make.log`. The usual cause is missing
+headers for the running kernel; on the RHEL family `kernel-devel` must match
+`uname -r` exactly, so reboot into the newest kernel first if a kernel update is
+pending.
