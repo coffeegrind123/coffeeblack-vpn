@@ -1,5 +1,10 @@
 # awg-easy Comprehensive Analysis for Rust Rewrite
 
+> **Historical.** This describes the upstream awg-easy project (Nuxt/Node) as it
+> was analysed before the Rust rewrite, not coffeeblack-vpn. For the current
+> build see the [`Dockerfile`](Dockerfile) and [docs/BUILDING.md](docs/BUILDING.md);
+> for the current design see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Overview
 awg-easy is an AmneziaWG VPN + Web UI management tool. It's a fork of wg-easy.
 Runs as a single Docker container. Manages an AmneziaWG (or WireGuard) interface
