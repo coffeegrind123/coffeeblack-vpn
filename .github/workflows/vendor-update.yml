@@ -1,0 +1,95 @@
+name: Vendor update
+
+# Bumps vendored binaries on the runner instead of a workstation (see
+# CLAUDE.md, "Upstream upgrade protocol"). The pin files carry a SHA-256 of
+# the binary vendor/update.sh produces, and tor and the Go transports are not
+# bit-reproducible across machines, so a pin can only be derived by building.
+#
+# The run seeds the blob cache that build-release.yml restores, under the
+# digest of the NEW pins, so the release that follows the pin commit ships
+# exactly the bytes reviewed here instead of a fresh, differently-hashed
+# rebuild. Review the uploaded pin files, commit them unchanged, then push.
+#
+#   gh workflow run vendor-update.yml -f binaries="tor=0.4.9.13 telemt=3.5.13"
+
+on:
+  workflow_dispatch:
+    inputs:
+      binaries:
+        description: 'Space-separated name=version pairs (names as in vendor/update.sh), e.g. "tor=0.4.9.13 telemt=3.5.13"'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # minisign verifies dnscrypt-proxy's signature in vendor/update.sh; see
+      # build-release.yml for why ALLOW_UNVERIFIED_VENDOR is not an option.
+      - name: Install minisign
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+
+      # Same digest build-release.yml computes: pin VALUES only, sorted.
+      - name: Compute current pin digest
+        id: before
+        run: |
+          digest="$(cat vendor/*_VERSION | grep -vE '^[[:space:]]*#|^[[:space:]]*$' \
+                    | sort | sha256sum | cut -d' ' -f1)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # The cache entry is a single set of every blob, so start from the
+      # current one; anything it lacks is rebuilt by the next step.
+      - name: Restore current vendor blobs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: vendor/*.gz
+          key: vendor-${{ runner.os }}-${{ steps.before.outputs.digest }}
+
+      - name: Materialise unchanged blobs
+        run: bash scripts/build.sh --vendor-only
+
+      - name: Bump requested binaries
+        env:
+          BINARIES: ${{ inputs.binaries }}
+        run: |
+          set -euo pipefail
+          for pair in $BINARIES; do
+            name="${pair%%=*}"
+            version="${pair#*=}"
+            if [ -z "$name" ] || [ "$name" = "$pair" ] || [ -z "$version" ]; then
+              echo "::error::bad pair '$pair'; expected name=version"
+              exit 1
+            fi
+            bash vendor/update.sh "$name" "$version"
+          done
+          git diff --stat -- vendor/
+          git diff -- 'vendor/*_VERSION'
+
+      - name: Compute new pin digest
+        id: after
+        run: |
+          digest="$(cat vendor/*_VERSION | grep -vE '^[[:space:]]*#|^[[:space:]]*$' \
+                    | sort | sha256sum | cut -d' ' -f1)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "new vendor pin digest: $digest"
+
+      - name: Seed the release build's blob cache
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: vendor/*.gz
+          key: vendor-${{ runner.os }}-${{ steps.after.outputs.digest }}
+
+      - name: Upload pin files for review
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: vendor-pins
+          path: vendor/*_VERSION
+          if-no-files-found: error
