@@ -105,6 +105,24 @@ pub struct PatchUser<'a> {
     pub enabled: Option<bool>,
 }
 
+/// The ad tag to send when creating a user whose stored tag is `db`.
+pub fn create_ad_tag(db: Option<&str>) -> Option<&str> {
+    db
+}
+
+/// The PATCH that moves telemt's live ad tag to `want`, or `None` when
+/// they already agree.
+pub fn ad_tag_patch<'a>(live: Option<&str>, want: Option<&'a str>) -> Option<PatchUser<'a>> {
+    if live == want {
+        return None;
+    }
+    Some(PatchUser {
+        secret: None,
+        ad_tag: Some(want.unwrap_or("")),
+        enabled: None,
+    })
+}
+
 /// `is_alive` returns true when telemt's HTTP API is responding (its
 /// listener is bound and `/v1/health` returns 200). We deliberately
 /// do NOT use `/v1/health/ready` here: that endpoint also checks
@@ -590,6 +608,35 @@ mod tests {
         assert!(v.get("ad_tag").is_none());
         assert_eq!(v.get("enabled").and_then(|e| e.as_bool()), Some(false));
         assert!(v.get("secret").is_none());
+    }
+
+    const TAG: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    // Telemt's PATCH follows JSON Merge Patch: only `null` removes the tag
+    // (`api/patch.rs`), and `""` is a Set that fails its 32-hex check with
+    // 400 (`api/users/update.rs`, 3.5.5 and 3.5.13). Older rows store a
+    // cleared tag as "", so empty must mean "no tag" on our side too.
+    #[test]
+    fn ad_tag_reconcile_clears_with_null_and_treats_empty_as_unset() {
+        assert!(ad_tag_patch(None, Some("")).is_none(), "empty and absent agree");
+        assert!(ad_tag_patch(None, None).is_none());
+        assert!(ad_tag_patch(Some(TAG), Some(TAG)).is_none());
+
+        for want in [None, Some("")] {
+            let v = serde_json::to_value(ad_tag_patch(Some(TAG), want).unwrap()).unwrap();
+            assert!(v.get("user_ad_tag").is_some_and(Value::is_null), "clear must be null: {v}");
+        }
+
+        let v = serde_json::to_value(ad_tag_patch(None, Some(TAG)).unwrap()).unwrap();
+        assert_eq!(v["user_ad_tag"], TAG);
+    }
+
+    #[test]
+    fn create_omits_an_empty_ad_tag() {
+        // telemt's create validates a present tag the same way.
+        assert_eq!(create_ad_tag(Some("")), None);
+        assert_eq!(create_ad_tag(None), None);
+        assert_eq!(create_ad_tag(Some(TAG)), Some(TAG));
     }
 
     #[test]

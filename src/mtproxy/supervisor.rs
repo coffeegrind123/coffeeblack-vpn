@@ -454,7 +454,7 @@ pub async fn reconcile_users_now() -> Result<()> {
                 let req = client::CreateUser {
                     username: &u.username,
                     secret: &u.secret_hex,
-                    ad_tag: u.ad_tag.as_deref(),
+                    ad_tag: client::create_ad_tag(u.ad_tag.as_deref()),
                 };
                 match client::create_user(&req).await {
                     Ok(_) => crate::info!(username = %u.username, "reconcile: created in telemt"),
@@ -481,12 +481,7 @@ pub async fn reconcile_users_now() -> Result<()> {
                 // PATCH the override when our DB value differs.
                 let live_ad_tag = live.get("user_ad_tag").and_then(|v| v.as_str());
                 let want_ad_tag = u.ad_tag.as_deref();
-                if live_ad_tag != want_ad_tag {
-                    let patch = client::PatchUser {
-                        secret: None,
-                        ad_tag: Some(want_ad_tag.unwrap_or("")),
-                        enabled: None,
-                    };
+                if let Some(patch) = client::ad_tag_patch(live_ad_tag, want_ad_tag) {
                     match client::patch_user(&u.username, &patch).await {
                         Ok(_) => crate::info!(
                             username = %u.username,
