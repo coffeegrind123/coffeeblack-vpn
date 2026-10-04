@@ -12,6 +12,9 @@ RUN apk add --no-cache musl-dev pkgconfig
 
 # Copy source
 COPY Cargo.toml Cargo.lock* ./
+# rustup in the base image honours this, so the image compiles with the same
+# pinned rustc as CI and dev instead of whatever rust:1-alpine ships.
+COPY rust-toolchain.toml ./
 COPY build.rs ./build.rs
 COPY src/ ./src/
 COPY static/ ./static/
