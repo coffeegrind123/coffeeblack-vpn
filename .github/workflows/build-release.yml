@@ -145,6 +145,13 @@ jobs:
       - name: Cargo build (musl-static release)
         run: bash scripts/build.sh --cargo-only
 
+      # docker-compose.yml builds the image from this Dockerfile, so it ships
+      # as surely as the binary does and must build before anything is
+      # released. Nothing is pushed. The blobs materialised above are in the
+      # build context, so this is the image an operator would get.
+      - name: Docker image builds
+        run: docker build --pull -t coffeeblack-vpn:ci .
+
       # Inputs for the rest of the steps. `tag` is the canonical
       # version string for this release; `short_hash` is the rev for
       # the release body link.
