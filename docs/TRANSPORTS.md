@@ -23,8 +23,9 @@ transfer rates.
 
 The full 2.x obfuscation set is supported: `Jc` / `Jmin` / `Jmax`, `S1`–`S4`, `H1`–`H4`
 with non-overlapping ranges, and `I1`–`I5` with CPS tag-grammar validation
-(`<b 0xHEX>`, `<r N>`, `<rc N>`, `<rd N>`, `<t>`, `<c>`). `AdvancedSecurity` is a per-peer
-opt-in: on, off, or auto-detected from the H1 magic header.
+(`<b 0xHEX>`, `<r N>`, `<rc N>`, `<rd N>`, `<t>`, `<c>`). The per-peer `AdvancedSecurity`
+setting of AmneziaWG 1.x is gone: since 3.1 every peer uses AWG framing, and generated
+configs no longer carry the line.
 
 Peers get a `.conf` file, a QR code, or a one-time download link.
 
@@ -38,7 +39,8 @@ above the layer nftables sees.
 ### AmneziaWG 3
 
 The bundled `amneziawg-go` and `amneziawg-tools` are 3.x, which adds nine `[Interface]`
-keys on top of the 2.x set. All of them are **off by default, and an unset knob emits no
+keys on top of the 2.x set. In kernel mode the loaded module has to be 3.x as well; the
+admin UI reads its generation and disables the section when it isn't. All of them are **off by default, and an unset knob emits no
 config line at all** — upgrading does not change a single byte of your rendered configs
 until you turn one on.
 

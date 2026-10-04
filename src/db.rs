@@ -306,11 +306,9 @@ pub struct Client {
     pub i5: Option<String>,
     pub dns: Option<String>,
     pub server_endpoint: Option<String>,
-    /// Tri-state per-peer AmneziaWG opt-in:
-    /// - `Some(true)` → emit `AdvancedSecurity = on` in the [Peer] block
-    /// - `Some(false)` → emit `AdvancedSecurity = off`
-    /// - `None` → omit the key entirely; the kernel auto-detects on first
-    ///   handshake by validating the H1 magic header.
+    /// Obsolete per-peer `AdvancedSecurity` flag written by releases before
+    /// AmneziaWG 3.1 support. Still loaded so older databases read
+    /// unchanged; nothing emits it.
     pub advanced_security: Option<bool>,
     /// Free-form text appended to this peer's generated client `[Interface]`
     /// block. When `None`, falls back to `UserConfig::default_additional_config`.
@@ -3034,31 +3032,6 @@ pub fn toggle_client(id: i64, enabled: bool) -> Result<()> {
     let mut fields = UpdateMap::new();
     fields.insert("enabled".into(), bool_to_int(enabled).to_string());
     update_client(id, &fields)
-}
-
-/// Set the per-peer AmneziaWG flag. `None` clears the column to SQL NULL —
-/// emitted configs will then omit the `AdvancedSecurity` line and the
-/// kernel will auto-detect from the H1 magic header.
-pub fn set_client_advanced_security(id: i64, value: Option<bool>) -> Result<()> {
-    let c = conn();
-    let n = match value {
-        Some(b) => c.execute(
-            "UPDATE clients_table \
-             SET advanced_security = ?1, updated_at = datetime('now') \
-             WHERE id = ?2",
-            params![bool_to_int(b), id],
-        )?,
-        None => c.execute(
-            "UPDATE clients_table \
-             SET advanced_security = NULL, updated_at = datetime('now') \
-             WHERE id = ?1",
-            params![id],
-        )?,
-    };
-    if n == 0 {
-        return Err(anyhow!("Client {id} not found"));
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

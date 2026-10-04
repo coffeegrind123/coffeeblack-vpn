@@ -167,16 +167,10 @@ pub fn generate_server_peer(client: &db::Client) -> Result<String> {
             extra.push_str(&format!("\nEndpoint = {}", ep));
         }
     }
-    // Per-peer AmneziaWG opt-in. When set, awg-tools forwards the value to
-    // the kernel's WGPEER_A_ADVANCED_SECURITY netlink attribute. When
-    // unset, the kernel auto-detects from the H1 magic header on the first
-    // incoming handshake (noise.c:601-633).
-    if let Some(adv) = client.advanced_security {
-        extra.push_str(&format!(
-            "\nAdvancedSecurity = {}",
-            if adv { "on" } else { "off" }
-        ));
-    }
+    // No `AdvancedSecurity` line, whatever the row holds: since AmneziaWG 3.1
+    // the kernel module has no per-peer setting (every peer uses AWG
+    // framing), amneziawg-go rejects the key, and amneziawg-tools parses it
+    // but never sends it.
 
     let safe_name = client.name.replace(['\n', '\r'], " ");
 
@@ -269,17 +263,6 @@ pub fn generate_client_config(
     // J1/J2/J3/Itime intentionally not emitted — see note in
     // generate_server_interface() above.
 
-    // From the client's perspective the [Peer] block represents the
-    // server. We're a pure-AmneziaWG deployment, so the client should
-    // always treat the server as advanced. If the operator explicitly set
-    // a tri-state value on the client row we honour it; otherwise default
-    // to `on` (mirrors the server's effective behaviour).
-    let adv_line = match client.advanced_security {
-        Some(true) => "\nAdvancedSecurity = on",
-        Some(false) => "\nAdvancedSecurity = off",
-        None => "\nAdvancedSecurity = on",
-    };
-
     // Free-form [Interface] append (mirrors amnezia-client's
     // additionalClientConfig). Per-client override > UserConfig default.
     let extra_raw = match client.additional_config.as_deref() {
@@ -304,7 +287,7 @@ pub fn generate_client_config(
          PresharedKey = {psk}\n\
          AllowedIPs = {allowed}\n\
          PersistentKeepalive = {ka}\n\
-         Endpoint = {host}:{port}{adv}",
+         Endpoint = {host}:{port}",
         privkey = client.private_key,
         addr = addr,
         mtu = client.mtu,
@@ -318,7 +301,6 @@ pub fn generate_client_config(
         ka = client.persistent_keepalive,
         host = user_config.host,
         port = user_config.port,
-        adv = adv_line,
     ))
 }
 
@@ -641,8 +623,21 @@ mod tests {
         assert!(!cfg.contains("FromDefault"));
         assert!(!cfg.contains("FromPeer"));
         // [Peer] must follow [Interface] directly with one blank-line break.
-        let peer_idx = cfg.find("[Peer]").unwrap();
-        let advsec_idx = cfg.find("AdvancedSecurity = on").unwrap();
-        assert!(advsec_idx > peer_idx, "AdvancedSecurity belongs to [Peer], not [Interface]");
+        assert!(cfg.contains("\n[Peer]\nPublicKey = "), "{cfg}");
+        assert!(!cfg.contains("\n\n"), "{cfg}");
+    }
+
+    #[test]
+    fn configs_never_carry_advanced_security() {
+        // Obsolete since AmneziaWG 3.1: no kernel or userspace implementation
+        // reads it. Rows written by older releases still hold a value.
+        for adv in [Some(true), Some(false), None] {
+            let mut client = client_fixture();
+            client.advanced_security = adv;
+            let cfg = generate_client_config(&iface_fixture(), &user_config_fixture(), &client).unwrap();
+            assert!(!cfg.contains("AdvancedSecurity"), "{adv:?}: {cfg}");
+            let peer = generate_server_peer(&client).unwrap();
+            assert!(!peer.contains("AdvancedSecurity"), "{adv:?}: {peer}");
+        }
     }
 }

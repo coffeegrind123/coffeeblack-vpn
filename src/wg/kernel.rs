@@ -3,17 +3,12 @@
 //!
 //! `awg-quick up` prefers the kernel module (fast path) and falls back
 //! to spawning `amneziawg-go` as a userspace TUN device when the module
-//! isn't present. The two paths are not 100 % feature-equivalent — most
-//! notably, the userspace `amneziawg-go` fallback chokes on a peer with
-//! an explicit `AdvancedSecurity = on|off` line, while the kernel
-//! module auto-detects from the H1 magic header on the first incoming
-//! handshake (see `src/api/clients.rs` per-peer `advanced_security`
-//! comment).
+//! isn't present. Both implement the same AmneziaWG 3 protocol, so the
+//! difference is performance — as long as the module is a 3.x build. An
+//! older module silently narrows what the server can configure, which is
+//! what [`module_gen`] reports.
 //!
-//! The admin UI surfaces this as a status badge next to the
-//! AdvancedSecurity tri-state, and the API response gates the
-//! per-peer setter so an operator running userspace can't accidentally
-//! produce a broken peer config.
+//! The admin UI surfaces both as a status badge on the interface tab.
 //!
 //! Detection prefers, in order:
 //!
@@ -45,26 +40,15 @@ static MODE_OVERRIDE: AtomicU8 = AtomicU8::new(0);
 #[serde(rename_all = "lowercase")]
 pub enum GamingMode {
     /// Kernel module loaded and visible in /sys/module/amneziawg.
-    /// Full feature set — AdvancedSecurity per-peer works, etc.
+    /// What it supports depends on its generation: see [`module_gen`].
     Kernel,
-    /// Kernel module not loaded. awg-quick will fall back to
-    /// `amneziawg-go` userspace, which doesn't support the
-    /// AdvancedSecurity = on|off peer line.
+    /// Kernel module not loaded. awg-quick will fall back to the
+    /// `amneziawg-go` userspace implementation.
     Userspace,
     /// Couldn't determine (non-Linux host, /sys not mounted, etc.).
     /// UI should treat this as "no warnings, but no positive
     /// confirmation either."
     Unknown,
-}
-
-impl GamingMode {
-    /// True when the running mode supports per-peer
-    /// `AdvancedSecurity = on|off`. Userspace and unknown modes
-    /// return false (conservative — for unknown we'd rather suppress
-    /// the option than surprise the operator with a broken handshake).
-    pub fn supports_advanced_security(self) -> bool {
-        matches!(self, GamingMode::Kernel)
-    }
 }
 
 /// Force a specific [`GamingMode`] regardless of the host's real module
@@ -396,16 +380,6 @@ fn genl_family_version(_family: &str) -> anyhow::Result<Option<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn supports_advanced_security_only_when_kernel() {
-        assert!(GamingMode::Kernel.supports_advanced_security());
-        assert!(!GamingMode::Userspace.supports_advanced_security());
-        // Unknown is treated conservatively — refuse the explicit
-        // setting rather than risk a broken peer config when we
-        // can't confirm the host's path.
-        assert!(!GamingMode::Unknown.supports_advanced_security());
-    }
 
     #[test]
     fn detect_returns_a_recognised_variant() {

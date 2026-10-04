@@ -135,10 +135,10 @@ pub struct UpdateClientRequest {
     i3: Option<String>,
     i4: Option<String>,
     i5: Option<String>,
-    /// Per-peer AmneziaWG opt-in. `null` clears any previous override and
-    /// lets the kernel auto-detect; `true`/`false` write `AdvancedSecurity
-    /// = on`/`off` to the [Peer] block. Outer `Option` distinguishes
-    /// "field absent in the JSON" from "field explicitly null".
+    /// Obsolete per-peer `AdvancedSecurity` flag. Still accepted so clients
+    /// written against older releases don't hit `deny_unknown_fields`, but
+    /// ignored: AmneziaWG 3.1 has no per-peer setting. Outer `Option`
+    /// distinguishes "absent" from "explicitly null".
     #[serde(
         rename = "advancedSecurity",
         default,
@@ -230,7 +230,6 @@ fn client_to_json(client: &db::Client, peers: &[wg::cli::PeerDump]) -> Value {
         "i5": client.i5,
         "dns": parse_arr(&client.dns),
         "serverEndpoint": client.server_endpoint,
-        "advancedSecurity": client.advanced_security,
         "additionalConfig": client.additional_config,
         "enabled": client.enabled,
         "createdAt": client.created_at,
@@ -388,11 +387,7 @@ pub async fn create_client(
         i5: None,
         dns: Some(user_config.default_dns.clone()),
         server_endpoint: None,
-        // Default to "auto" (None): the kernel module auto-detects from the
-        // H1 magic header on the first incoming handshake, and the userspace
-        // amneziawg-go fallback chokes on an explicit AdvancedSecurity peer
-        // directive. Operators who want to force the value can flip it
-        // per-peer in the edit page.
+        // Obsolete since AmneziaWG 3.1; never emitted.
         advanced_security: None,
         enabled: true,
     };
@@ -689,7 +684,6 @@ pub async fn update_client(
             (body.pre_down.is_some(), "preDown"),
             (body.post_down.is_some(), "postDown"),
             (body.server_endpoint.is_some(), "serverEndpoint"),
-            (body.advanced_security.is_some(), "advancedSecurity"),
             (body.additional_config.is_some(), "additionalConfig"),
         ];
         if let Some((_, field)) = admin_only.iter().find(|(present, _)| *present) {
@@ -758,46 +752,17 @@ pub async fn update_client(
     if let Some(ref v) = body.i4 { fields.insert("i4".into(), v.clone()); }
     if let Some(ref v) = body.i5 { fields.insert("i5".into(), v.clone()); }
     if let Some(ref v) = body.additional_config { fields.insert("additional_config".into(), v.clone()); }
-    // Tri-state mapping for AdvancedSecurity:
-    //   Some(Some(v)) → write 1/0 via the generic UPDATE
-    //   Some(None)    → write SQL NULL (clears override → kernel auto-detect)
-    //   None          → leave the column untouched
-    //
-    // The generic UPDATE helper takes string values, so only the
-    // Some(Some(_)) case routes through it. The null branch goes through a
-    // dedicated helper that emits a NULL literal.
-    //
-    // Refuse the explicit on|off setting when the host isn't running
-    // the kernel module — userspace amneziawg-go chokes on a peer
-    // line containing `AdvancedSecurity = on|off` and the resulting
-    // handshake silently fails. Operators see this as a clean 4xx
-    // here instead of a peer-side "no handshake" debug session
-    // hours later. Only `Some(Some(_))` triggers the gate; clearing
-    // (Some(None)) and leaving-untouched (None) are always allowed.
-    let null_advanced_security = matches!(body.advanced_security, Some(None));
-    if let Some(Some(b)) = body.advanced_security {
-        let mode = crate::wg::kernel::detect();
-        if !mode.supports_advanced_security() {
-            return Err(api_err(
-                StatusCode::PRECONDITION_FAILED,
-                "advancedSecurity = on|off requires the AmneziaWG kernel \
-                 module; this host is running the userspace amneziawg-go \
-                 fallback. Use 'auto' (null) or load the kernel module first.",
-            ));
-        }
-        fields.insert("advanced_security".into(), if b { "1".into() } else { "0".into() });
+    if body.advanced_security.is_some() {
+        crate::warn!(
+            "client {client_id}: ignoring advancedSecurity; AmneziaWG 3.1 has no per-peer setting"
+        );
     }
 
-    if fields.is_empty() && !null_advanced_security {
+    if fields.is_empty() {
         return Err(api_err(StatusCode::BAD_REQUEST, "No fields to update"));
     }
 
-    if !fields.is_empty() {
-        db::update_client(client_id, &fields).map_err(map_err)?;
-    }
-    if null_advanced_security {
-        db::set_client_advanced_security(client_id, None).map_err(map_err)?;
-    }
+    db::update_client(client_id, &fields).map_err(map_err)?;
     wg::save_config_async().await.map_err(map_err)?;
 
     // Rebuild firewall if enabled

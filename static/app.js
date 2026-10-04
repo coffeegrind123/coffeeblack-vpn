@@ -869,12 +869,6 @@ async function loadClientEdit(id) {
   try {
     const c = await GET('/api/client/' + id);
     if (!c) return;
-    // Fetch gamingMode in parallel with the client — we need it to gate
-    // the AdvancedSecurity tri-state on userspace hosts. .catch on a
-    // separate request so a failed /admin/interface (non-admin user
-    // somehow hitting this path) doesn't blow up the whole edit form.
-    const iface = await GET('/api/admin/interface').catch(() => null);
-    const gamingMode = iface ? iface.gamingMode : 'unknown';
     $('edit-title').textContent = c.name || 'Edit peer';
     $('edit-crumb-name').textContent = c.name || ('peer #' + id);
     const online = isConnected(c.latestHandshakeAt);
@@ -892,21 +886,6 @@ async function loadClientEdit(id) {
     const totalTransfer = (c.transferRx || c.transferTx)
       ? `↓ ${formatBytes(c.transferRx || 0)} · ↑ ${formatBytes(c.transferTx || 0)}`
       : '— no transfer recorded —';
-
-    const advsec = c.advancedSecurity == null ? 'auto' : (c.advancedSecurity ? 'on' : 'off');
-    // AdvancedSecurity: on/off only works on the kernel module.
-    // amneziawg-go (userspace fallback) chokes on an explicit peer
-    // line. Disable the on/off options + show a warning when
-    // gamingMode != 'kernel'.
-    const advsecKernelOnly = gamingMode !== 'kernel';
-    const advsecBadge = gamingMode === 'kernel'
-      ? '<span class="pill pill--ok" title="AmneziaWG kernel module loaded — full feature set available">kernel</span>'
-      : gamingMode === 'userspace'
-        ? '<span class="pill" title="Kernel module not present; awg-quick will fall back to amneziawg-go userspace. AdvancedSecurity = on|off chokes the userspace fallback — use Auto.">userspace</span>'
-        : '<span class="pill" title="Could not determine which AmneziaWG implementation is in use (non-Linux host or /sys not mounted). on|off disabled to avoid producing a broken peer config.">unknown</span>';
-    const advsecHelp = gamingMode === 'kernel'
-      ? ''
-      : '<p class="field-help">on/off disabled — userspace amneziawg-go doesn\'t accept explicit AdvancedSecurity peer lines. Auto is universally safe.</p>';
 
     $('edit-form').innerHTML = `
       <div class="split" style="margin-top:8px">
@@ -1052,18 +1031,6 @@ async function loadClientEdit(id) {
             </div>
           </div>
           <div class="field" style="margin-top:14px">
-            <label class="field-label" for="edit-advsec" title="Per-peer AmneziaWG opt-in. 'On' = emit AdvancedSecurity = on; 'Off' = emit AdvancedSecurity = off; 'Auto' = let the kernel auto-detect from the H1 magic header on the first incoming handshake.">
-              AdvancedSecurity
-              <span style="margin-left:8px">${advsecBadge}</span>
-            </label>
-            <select id="edit-advsec" style="max-width:280px">
-              <option value="auto" ${advsec === 'auto' ? 'selected' : ''}>Auto (kernel detects)</option>
-              <option value="on"  ${advsec === 'on'  ? 'selected' : ''} ${advsecKernelOnly ? 'disabled' : ''}>On — force enable${advsecKernelOnly ? ' (kernel only)' : ''}</option>
-              <option value="off" ${advsec === 'off' ? 'selected' : ''} ${advsecKernelOnly ? 'disabled' : ''}>Off — force disable${advsecKernelOnly ? ' (kernel only)' : ''}</option>
-            </select>
-            ${advsecHelp}
-          </div>
-          <div class="field" style="margin-top:14px">
             <label class="field-label" for="edit-extra" title="Free-form text appended verbatim to this peer's [Interface] block. Empty falls back to the admin default.">Additional config <span class="opt">overrides default</span></label>
             <textarea id="edit-extra" rows="3" placeholder="(inherit default)">${esc(c.additionalConfig || '')}</textarea>
           </div>
@@ -1108,11 +1075,6 @@ async function saveClient(id) {
     jMin: $('edit-jmin').value ? parseInt($('edit-jmin').value) : null,
     jMax: $('edit-jmax').value ? parseInt($('edit-jmax').value) : null,
   };
-  // AdvancedSecurity tri-state
-  const advsec = $('edit-advsec').value;
-  if (advsec === 'on') body.advancedSecurity = true;
-  else if (advsec === 'off') body.advancedSecurity = false;
-  else if (advsec === 'auto') body.advancedSecurity = null;
   // additionalConfig is always sent (admins-only on the server side); empty
   // string clears the per-peer override and falls back to the UC default.
   body.additionalConfig = $('edit-extra').value;
@@ -1320,15 +1282,14 @@ async function showAdminTab(tab, e) {
     } else if (tab === 'interface') {
       const iface = await GET('/api/admin/interface');
       // Top-of-tab status row: which AmneziaWG path the host is
-      // actually using. Kernel = full feature set; userspace =
-      // amneziawg-go fallback (per-peer AdvancedSecurity = on|off
-      // is unavailable); unknown = couldn't probe (non-Linux dev
-      // host, /sys not mounted).
+      // actually using. Kernel = in-kernel module (see moduleGen for its
+      // generation); userspace = amneziawg-go fallback; unknown = couldn't
+      // probe (non-Linux dev host, /sys not mounted).
       const gamingMode = iface.gamingMode || 'unknown';
       const modeBadge = gamingMode === 'kernel'
         ? '<span class="pill pill--ok" title="/sys/module/amneziawg present — handshakes go through the in-kernel implementation">Kernel module</span>'
         : gamingMode === 'userspace'
-          ? '<span class="pill" title="Kernel module not loaded; awg-quick will use the amneziawg-go userspace TUN fallback. Per-peer AdvancedSecurity = on|off is disabled in this mode.">Userspace (amneziawg-go)</span>'
+          ? '<span class="pill" title="Kernel module not loaded; awg-quick will use the amneziawg-go userspace TUN fallback.">Userspace (amneziawg-go)</span>'
           : '<span class="pill" title="Could not detect — non-Linux host or /sys not mounted">Unknown</span>';
       // Generation of the loaded module, from its generic-netlink family
       // version. Only meaningful in kernel mode: userspace runs the image's

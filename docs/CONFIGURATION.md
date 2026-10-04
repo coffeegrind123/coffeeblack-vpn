@@ -111,7 +111,6 @@ Stored in SQLite and edited in the admin panel, not through the environment:
   [Activity history](SECURITY.md#activity-history-and-privacy).
 - AmneziaWG 2.x parameters: `Jc`/`Jmin`/`Jmax`, `S1`–`S4`, `H1`–`H4`, `I1`–`I5`
 - AmneziaWG 3 device knobs — see [AmneziaWG 3](TRANSPORTS.md#amneziawg-3)
-- Per-client `AdvancedSecurity`: on, off, or auto-detect
 - Per-client firewall rules
 - Free-form `additional_config` append for the AmneziaWG `[Interface]`, server and per-peer
 - DNS lockdown: master switch, redirect target IP, drop-residual toggle

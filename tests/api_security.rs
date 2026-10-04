@@ -1533,86 +1533,67 @@ async fn pre2_kernel_module_is_reported_and_blocks_the_awg3_gate() {
 }
 
 // ---------------------------------------------------------------------------
-// AdvancedSecurity per-peer flag
+// AdvancedSecurity (obsolete since AmneziaWG 3.1)
 // ---------------------------------------------------------------------------
+//
+// The 3.1 kernel module has no per-peer advanced security (every peer uses
+// AWG framing), amneziawg-go 3.1 has no UAPI key for it, and amneziawg-tools
+// 3.1 parses the line but never sends it. Configs no longer carry it and the
+// API ignores it; the DB column stays so older databases load unchanged.
 
 #[tokio::test]
 #[serial(db)]
-async fn new_client_defaults_to_advanced_security_auto() {
+async fn generated_configs_never_carry_advanced_security() {
     seed();
-    create_user("admin", "adminpass", 1);
-    let app = router();
-    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
-
-    let body = json!({ "name": "fresh-peer" });
-    let (status, resp) = post(&app, "/api/client", &cookie, &body).await;
-    assert_eq!(status, StatusCode::OK);
-
-    let id = resp["clientId"].as_i64().unwrap();
-    let c = db::get_client(id).unwrap();
-    // Default is None ("auto") — the kernel auto-detects from H1, and the
-    // userspace amneziawg-go rejects an explicit AdvancedSecurity directive.
-    assert_eq!(c.advanced_security, None);
-}
-
-#[tokio::test]
-#[serial(db)]
-async fn admin_can_toggle_advanced_security_off() {
-    seed();
-    // Setting advancedSecurity = on|off is gated on the kernel module being
-    // loaded. CI runners (and this dev host) never have it, so pin Kernel
-    // mode for this test. `#[serial(db)]` keeps the override from racing
-    // other tests; restore it before returning.
-    use coffeeblack_vpn::wg::kernel::{set_mode_override, GamingMode};
-    set_mode_override(Some(GamingMode::Kernel));
     let admin_id = create_user("admin", "adminpass", 1);
-    let cid = create_client(Some(admin_id), "p1", "10.8.0.10");
-    let app = router();
-    let cookie = login_get_cookie(&app, "admin", "adminpass").await;
+    // create_client stores advanced_security = Some(true), the value older
+    // releases wrote; cover Some(false) too.
+    let cid_on = create_client(Some(admin_id), "peer-on", "10.8.0.10");
+    let cid_off = create_client(Some(admin_id), "peer-off", "10.8.0.11");
+    let mut fields = db::UpdateMap::new();
+    fields.insert("advanced_security".into(), "0".into());
+    db::update_client(cid_off, &fields).unwrap();
+    assert_eq!(db::get_client(cid_off).unwrap().advanced_security, Some(false));
 
-    let body = json!({ "advancedSecurity": false });
-    let (status, _) = post(&app, &format!("/api/client/{cid}"), &cookie, &body).await;
-    set_mode_override(None);
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(db::get_client(cid).unwrap().advanced_security, Some(false));
+    let iface = db::get_interface().unwrap();
+    let uc = db::get_user_config().unwrap();
+    for cid in [cid_on, cid_off] {
+        let c = db::get_client(cid).unwrap();
+        let server = coffeeblack_vpn::wg::config_gen::generate_server_peer(&c).unwrap();
+        let client = coffeeblack_vpn::wg::config_gen::generate_client_config(&iface, &uc, &c).unwrap();
+        assert!(!server.contains("AdvancedSecurity"), "server peer {cid}: {server}");
+        assert!(!client.contains("AdvancedSecurity"), "client config {cid}: {client}");
+        assert!(extract_block(&format!("{server}\n"), cid).contains("[Peer]"));
+    }
 }
 
 #[tokio::test]
 #[serial(db)]
-async fn admin_can_set_advanced_security_to_null() {
+async fn advanced_security_in_an_update_is_accepted_and_ignored() {
     seed();
     let admin_id = create_user("admin", "adminpass", 1);
     let cid = create_client(Some(admin_id), "p1", "10.8.0.10");
     let app = router();
     let cookie = login_get_cookie(&app, "admin", "adminpass").await;
 
-    // Explicit JSON null clears the column → kernel auto-detect.
-    let body = json!({ "advancedSecurity": Value::Null });
+    // Scripts written against older releases still send the field; they
+    // must not start failing on it, and it must not change anything.
+    let body = json!({ "name": "renamed", "advancedSecurity": false });
     let (status, _) = post(&app, &format!("/api/client/{cid}"), &cookie, &body).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(db::get_client(cid).unwrap().advanced_security, None);
+    let c = db::get_client(cid).unwrap();
+    assert_eq!(c.name, "renamed");
+    assert_eq!(c.advanced_security, Some(true), "column untouched");
+
+    // Alone it is not an update.
+    let (status, _) =
+        post(&app, &format!("/api/client/{cid}"), &cookie, &json!({ "advancedSecurity": Value::Null })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 #[serial(db)]
-async fn non_admin_cannot_change_advanced_security() {
-    seed();
-    let user_id = create_user("alice", "passpass", 0);
-    let cid = create_client(Some(user_id), "alice-c", "10.8.0.10");
-    let app = router();
-    let cookie = login_get_cookie(&app, "alice", "passpass").await;
-
-    let body = json!({ "advancedSecurity": false });
-    let (status, resp) = post(&app, &format!("/api/client/{cid}"), &cookie, &body).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert!(resp["error"].as_str().unwrap().contains("admin"));
-    // Untouched.
-    assert_eq!(db::get_client(cid).unwrap().advanced_security, Some(true));
-}
-
-#[tokio::test]
-#[serial(db)]
-async fn admin_get_returns_advanced_security_field() {
+async fn client_get_no_longer_reports_advanced_security() {
     seed();
     let admin_id = create_user("admin", "adminpass", 1);
     let cid = create_client(Some(admin_id), "p1", "10.8.0.10");
@@ -1621,65 +1602,7 @@ async fn admin_get_returns_advanced_security_field() {
 
     let (status, body) = get_req(&app, &format!("/api/client/{cid}"), &cookie).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["advancedSecurity"], json!(true));
-}
-
-#[tokio::test]
-#[serial(db)]
-async fn server_config_emits_advanced_security_for_each_peer() {
-    seed();
-    let admin_id = create_user("admin", "adminpass", 1);
-    let cid_on = create_client(Some(admin_id), "peer-on", "10.8.0.10");
-    let cid_off = create_client(Some(admin_id), "peer-off", "10.8.0.11");
-    db::set_client_advanced_security(cid_off, Some(false)).unwrap();
-    let cid_auto = create_client(Some(admin_id), "peer-auto", "10.8.0.12");
-    db::set_client_advanced_security(cid_auto, None).unwrap();
-
-    let iface = db::get_interface().unwrap();
-    let hooks = db::get_hooks().unwrap();
-    let mut server_cfg =
-        coffeeblack_vpn::wg::config_gen::generate_server_interface(&iface, &hooks).unwrap();
-    for client in db::get_all_clients().unwrap() {
-        if client.enabled {
-            server_cfg.push_str("\n\n");
-            server_cfg.push_str(
-                &coffeeblack_vpn::wg::config_gen::generate_server_peer(&client).unwrap(),
-            );
-        }
-    }
-    // peer-on: explicit On
-    assert!(
-        server_cfg.contains(&format!("# Client: peer-on ({cid_on})\n[Peer]"))
-            && extract_block(&server_cfg, cid_on).contains("AdvancedSecurity = on"),
-        "expected AdvancedSecurity = on for peer-on"
-    );
-    // peer-off: explicit Off
-    assert!(
-        extract_block(&server_cfg, cid_off).contains("AdvancedSecurity = off"),
-        "expected AdvancedSecurity = off for peer-off"
-    );
-    // peer-auto: line must be omitted entirely
-    assert!(
-        !extract_block(&server_cfg, cid_auto).contains("AdvancedSecurity"),
-        "expected no AdvancedSecurity line for peer-auto"
-    );
-}
-
-#[tokio::test]
-#[serial(db)]
-async fn client_config_always_marks_server_as_advanced() {
-    seed();
-    let admin_id = create_user("admin", "adminpass", 1);
-    let cid = create_client(Some(admin_id), "p1", "10.8.0.10");
-
-    let iface = db::get_interface().unwrap();
-    let uc = db::get_user_config().unwrap();
-    let c = db::get_client(cid).unwrap();
-    let cfg = coffeeblack_vpn::wg::config_gen::generate_client_config(&iface, &uc, &c).unwrap();
-    // Pure-AmneziaWG: client-side [Peer] always marks the server as
-    // advanced (default-on, kernel auto-detect would also work but we
-    // make it explicit).
-    assert!(cfg.contains("AdvancedSecurity = on"), "client config: {cfg}");
+    assert!(body.get("advancedSecurity").is_none(), "{body}");
 }
 
 // Helper for the server-config emit test above. Pulls the [Peer] block
