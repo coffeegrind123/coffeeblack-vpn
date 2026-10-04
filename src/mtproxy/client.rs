@@ -72,7 +72,8 @@ pub struct UserPayload {
     /// on the wire — in responses *and* in POST/PATCH request bodies.
     /// It ignores unknown keys silently (a body with `ad_tag` returns
     /// 2xx with `user_ad_tag: null`), so the rename is load-bearing:
-    /// verified against telemt 3.4.24 and 3.5.5.
+    /// verified against telemt 3.4.24 and 3.5.5, and unchanged in the
+    /// 3.5.13 source (`src/api/model/users.rs`).
     #[serde(default, rename = "user_ad_tag")]
     pub ad_tag: Option<String>,
     /// `tg://proxy?...` links pre-rendered by telemt. We pass them
