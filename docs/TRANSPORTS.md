@@ -115,6 +115,25 @@ individually. The supervisor handles SIGHUP reload, SIGTERM with a 10 s grace pe
 capped exponential backoff on crash. A free-form `additional_config` JSON object is
 deep-merged into the inbound if you need something the UI does not expose.
 
+### Links for restricted networks
+
+Every peer has one main link: the first server name, at the configured host. The peer
+page also lists extra links under **Restricted networks** for networks that only let some
+traffic through — in-flight "free messaging" Wi-Fi and hotel portals that whitelist by
+SNI and block DNS:
+
+- **One per additional server name.** Add names on the Browsing admin tab; each must be a
+  SAN on the `dest` certificate, because they all share one `dest`. A portal that only
+  checks the SNI passes the Reality handshake when the SNI is on its list.
+- **One per public IP the host resolves to**, when the host is a domain. The client
+  connects to the IP literal, so a portal that blocks DNS can't stop it before the
+  handshake. The host is resolved on the server; private and reserved answers
+  (split-horizon DNS) are dropped.
+
+`/api/xray/clients/:id/variants` lists them; `/share`, `/qrcode.svg` and `/json` take
+`?sni=<server name>&addr=<ip>` to render one. An unknown SNI, or an address the host does
+not resolve to, is a 400.
+
 ### Why bundle the Xray binary?
 
 Reality + Vision is non-trivial and there is no production-quality Rust reimplementation.

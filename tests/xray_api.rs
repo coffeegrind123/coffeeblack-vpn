@@ -576,6 +576,7 @@ async fn share_artifacts_forbid_caching() {
         format!("/api/xray/clients/{id}/share"),
         format!("/api/xray/clients/{id}/qrcode.svg"),
         format!("/api/xray/clients/{id}/json"),
+        format!("/api/xray/clients/{id}/variants"),
     ] {
         let req = Request::builder()
             .method("GET")
@@ -600,3 +601,147 @@ async fn share_artifacts_forbid_caching() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Share variants (extra SNIs, IP-literal hosts)
+// ---------------------------------------------------------------------------
+
+/// Admin, keypair, two server names, and one peer; returns (app, cookie, id).
+async fn variant_fixture(host: &str) -> (coffeeblack_vpn::http::Router, String, i64) {
+    seed();
+    let _admin = create_admin();
+    let app = router();
+    let cookie = login(&app, "admin", "adminpass").await;
+
+    db::update_xray_keypair("PRIV", "PUB").unwrap();
+    db::update_host_port(host, 51820).unwrap();
+    let (status, _) = json_post(
+        &app,
+        "/api/admin/xray/inbound",
+        &cookie,
+        json!({"serverNames": ["www.microsoft.com", "learn.microsoft.com"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, c) = json_post(&app, "/api/xray/clients", &cookie, json!({"name": "alice"})).await;
+    (app, cookie, c["id"].as_i64().unwrap())
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn variants_list_one_link_per_server_name() {
+    let (app, cookie, id) = variant_fixture("203.0.113.7").await;
+
+    let (status, body) = json_get(&app, &format!("/api/xray/clients/{id}/variants"), &cookie).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // The host is already an IP literal: no address variants, no note.
+    assert!(body["resolveNote"].is_null(), "{body}");
+    let variants = body["variants"].as_array().unwrap();
+    assert_eq!(variants.len(), 2, "{body}");
+
+    assert_eq!(variants[0]["primary"], true);
+    assert_eq!(variants[0]["label"], "alice");
+    let (_, primary_url) = raw_get(&app, &format!("/api/xray/clients/{id}/share"), &cookie).await;
+    assert_eq!(variants[0]["url"], primary_url.as_str());
+
+    assert_eq!(variants[1]["primary"], false);
+    assert_eq!(variants[1]["sni"], "learn.microsoft.com");
+    assert_eq!(variants[1]["label"], "alice · learn.microsoft.com");
+    assert!(variants[1]["addr"].is_null());
+    assert!(variants[1]["url"].as_str().unwrap().contains("&sni=learn.microsoft.com&"));
+}
+
+#[tokio::test]
+#[serial(db)]
+async fn share_endpoints_honour_sni_query() {
+    let (app, cookie, id) = variant_fixture("203.0.113.7").await;
+
+    let (status, url) =
+        raw_get(&app, &format!("/api/xray/clients/{id}/share?sni=learn.microsoft.com"), &cookie).await;
+    assert_eq!(status, StatusCode::OK, "{url}");
+    assert!(url.contains("&sni=learn.microsoft.com&"), "{url}");
+
+    let (status, cfg) =
+        json_get(&app, &format!("/api/xray/clients/{id}/json?sni=learn.microsoft.com"), &cookie).await;
+    assert_eq!(status, StatusCode::OK, "{cfg}");
+    assert_eq!(
+        cfg["outbounds"][0]["streamSettings"]["realitySettings"]["serverName"],
+        "learn.microsoft.com"
+    );
+
+    let (status, svg) =
+        raw_get(&app, &format!("/api/xray/clients/{id}/qrcode.svg?sni=learn.microsoft.com"), &cookie).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(svg.contains("<svg"));
+}
+
+/// An SNI the Reality server would refuse is the caller's mistake: 400,
+/// not a 500 and not a link that can never connect.
+#[tokio::test]
+#[serial(db)]
+async fn share_rejects_unknown_sni() {
+    let (app, cookie, id) = variant_fixture("203.0.113.7").await;
+    for path in [
+        format!("/api/xray/clients/{id}/share?sni=whatsapp.com"),
+        format!("/api/xray/clients/{id}/qrcode.svg?sni=whatsapp.com"),
+        format!("/api/xray/clients/{id}/json?sni=whatsapp.com"),
+    ] {
+        let (status, body) = raw_get(&app, &path, &cookie).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {body}");
+    }
+}
+
+/// `addr` must be a public address of the configured host — otherwise
+/// the endpoint would mint links pointing anywhere the caller likes.
+#[tokio::test]
+#[serial(db)]
+async fn share_rejects_addr_not_from_host() {
+    let (app, cookie, id) = variant_fixture("203.0.113.7").await;
+    for addr in ["198.51.100.9", "203.0.113.7", "not-an-ip"] {
+        let path = format!("/api/xray/clients/{id}/share?addr={addr}");
+        let (status, body) = raw_get(&app, &path, &cookie).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {body}");
+    }
+}
+
+/// A host that resolves only to private/loopback addresses on the server
+/// (split-horizon DNS) yields no IP links, and says why.
+#[tokio::test]
+#[serial(db)]
+async fn variants_skip_private_resolutions() {
+    let (app, cookie, id) = variant_fixture("localhost").await;
+
+    let (status, body) = json_get(&app, &format!("/api/xray/clients/{id}/variants"), &cookie).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let variants = body["variants"].as_array().unwrap();
+    assert!(variants.iter().all(|v| v["addr"].is_null()), "{body}");
+    assert_eq!(variants.len(), 2, "{body}");
+    let note = body["resolveNote"].as_str().unwrap_or_else(|| panic!("no resolveNote: {body}"));
+    assert!(note.contains("private/reserved"), "{note}");
+
+    let (status, _) = raw_get(&app, &format!("/api/xray/clients/{id}/share?addr=127.0.0.1"), &cookie).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// A non-admin may read variants for their own peer only.
+#[tokio::test]
+#[serial(db)]
+async fn variants_enforce_ownership() {
+    let (app, _cookie, id) = variant_fixture("203.0.113.7").await;
+    let hash = auth::hash_password("pw").unwrap();
+    db::create_user(&db::CreateUserParams {
+        username: "mallory".into(),
+        password: hash,
+        email: None,
+        name: "Mallory".into(),
+        role: 0,
+        totp_key: None,
+        totp_verified: false,
+        enabled: true,
+    })
+    .unwrap();
+    let cookie = login(&app, "mallory", "pw").await;
+    let (status, _) = json_get(&app, &format!("/api/xray/clients/{id}/variants"), &cookie).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+

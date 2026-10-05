@@ -22,8 +22,13 @@
 //! | GET    | /api/xray/clients/:id/share                | auth   | vless:// URL                  |
 //! | GET    | /api/xray/clients/:id/qrcode.svg           | auth   | QR of vless:// URL            |
 //! | GET    | /api/xray/clients/:id/json                 | auth   | Amnezia-format JSON config    |
+//! | GET    | /api/xray/clients/:id/variants             | auth   | Every SNI x address link      |
+//!
+//! The three share endpoints take optional `?sni=<server name>&addr=<ip>`
+//! to select a variant (see `xray::share`); `addr` must be one of the
+//! public IPs the configured host resolves to.
 
-use crate::http::{Path, State};
+use crate::http::{Path, Query, State};
 use crate::http::{header, HeaderMap, StatusCode};
 use crate::http::IntoResponse;
 use crate::http::Json;
@@ -516,13 +521,103 @@ async fn load_for_share(
     Ok((inbound, client, user_config.host))
 }
 
+/// `?sni=&addr=` on the share endpoints. Both absent is the primary link.
+#[derive(Debug, Default, Deserialize)]
+pub struct VariantQuery {
+    #[serde(default)]
+    pub sni: Option<String>,
+    #[serde(default)]
+    pub addr: Option<String>,
+}
+
+/// Public IPs the configured host resolves to, for IP-literal links.
+/// Empty when the host is already an IP. Private and reserved results are
+/// dropped: they come from split-horizon DNS on the server and are
+/// unreachable for a remote client. Returns the resolver error as text so
+/// the UI can say why no address variants exist.
+async fn resolve_public_ips(host: &str) -> (Vec<std::net::IpAddr>, Option<String>) {
+    let host = host.trim().trim_start_matches('[').trim_end_matches(']');
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return (Vec::new(), None);
+    }
+
+    let resolved = match tokio::net::lookup_host((host, 0)).await {
+        Ok(addrs) => addrs,
+        Err(e) => {
+            crate::warn!(host, error = %e, "xray share: host did not resolve");
+            return (Vec::new(), Some(format!("{host} did not resolve: {e}")));
+        }
+    };
+
+    let mut ips: Vec<std::net::IpAddr> = Vec::new();
+    let mut skipped: Vec<std::net::IpAddr> = Vec::new();
+    for ip in resolved.map(|a| a.ip()) {
+        if xray::probe::is_forbidden_ip(ip) {
+            skipped.push(ip);
+            continue;
+        }
+        if !ips.contains(&ip) {
+            ips.push(ip);
+        }
+    }
+    // IPv4 first: more client networks (and captive portals) route it.
+    ips.sort_by_key(|ip| ip.is_ipv6());
+
+    if !skipped.is_empty() {
+        crate::warn!(host, ?skipped, "xray share: dropped private/reserved addresses");
+    }
+    let note = if ips.is_empty() && !skipped.is_empty() {
+        Some(format!("{host} resolves only to private/reserved addresses on this server"))
+    } else {
+        None
+    };
+    (ips, note)
+}
+
+/// Turn the query into a [`xray::share::Variant`]. The SNI is checked by
+/// the share builder against `serverNames`; the address is checked here
+/// against the host's resolution so a link can't point somewhere else.
+async fn variant_from_query(
+    q: VariantQuery,
+    host: &str,
+) -> Result<xray::share::Variant, (StatusCode, Json<Value>)> {
+    let sni = q.sni.filter(|s| !s.trim().is_empty());
+    let Some(addr) = q.addr.filter(|s| !s.trim().is_empty()) else {
+        return Ok(xray::share::Variant { sni, addr: None });
+    };
+
+    let ip: std::net::IpAddr = addr
+        .trim()
+        .parse()
+        .map_err(|_| api_err(StatusCode::BAD_REQUEST, "addr must be an IP address"))?;
+    let (ips, _) = resolve_public_ips(host).await;
+    if !ips.contains(&ip) {
+        return Err(api_err(
+            StatusCode::BAD_REQUEST,
+            "addr is not a public address the configured host resolves to",
+        ));
+    }
+    Ok(xray::share::Variant { sni, addr: Some(ip) })
+}
+
+/// Share-builder errors that are the caller's fault (unknown SNI) are a
+/// 400, not a 500.
+fn share_err(e: anyhow::Error) -> (StatusCode, Json<Value>) {
+    if let Some(unknown) = e.downcast_ref::<xray::share::UnknownSni>() {
+        return api_err(StatusCode::BAD_REQUEST, &unknown.to_string());
+    }
+    map_err(e)
+}
+
 pub async fn client_share_url(
     State(state): State<AppState>,
     jar: CookieJar,
     Path(id): Path<i64>,
+    Query(q): Query<VariantQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let (inbound, client, host) = load_for_share(&state, &jar, id).await?;
-    let url = xray::share::build_vless_url(&inbound, &client, &host).map_err(map_err)?;
+    let variant = variant_from_query(q, &host).await?;
+    let url = xray::share::build_vless_url(&inbound, &client, &host, &variant).map_err(share_err)?;
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
@@ -537,9 +632,11 @@ pub async fn client_qrcode(
     State(state): State<AppState>,
     jar: CookieJar,
     Path(id): Path<i64>,
+    Query(q): Query<VariantQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let (inbound, client, host) = load_for_share(&state, &jar, id).await?;
-    let url = xray::share::build_vless_url(&inbound, &client, &host).map_err(map_err)?;
+    let variant = variant_from_query(q, &host).await?;
+    let url = xray::share::build_vless_url(&inbound, &client, &host, &variant).map_err(share_err)?;
     let svg = crate::qr::generate_qr_svg(&url)
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &format!("qr: {e}")))?;
     let mut headers = HeaderMap::new();
@@ -553,9 +650,11 @@ pub async fn client_amnezia_json(
     State(state): State<AppState>,
     jar: CookieJar,
     Path(id): Path<i64>,
+    Query(q): Query<VariantQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let (inbound, client, host) = load_for_share(&state, &jar, id).await?;
-    let body = xray::share::build_amnezia_json(&inbound, &client, &host).map_err(map_err)?;
+    let variant = variant_from_query(q, &host).await?;
+    let body = xray::share::build_amnezia_json(&inbound, &client, &host, &variant).map_err(share_err)?;
     let mut headers = HeaderMap::new();
     headers.insert(
         header::CONTENT_TYPE,
@@ -564,6 +663,37 @@ pub async fn client_amnezia_json(
     // AmneziaVPN import payload — same credentials as the vless:// URL.
     no_store_headers(&mut headers);
     Ok((StatusCode::OK, headers, body))
+}
+
+pub async fn client_variants(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    Path(id): Path<i64>,
+) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
+    let (inbound, client, host) = load_for_share(&state, &jar, id).await?;
+    let (ips, resolve_note) = resolve_public_ips(&host).await;
+    let links = xray::share::build_variants(&inbound, &client, &host, &ips).map_err(map_err)?;
+
+    let variants: Vec<Value> = links
+        .into_iter()
+        .map(|l| {
+            json!({
+                "label": l.label,
+                "sni": l.sni,
+                "addr": l.addr.map(|ip| ip.to_string()),
+                "primary": l.primary,
+                "url": l.url,
+            })
+        })
+        .collect();
+    let mut headers = HeaderMap::new();
+    // Every entry carries the client's credentials.
+    no_store_headers(&mut headers);
+    Ok((
+        StatusCode::OK,
+        headers,
+        Json(json!({ "host": host, "variants": variants, "resolveNote": resolve_note })),
+    ))
 }
 
 // ---------------------------------------------------------------------------

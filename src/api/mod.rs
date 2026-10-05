@@ -405,6 +405,10 @@ pub fn build_router(state: AppState) -> Router {
             "/xray/clients/:id/json",
             crate::http::routing::get(xray::client_amnezia_json),
         )
+        .route(
+            "/xray/clients/:id/variants",
+            crate::http::routing::get(xray::client_variants),
+        )
         // Me (current user)
         .route("/me", crate::http::routing::post(session::update_me))
         .route("/me/password", crate::http::routing::post(session::change_password))

@@ -1690,7 +1690,7 @@ async function showAdminTab(tab, e) {
                   <div class="sub" id="adm-xr-probe-result" style="margin-top:6px"></div>
                 </div>
                 <div class="field">
-                  <label class="field-label" for="adm-xr-sni" title="SNI clients send. Must be a SAN on the dest's leaf cert. The first entry is canonical; additional names support multi-tenant CDNs.">Server names (one per line)</label>
+                  <label class="field-label" for="adm-xr-sni" title="SNI clients send. Must be a SAN on the dest's leaf cert. The first entry is canonical and goes in every peer's main link; each additional name gets its own link under 'Restricted networks', for captive portals that whitelist by SNI.">Server names (one per line)</label>
                   <textarea id="adm-xr-sni" class="mono-input" rows="2">${esc((inbound.serverNames || []).join('\n'))}</textarea>
                 </div>
                 <div class="field">
@@ -2457,9 +2457,9 @@ async function copyXrayShare(id) {
   } catch(e) { showToast(e.message, 'error'); }
 }
 
-async function showXrayQr(id, name) {
+async function showXrayQr(id, name, query = '') {
   try {
-    const resp = await fetch('/api/xray/clients/' + id + '/qrcode.svg', { credentials: 'same-origin' });
+    const resp = await fetch('/api/xray/clients/' + id + '/qrcode.svg' + query, { credentials: 'same-origin' });
     if (!resp.ok) throw new Error(await resp.text() || resp.statusText);
     const svg = await resp.text();
     // Reuse the existing QR modal if present, else open a new window.
@@ -2554,6 +2554,18 @@ async function loadXrayClientEdit(id) {
                     Other apps (v2rayN/Hiddify/etc.) won't accept this format.
                   </div>
                 </div>
+                <div class="share-option">
+                  <div class="share-option-head">
+                    <b>Restricted networks</b>
+                    <span class="share-tag">captive portals</span>
+                  </div>
+                  <div class="share-option-text">
+                    Extra links for networks that only let some traffic through (in-flight "free messaging" Wi-Fi, hotel portals).
+                    One per additional server name — for portals that whitelist by SNI — and, when the host is a domain, one per IP it resolves to — for portals that block DNS.
+                    Import the ones the user might need next to the main link and switch when the main one won't connect.
+                    <div id="xredit-variants" class="stack" style="margin-top:8px">Loading…</div>
+                  </div>
+                </div>
                 <div class="share-note">
                   <svg><use href="#i-shield"/></svg>
                   Imported configs are marked <i>third-party</i> in the user's app — they connect, but can't manage the server. That's by design: peer creation lives here.
@@ -2579,7 +2591,58 @@ async function loadXrayClientEdit(id) {
       </div>` : ''}
     `;
     injectTooltips();
+    loadXrayVariants(c.id);
   } catch(e) { showToast(e.message, 'error'); }
+}
+
+// Variant links for the peer being edited. Held here rather than inlined
+// into onclick attributes, so labels and URLs never pass through escaping.
+let XRAY_VARIANTS = { id: 0, links: [] };
+
+function xrayVariantQuery(v) {
+  const q = new URLSearchParams({ sni: v.sni });
+  if (v.addr) q.set('addr', v.addr);
+  return '?' + q.toString();
+}
+
+async function loadXrayVariants(id) {
+  const box = $('xredit-variants');
+  if (!box) return;
+  try {
+    const r = await GET('/api/xray/clients/' + id + '/variants');
+    const extra = r.variants.filter(v => !v.primary);
+    XRAY_VARIANTS = { id, links: extra };
+    const note = r.resolveNote ? `<div class="notice notice--warn">${esc(r.resolveNote)} — no IP links.</div>` : '';
+    if (!extra.length) {
+      box.innerHTML = note + `<div>None yet. Add more server names on the Browsing admin tab (each must be a SAN on the dest's certificate), or set the host to a domain name to get IP links.</div>`;
+      return;
+    }
+    box.innerHTML = note + extra.map((v, i) => `
+      <div class="share-option-head">
+        <button class="btn btn--ghost btn--sm" type="button" onclick="copyXrayVariant(${i})">Copy</button>
+        <button class="btn btn--ghost btn--sm" type="button" onclick="showXrayVariantQr(${i})">QR</button>
+        <span class="mono">${esc(v.label)}</span>
+        ${v.addr ? '<span class="share-tag">no DNS</span>' : ''}
+        ${v.sni !== r.variants[0].sni ? '<span class="share-tag">SNI ' + esc(v.sni) + '</span>' : ''}
+      </div>`).join('');
+  } catch(e) {
+    box.textContent = 'Could not load variants: ' + e.message;
+  }
+}
+
+async function copyXrayVariant(i) {
+  const v = XRAY_VARIANTS.links[i];
+  if (!v) return;
+  try {
+    await navigator.clipboard.writeText(v.url);
+    showToast('Copied ' + v.label, 'success');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+function showXrayVariantQr(i) {
+  const v = XRAY_VARIANTS.links[i];
+  if (!v) return;
+  showXrayQr(XRAY_VARIANTS.id, v.label, xrayVariantQuery(v));
 }
 
 async function saveXrayClient(id) {
