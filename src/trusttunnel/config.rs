@@ -143,7 +143,7 @@ pub fn validate_client_random_prefix(s: &str) -> Result<()> {
         Some((p, m)) => (p, Some(m)),
         None => (s, None),
     };
-    let is_hex = |h: &str| !h.is_empty() && h.len() % 2 == 0 && h.bytes().all(|b| b.is_ascii_hexdigit());
+    let is_hex = |h: &str| !h.is_empty() && h.len().is_multiple_of(2) && h.bytes().all(|b| b.is_ascii_hexdigit());
     if !is_hex(prefix) || prefix.len() > 64 {
         bail!("client random prefix must be an even-length hex string of at most 32 bytes");
     }
