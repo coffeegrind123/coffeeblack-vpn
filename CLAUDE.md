@@ -52,8 +52,9 @@ Read-only, nothing compiled. Record pinned vs latest for every row:
 
 - **Vendored binaries**: pins carry a version **and** a SHA-256 of the binary
   `vendor/update.sh` produces, so they can only be derived by building. Run the
-  `vendor-update` workflow (`gh workflow run vendor-update.yml -f binary=<name> -f
-  version=<v>`), download its artifact, review, and commit the pin file. Never run
+  `vendor-update` workflow (`gh workflow run vendor-update.yml -f
+  binaries="<name>=<v> [<name>=<v> …]"`), download its `vendor-pins` artifact,
+  review, and commit the pin file. Never run
   `update.sh` locally: it compiles tor and the Go transports, and a local rebuild
   does not reproduce the pinned SHA anyway.
 - **AmneziaWG**: bump tag and SHA together (`git ls-remote` the tag to get the SHA).
