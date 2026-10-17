@@ -52,6 +52,10 @@ TELEMT_PIN="$VENDOR_DIR/TELEMT_VERSION"
 MDNSVPN_PIN="$VENDOR_DIR/MDNSVPN_VERSION"
 TRUSTTUNNEL_PIN="$VENDOR_DIR/TRUSTTUNNEL_VERSION"
 
+# Builder for the Go pluggable transports. Changing it changes their SHAs,
+# so bump it in the same pass that re-pins lyrebird, snowflake and webtunnel.
+GO_PT_IMAGE="golang:1.27-alpine"
+
 # Working directory for downloads + builds. Cleared on exit.
 WORK_DIR=""
 DOCKER_CONTAINERS=()  # tracked for cleanup
@@ -614,7 +618,10 @@ strip /out/${out_binary}
 touch /tmp/.build-done
 exec sleep infinity
 "
-    docker_build_to_file golang:1.24-alpine "awg-go-build-$$" "$script" \
+    # Go 1.27: lyrebird 0.9.0's go.mod requires go 1.26.0 and snowflake
+    # v2.15's requires 1.25.12, and the image runs with GOTOOLCHAIN=local, so
+    # an older toolchain refuses the module rather than fetching a newer one.
+    docker_build_to_file "$GO_PT_IMAGE" "awg-go-build-$$" "$script" \
         "/out/${out_binary}" "$WORK_DIR/${out_binary}"
 
     verify_static "$WORK_DIR/${out_binary}" "$blob_name"
@@ -628,9 +635,19 @@ exec sleep infinity
 
 update_lyrebird() {
     local version="$1"
+    local bare="${version#lyrebird-}"
+    local url="https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird.git"
+    # Upstream tagged up to 0.8.x as `lyrebird-X.Y.Z` and from 0.9.0 as bare
+    # `X.Y.Z`. Use whichever form exists rather than guessing from the number.
+    local tag="lyrebird-${bare}"
+    if ! git ls-remote --exit-code --tags "$url" "refs/tags/${tag}" >/dev/null 2>&1; then
+        tag="$bare"
+        git ls-remote --exit-code --tags "$url" "refs/tags/${tag}" >/dev/null 2>&1 \
+            || die "lyrebird: neither tag lyrebird-${bare} nor ${bare} exists upstream"
+    fi
     update_go_pt LYREBIRD \
-        "https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird.git" \
-        "lyrebird-${version#lyrebird-}" \
+        "$url" \
+        "$tag" \
         "./cmd/lyrebird" \
         "lyrebird" \
         "lyrebird" \
