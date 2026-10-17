@@ -4,7 +4,7 @@
 # floating `:alpine` tag can silently change the toolchain (or be repointed by
 # a registry compromise) between builds. Refresh the digests deliberately when
 # bumping the toolchain (`docker buildx imagetools inspect rust:1-alpine`).
-FROM rust:1-alpine@sha256:a96ea6d18d4062e38f16cfbadd8b4541d622f2527dd0a5eca1fb36d301da4e88 AS builder
+FROM rust:1-alpine@sha256:557a94c82b485a14b569120e00867267108c734efe33f10cc31ca0cd5dd1eca9 AS builder
 WORKDIR /build
 
 # Install build dependencies
@@ -59,7 +59,7 @@ RUN cargo build --release --locked --target x86_64-unknown-linux-musl && \
     cp target/x86_64-unknown-linux-musl/release/coffeeblack-vpn /build/coffeeblack-vpn
 
 # Stage 2: Build amneziawg-go (needs Go >= 1.24)
-FROM golang:1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS awg-go-builder
+FROM golang:1-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS awg-go-builder
 WORKDIR /build
 RUN apk add --no-cache git make
 # Pin to a release tag AND assert the resolved commit SHA. `--branch <tag>`
