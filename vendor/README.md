@@ -30,8 +30,8 @@ sub-modes for partial work).
 **x86_64-linux only.** arm64 / aarch64 was dropped intentionally — the
 DNS bundle's pluggable transports have no upstream pre-built static
 arm64 ELFs and no viable cross-build path that's worth maintaining.
-`build.rs` only emits `xray_bundled`, `dns_bundled`, and `telemt_bundled`
-cfgs for `("linux", "x86_64")`; other targets compile cleanly but
+`build.rs` only emits the `xray_bundled`, `dns_bundled`, `telemt_bundled`
+and `mdnsvpn_bundled` cfgs for `("linux", "x86_64")`; other targets compile cleanly but
 without the bundled binaries.
 
 ## `xray-linux-amd64.gz`
@@ -240,7 +240,7 @@ unmodified binary as part of coffeeblack-vpn.
 
 ## `telemt-linux-amd64.gz` (`telemt_bundled` cfg)
 
-Pinned [telemt/telemt](https://github.com/telemt/telemt) **v3.5.5** ELF,
+Pinned [telemt/telemt](https://github.com/telemt/telemt) **v3.5.13** ELF,
 gzip-compressed (level 9). telemt is a Rust + Tokio implementation of
 Telegram's MTProto proxy with full Fake-TLS / SNI fronting (the
 `ee`-prefix link variant), per-user secrets, replay protection, and
@@ -249,16 +249,16 @@ build time, runtime extraction with SHA verification.
 
 ### Provenance
 
-Downloaded from the [3.5.5 release](https://github.com/telemt/telemt/releases/tag/3.5.5)
-on 2026-09-03:
+Downloaded from the [3.5.13 release](https://github.com/telemt/telemt/releases/tag/3.5.13)
+on 2026-10-04:
 
-- `telemt-x86_64-linux-musl.tar.gz` — SHA256 `6be65484bb1b319798919b746e72d611d32e92aa07347c390fffc5127ff6615f` (verified against the upstream `telemt-x86_64-linux-musl.tar.gz.sha256`)
+- `telemt-x86_64-linux-musl.tar.gz` — SHA256 `7124a854310d4c91a502aeebfd29f7fc6ddef1dcd44eb0cb72e9f9c176582b43` (verified against the upstream `telemt-x86_64-linux-musl.tar.gz.sha256`)
 
 The single `telemt` ELF inside is `static-pie linked` (per `file(1)`), so
 it runs unchanged on glibc, musl, or any other libc x86_64 host. It was
 extracted from the tarball and re-compressed with `gzip -9`.
 Decompressed-ELF SHA-256 (used by the runtime extractor to detect
-cache-staleness): `a284ffe3df5d2fd23f96ba52aebc4e08529dda92add9fecedffd58cf8c85731e` — recorded in `TELEMT_VERSION`.
+cache-staleness): `46db12dcfb649b5209cc7dbd0fee89eb92bf10e8f8e22450c4d5debf87cdf916` — recorded in `TELEMT_VERSION`.
 
 The 3.4 → 3.5 bump was checked against the control plane coffeeblack-vpn
 actually drives, not just the changelog: the generated `config.toml` was
