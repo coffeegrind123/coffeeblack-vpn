@@ -210,6 +210,7 @@ jobs:
           {
             echo "xray=$(read_pin vendor/XRAY_VERSION XRAY_VERSION)"
             echo "telemt=$(read_pin vendor/TELEMT_VERSION TELEMT_VERSION)"
+            echo "mdnsvpn=$(read_pin vendor/MDNSVPN_VERSION MDNSVPN_VERSION)"
             echo "dnscrypt_proxy=$(read_pin vendor/DNS_BUNDLE_VERSION DNSCRYPT_PROXY_VERSION)"
             echo "tor=$(read_pin vendor/DNS_BUNDLE_VERSION TOR_VERSION)"
             echo "lyrebird=$(read_pin vendor/DNS_BUNDLE_VERSION LYREBIRD_VERSION)"
@@ -250,6 +251,7 @@ jobs:
             |-----------|---------|---------|
             | Xray-core | `${{ steps.components.outputs.xray }}` | Browsing-mode VLESS+Reality+Vision |
             | telemt | `${{ steps.components.outputs.telemt }}` | Telegram MTProxy (Fake-TLS) |
+            | MasterDnsVPN | `${{ steps.components.outputs.mdnsvpn }}` | DNS-tunnel server |
             | dnscrypt-proxy | `${{ steps.components.outputs.dnscrypt_proxy }}` | DoH/DNSCrypt egress |
             | tor | `${{ steps.components.outputs.tor }}` | optional SOCKS over Tor |
             | lyrebird (obfs4) | `${{ steps.components.outputs.lyrebird }}` | pluggable transport |
