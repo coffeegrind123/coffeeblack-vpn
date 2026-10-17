@@ -3,11 +3,11 @@
 # transformed with sed 's/crate::/crate::proxy::/g', then the local patches in
 # src/proxy/patches/ applied. Regenerate via scripts/vendor-proxy.sh.
 repo=https://github.com/wiresock/amneziawg-install
-ref=9f5a1afb87f73fd44b83e8abc8a0388efceeb8d5
-requested_ref=proxy-v0.1.12
+ref=4a0ecce8bc01341b2566254d047cb818fc137486
+requested_ref=proxy-v0.1.13
 subdir=amneziawg-proxy/src
 transform=s/crate::/crate::proxy::/g
-proxy_version=0.1.12
+proxy_version=0.1.13
 # sha256 of each vendored file AS WRITTEN into src/proxy/ (post-transform, post-patch):
 backend.rs=887f0c2e37bf2409e81d05f9631e253226487b76a22b7893c292e38355d1dfa2
 config.rs=e8835c07ea0b953886eced0e260433604a25012d2d1dd3211a92346a86b33637
