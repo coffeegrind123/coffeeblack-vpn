@@ -33,6 +33,7 @@ changes day to day lives in SQLite and is edited in the admin UI.
 | `XRAY_BIN_PATH` | — | Use this `xray` binary instead of extracting the bundled one. For operators tracking upstream Xray independently. |
 | `COFFEEBLACK_MTPROXY_DIR` | `<CONF_DIR>/mtproxy` | Where the bundled `telemt` ELF is extracted, plus its `config.toml`, PID file, and the `tlsfront` cache of real TLS records fetched from the masking domain. |
 | `COFFEEBLACK_MDNSVPN_DIR` | `<CONF_DIR>/mdnsvpn` | Where the bundled MasterDnsVPN ELF is extracted, plus `server_config.toml` and the singleton `encrypt_key.txt`. |
+| `COFFEEBLACK_TRUSTTUNNEL_DIR` | `<CONF_DIR>/trusttunnel` | Where the bundled `trusttunnel_endpoint` ELF is extracted, plus `vpn.toml`, `hosts.toml`, `credentials.toml` (every user's password), `rules.toml` and `tls/` (certificate chain and private key). |
 | `COFFEEBLACK_DNS_DIR` | `<CONF_DIR>/dns` | Where the bundled DNS-stack ELFs are extracted, plus their generated configs and tor's data directory. |
 
 Persist the four subsystem directories on a volume to avoid re-extracting binaries on
@@ -116,6 +117,8 @@ Stored in SQLite and edited in the admin panel, not through the environment:
 - DNS lockdown: master switch, redirect target IP, drop-residual toggle
 - Xray Reality inbound and per-peer expiry
 - MTProxy inbound and per-user secret, ad-tag override, enabled state
+- TrustTunnel endpoint (port, protocols, hostname, SNIs, auth-failure status, cover site,
+  client-random gate, ICMP, limits, certificate) and per-user password, prefix, expiry
 - DNS bundle: master switch, listen port, upstream resolvers, DNSSEC / no-log / no-filter
   requirements, optional Tor routing with exit-country and pluggable-transport selectors
 
@@ -211,4 +214,4 @@ manual DDL is ever required.
   one-time download links.
 - **Failure isolation.** If `awg-quick up cb0` fails, the binary still starts and serves
   the web UI so you can fix the host config and hit *Restart Interface*. Per-supervisor
-  failures surface in their own admin tabs. All five transports degrade independently.
+  failures surface in their own admin tabs. All six transports degrade independently.

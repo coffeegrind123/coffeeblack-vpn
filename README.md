@@ -6,7 +6,7 @@
 [![Rust 1.99](https://img.shields.io/badge/rust-1.99-orange.svg)](rust-toolchain.toml)
 
 A self-hosted VPN and censorship-resistant proxy manager that ships as **one static
-binary** with a built-in web UI. Five transports, one admin panel, one SQLite database.
+binary** with a built-in web UI. Six transports, one admin panel, one SQLite database.
 
 Written in Rust, with no Node.js, npm, or JavaScript toolchain anywhere in the build or
 the container. It is a from-scratch reimplementation of [wg-easy] /
@@ -35,7 +35,7 @@ the container. It is a from-scratch reimplementation of [wg-easy] /
 
 Most VPN panels manage one protocol. When that protocol gets blocked, you are done.
 
-CoffeeBlack runs five transports side by side behind a single admin UI, user roster and
+CoffeeBlack runs six transports side by side behind a single admin UI, user roster and
 auth layer, so you can hand a user a different way in without redeploying anything. They
 degrade independently: a misconfigured Xray inbound does not stop WireGuard, and every
 transport can be turned off.
@@ -44,8 +44,8 @@ Three properties fall out of the single-binary design:
 
 - **Runs anywhere x86_64 Linux runs.** Statically linked against musl — no glibc/musl
   mismatch, no runtime package dependencies beyond `nft` and, for Gaming mode, the
-  AmneziaWG tools. The fully bundled release binary is ~57 MB, most of it the embedded
-  Xray, telemt, MasterDnsVPN and DNS-stack ELFs; each release publishes its exact size
+  AmneziaWG tools. The fully bundled release binary is ~64 MB, most of it the embedded
+  Xray, TrustTunnel, telemt, MasterDnsVPN and DNS-stack ELFs; each release publishes its exact size
   and SHA-256.
 - **Can run entirely in RAM.** `IN_MEMORY=true` (the Docker default) opens SQLite as
   `:memory:` and `exec`s every bundled subprocess from a sealed anonymous `memfd`.
@@ -62,12 +62,14 @@ Three properties fall out of the single-binary design:
 |---|---|---|---|
 | **Gaming** | [AmneziaWG] — obfuscated WireGuard | UDP 51820 | Default choice. Lowest latency, full tunnel. |
 | **Browsing** | [Xray] VLESS + Reality + Vision | TCP 443 | UDP is blocked or throttled. Looks like ordinary TLS to a real CDN host. |
+| **TrustTunnel** | [TrustTunnel] — HTTP/2 + HTTP/3 `CONNECT` tunnel | TCP + UDP 8443 | You want a full tunnel that is HTTPS to your own hostname, optionally over QUIC. |
 | **Telegram** | [telemt] MTProxy, Fake-TLS | TCP 8080 | Telegram specifically — not a general tunnel. |
 | **DNS tunnel** | [MasterDnsVPN] | UDP 53 | Only DNS escapes. Carries TCP/SOCKS5. Needs an `NS` delegation. |
 | **UDP over DNS** | QQ-DNS ([QQ-Tunnel] port, in-process) | UDP 53 | Only DNS escapes and you want the Gaming config itself. |
 
 [AmneziaWG]: https://docs.amnezia.org/documentation/amnezia-wg/
 [Xray]: https://github.com/XTLS/Xray-core
+[TrustTunnel]: https://github.com/TrustTunnel/TrustTunnel
 [telemt]: https://github.com/telemt/telemt
 [MasterDnsVPN]: https://github.com/masterking32/MasterDnsVPN
 [QQ-Tunnel]: https://github.com/patterniha/QQ-Tunnel
@@ -146,7 +148,7 @@ is idempotent.
 - **x86_64 Linux.** arm64 was dropped deliberately — see [`vendor/README.md`](vendor/README.md).
 - **`nft`** for the firewall stage.
 - **Gaming mode only:** `awg`, `awg-quick`, and the AmneziaWG kernel module on the host.
-  The Docker image ships these. The other four transports are self-contained — their
+  The Docker image ships these. The other five transports are self-contained — their
   binaries are embedded and extracted on first start.
 - **A reverse proxy** for TLS.
 
@@ -180,8 +182,8 @@ is idempotent.
 │                                                              │
 │  UI: index.html + app.js, embedded via include_str!          │
 │  Bundled ELFs, embedded via include_bytes! and SHA-verified: │
-│    xray-core, telemt, MasterDnsVPN, dnscrypt-proxy, tor,     │
-│    lyrebird, snowflake, webtunnel                            │
+│    xray-core, trusttunnel_endpoint, telemt, MasterDnsVPN,    │
+│    dnscrypt-proxy, tor, lyrebird, snowflake, webtunnel       │
 └─┬─────────┬──────────────┬─────────────┬──────────┬──────────┘
   │ Gaming  │ Browsing     │ Telegram    │ DNS      │ DNS
   │ argv    │ tokio Child  │ tokio Child │ tunnel   │ bundle
@@ -195,6 +197,9 @@ AmneziaWG VLESS+Reality   MTProto     DNS-tunnel   DoH / DNSCrypt
 kernel    +Vision         listener    listener     egress, optionally
 module    on TCP/443      TCP/8080    UDP/53       via tor SOCKS :9053
                           (Fake-TLS)  (NS-delegated)
+
+  Also a tokio Child: trusttunnel_endpoint (rewrite + restart),
+  HTTP/2 + HTTP/3 CONNECT on TCP+UDP/8443.
 
   Firewall: one `inet coffeeblack` nftables table.
   Chains: forward, nat-postrouting, filter-input, wg-clients
@@ -248,7 +253,7 @@ database and its own configuration; there is no migration path from either upstr
 | Distribution | Docker image | musl-static binary, or Docker |
 | Cold start | seconds (Nuxt warm-up) | ~50 ms |
 | Idle RAM | 80–120 MB | 8–15 MB, plus ~5 MB per enabled subprocess |
-| Transports | AmneziaWG | AmneziaWG, Xray Reality, MTProxy, DNS-tunnel, UDP-over-DNS |
+| Transports | AmneziaWG | AmneziaWG, Xray Reality, TrustTunnel, MTProxy, DNS-tunnel, UDP-over-DNS |
 | Plain WireGuard | yes | **no** — AmneziaWG only |
 | DNS-leak prevention | client-side `DNS =` line only | server-enforced nftables DNAT + residual-drop chain |
 | Peer private keys | stored, re-displayable | issued once, not stored (default) |

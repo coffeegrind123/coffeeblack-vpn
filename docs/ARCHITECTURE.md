@@ -51,7 +51,9 @@ module    on TCP/443      TCP/8080    UDP/53       via tor SOCKS :9053
 **Supervision.** Each child gets a Tokio supervisor with capped exponential backoff on
 crash. Xray reloads on SIGHUP and shuts down on SIGTERM with a 10 s grace period; telemt
 hot-reloads via `notify`; MasterDnsVPN has no upstream reload signal, so its supervisor
-rewrites the config and restarts. Every supervisor's failures surface in its own admin tab
+rewrites the config and restarts. TrustTunnel reads credentials only at startup, so its
+supervisor restarts it too, but only when the rendered files change, and stops it with
+SIGINT, the only signal it drains on. Every supervisor's failures surface in its own admin tab
 and none of them can block another — a misconfigured Browsing inbound does not stop
 AmneziaWG.
 
@@ -107,6 +109,16 @@ src/
     probe.rs       # TLS 1.3 dest probe (rustls + in-house DER SAN parse)
     supervisor.rs  # tokio Child + SIGHUP/SIGTERM lifecycle
 
+  trusttunnel/     # — TrustTunnel (HTTP/2 + HTTP/3 tunnel) —
+    runtime.rs     # embedded gzipped ELF
+    config.rs      # vpn.toml + hosts.toml + credentials.toml + rules.toml
+    cert.rs        # self-signed issuance, PEM, operator-cert validation
+    deeplink.rs    # tt:// encoder (byte-identical to upstream's)
+    share.rs       # per-user link + client-config TOML
+    keys.rs        # password / username / client-random-prefix generation
+    stats.rs       # RAM-only per-user traffic from the metrics listener
+    supervisor.rs  # tokio Child; rewrite-and-restart, SIGINT stop
+
   mtproxy/         # — Telegram (telemt) —
     runtime.rs     # embedded gzipped ELF
     config.rs      # config.toml (no [access.users] — users go via API)
@@ -152,6 +164,7 @@ src/
     activity.rs    # /api/activity/heatmap, DELETE /api/activity
     admin.rs       # /api/admin/* (admin role required)
     xray.rs        # /api/admin/xray/* + /api/xray/clients/*
+    trusttunnel.rs # /api/admin/trusttunnel/* + /api/trusttunnel/users/*
     mtproxy.rs     # /api/admin/mtproxy/*
     mdnsvpn.rs     # /api/admin/mdnsvpn/* + /api/mdnsvpn/clients/*
     qqdns.rs       # /api/admin/qqdns/*

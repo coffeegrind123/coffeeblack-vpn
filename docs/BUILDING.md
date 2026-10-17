@@ -58,7 +58,7 @@ That script:
    binary whose existing `.gz` already round-trips to the pinned SHA is skipped.
 3. Builds a fully static **x86_64-unknown-linux-musl** ELF at
    `target/x86_64-unknown-linux-musl/release/coffeeblack-vpn`, which runs unchanged on
-   glibc, musl, or any other libc. With every component bundled it is ~57 MB; a build
+   glibc, musl, or any other libc. With every component bundled it is ~64 MB; a build
    with no vendor blobs present is a fraction of that, since each missing blob compiles
    its subsystem out via `cfg(*_bundled)`.
 
@@ -99,6 +99,7 @@ Versions and SHA-256 hashes are pinned in:
 | `vendor/XRAY_VERSION` | Xray-core |
 | `vendor/TELEMT_VERSION` | telemt MTProxy |
 | `vendor/MDNSVPN_VERSION` | MasterDnsVPN DNS-tunnel server |
+| `vendor/TRUSTTUNNEL_VERSION` | TrustTunnel endpoint (upstream static-musl release, GPG-verified) |
 | `vendor/DNS_BUNDLE_VERSION` | dnscrypt-proxy, tor, lyrebird, snowflake, webtunnel |
 
 To bump one, run `vendor/update.sh <binary> <version>`. The script downloads or builds,
@@ -108,6 +109,7 @@ verifies the SHA, and rewrites the matching pin file:
 vendor/update.sh xray            v26.3.28
 vendor/update.sh telemt          3.4.12
 vendor/update.sh mdnsvpn         v2026.06.01.000000-abcdef0
+vendor/update.sh trusttunnel     v1.1.0      # needs gpg; checks AdGuard's signature
 vendor/update.sh dnscrypt-proxy  2.1.16
 vendor/update.sh tor             0.4.9.9     # Alpine Docker build, ~10 min
 vendor/update.sh lyrebird        0.8.2       # Go static, ~2 min
@@ -137,7 +139,7 @@ sudo ./target/x86_64-unknown-linux-musl/release/coffeeblack-vpn
 
 If `awg-quick up cb0` fails, the binary still starts and serves the web UI — fix the host
 config and click *Restart Interface* in the admin panel. Per-supervisor failures surface in
-their own admin tabs, and all five transports are independently disable-able and degrade
+their own admin tabs, and all six transports are independently disable-able and degrade
 gracefully.
 
 For a managed systemd install rather than running the binary by hand, see

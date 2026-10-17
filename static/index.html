@@ -1032,6 +1032,9 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
       <button class="nav-item" data-route="/xray" onclick="navigate('/xray')" title="Xray VLESS+Reality+Vision: TCP/443 camouflaged behind a real CDN host. Browser-friendly.">
         <svg><use href="#i-globe"/></svg> Browsing <span class="pill" id="side-xray-count">—</span>
       </button>
+      <button class="nav-item" data-route="/trusttunnel" onclick="navigate('/trusttunnel')" title="TrustTunnel: full tunnel inside HTTP/2 or HTTP/3 to your own hostname. Looks like ordinary HTTPS.">
+        <svg><use href="#i-shield"/></svg> TrustTunnel <span class="pill" id="side-tt-count">—</span>
+      </button>
       <div class="nav-label">Workspace</div>
       <button class="nav-item" data-route="/me" onclick="navigate('/me')">
         <svg><use href="#i-user"/></svg> Account
@@ -1140,6 +1143,21 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
       </div>
     </div>
 
+    <!-- ========== TRUSTTUNNEL ========== -->
+    <div id="page-trusttunnel" class="page">
+      <div class="top">
+        <h1 class="page-title">TrustTunnel users <span class="page-title-count" id="tt-count">—</span></h1>
+        <div class="top-spacer"></div>
+        <span class="sub" id="tt-status-pill" style="margin-right:10px"></span>
+        <button class="btn btn--ghost btn--icon" title="Refresh" onclick="refreshTrustTunnelUsers()"><svg><use href="#i-refresh"/></svg></button>
+        <button class="btn btn--primary" id="tt-create-btn" onclick="createTrustTunnelUser()"><svg><use href="#i-plus"/></svg> New user</button>
+      </div>
+      <div class="scroll">
+        <div id="tt-empty" class="empty" style="display:none"></div>
+        <div id="tt-list"></div>
+      </div>
+    </div>
+
     <!-- ========== ACCOUNT ========== -->
     <div id="page-me" class="page">
       <div class="top">
@@ -1227,6 +1245,8 @@ td.heat-cell.heat-today { box-shadow: inset 0 0 0 1px var(--border-strong); }
             <a href="#/admin" data-tab="hooks" onclick="showAdminTab('hooks',event)">Hooks</a>
             <div class="group-label">Browsing (Xray Reality)</div>
             <a href="#/admin" data-tab="xray" onclick="showAdminTab('xray',event)">Inbound</a>
+            <div class="group-label">TrustTunnel</div>
+            <a href="#/admin" data-tab="trusttunnel" onclick="showAdminTab('trusttunnel',event)">Endpoint</a>
             <div class="group-label">Telegram (MTProxy)</div>
             <a href="#/admin" data-tab="mtproxy" onclick="showAdminTab('mtproxy',event)">Inbound</a>
             <a href="#/admin" data-tab="mtproxy-users" onclick="showAdminTab('mtproxy-users',event)">Users</a>

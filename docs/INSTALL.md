@@ -235,7 +235,7 @@ uninstall:
 | `/usr/local/bin/coffeeblack-vpn` | The binary. |
 | `/etc/systemd/system/coffeeblack-vpn.service` | systemd unit. |
 | `/etc/coffeeblack/coffeeblack.env` | EnvironmentFile (mode 0600, root-only). |
-| `/etc/coffeeblack/conf/` | Runtime root: `cb0.conf`, `coffeeblack.db`, and the extracted subprocess working dirs (`xray/`, `mtproxy/`, `dns/`, `mdnsvpn/`). |
+| `/etc/coffeeblack/conf/` | Runtime root: `cb0.conf`, `coffeeblack.db`, and the extracted subprocess working dirs (`xray/`, `trusttunnel/`, `mtproxy/`, `dns/`, `mdnsvpn/`). |
 | `/etc/amnezia/amneziawg` | Symlink to `/etc/coffeeblack/conf`. See [Config bridge](#config-bridge). |
 | `/etc/sysctl.d/99-coffeeblack.conf` | IPv4/IPv6 forwarding. |
 | `/etc/modules-load.d/amneziawg.conf` | Autoload the module at boot. |
@@ -347,7 +347,8 @@ which pairs well with a same-host proxy. Only use `INSECURE=true` on a trusted
 LAN with no path exposure — the session cookie then travels in the clear.
 
 Remember to open the **WireGuard UDP port** (`INIT_PORT`, default `51820/udp`)
-and any transport ports (Xray Reality `443/tcp`, MTProxy, DNS-tunnel `53/udp`)
+and any transport ports (Xray Reality `443/tcp`, TrustTunnel `8443/tcp` **and**
+`8443/udp`, MTProxy, DNS-tunnel `53/udp`)
 on your firewall / cloud security group.
 
 ---

@@ -59,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
             ("Xray (Reality key, client UUIDs)", &config::CONFIG.xray_dir),
             ("MTProxy (user secrets)", &config::CONFIG.mtproxy_dir),
             ("MasterDnsVPN (tunnel key)", &config::CONFIG.mdnsvpn_dir),
+            ("TrustTunnel (user passwords, TLS key)", &config::CONFIG.trusttunnel_dir),
             ("DNS bundle", &config::CONFIG.dns_dir),
         ] {
             match coffeeblack_vpn::memexec::is_ram_backed(dir) {
@@ -155,6 +156,16 @@ async fn main() -> anyhow::Result<()> {
     #[cfg(mdnsvpn_bundled)]
     if let Err(e) = coffeeblack_vpn::mdnsvpn::supervisor::ensure_running().await {
         coffeeblack_vpn::warn!("MasterDnsVPN supervisor startup failed (non-fatal): {e}");
+    }
+
+    // Bring the TrustTunnel endpoint online if it's been enabled. Off by
+    // default; the supervisor declines to start until a TLS certificate
+    // exists and at least one user is enabled (the endpoint refuses an
+    // empty credentials list on a public listen address). Non-fatal, like
+    // every other transport.
+    #[cfg(trusttunnel_bundled)]
+    if let Err(e) = coffeeblack_vpn::trusttunnel::supervisor::ensure_running().await {
+        coffeeblack_vpn::warn!("TrustTunnel supervisor startup failed (non-fatal): {e}");
     }
 
     // Bring the in-process DPI-imitation proxy online if it's been enabled.
@@ -353,6 +364,8 @@ async fn main() -> anyhow::Result<()> {
     coffeeblack_vpn::mtproxy::supervisor::shutdown_for_exit().await;
     #[cfg(mdnsvpn_bundled)]
     coffeeblack_vpn::mdnsvpn::supervisor::shutdown_for_exit().await;
+    #[cfg(trusttunnel_bundled)]
+    coffeeblack_vpn::trusttunnel::supervisor::shutdown_for_exit().await;
     coffeeblack_vpn::proxy::supervisor::shutdown_for_exit().await;
     coffeeblack_vpn::qqdns::supervisor::shutdown_for_exit().await;
 

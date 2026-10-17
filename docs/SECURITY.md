@@ -114,8 +114,8 @@ recorded handshake, and when.
 
 Every credential the service stores is encrypted at rest. They were previously plaintext
 columns: peer private and pre-shared keys, the server's own WireGuard key, the Reality
-private key, every VLESS UUID and shortId, MTProxy user secrets, the DNS-tunnel key, and
-TOTP seeds. Anyone holding the database file — or a backup, or a snapshot — held all of
+private key, every VLESS UUID and shortId, MTProxy user secrets, the DNS-tunnel key,
+TrustTunnel user passwords and its TLS private key, and TOTP seeds. Anyone holding the database file — or a backup, or a snapshot — held all of
 them.
 
 TOTP was the worst of the set. A second factor is meant to survive a password compromise,
@@ -189,7 +189,8 @@ that reason.
 Every bundled transport is configured by a file this service renders, and each one carries
 credentials: `xray/server.json` holds the Reality private key **and every client's UUID and
 shortId**, `mtproxy/config.toml` holds every user's secret, `mdnsvpn/server_config.toml`
-holds the tunnel key.
+holds the tunnel key, and `trusttunnel/credentials.toml` holds every TrustTunnel user's
+password next to the endpoint's TLS private key in `trusttunnel/tls/key.pem`.
 
 These were written with `tokio::fs::write`, which creates a file at `0666 & ~umask` —
 **0644 under the usual 0022**. On a bare-metal install that handed any local account a

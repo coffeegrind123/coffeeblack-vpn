@@ -40,6 +40,7 @@ Read-only, nothing compiled. Record pinned vs latest for every row:
 | dnscrypt-proxy, tor, lyrebird, snowflake, webtunnel | `vendor/DNS_BUNDLE_VERSION` | GitHub releases / `dist.torproject.org` / gitlab.torproject.org tags API |
 | telemt | `vendor/TELEMT_VERSION` | `gh api repos/telemt/telemt/releases` (skip pre-releases) |
 | MasterDnsVPN | `vendor/MDNSVPN_VERSION` | `gh api repos/masterking32/MasterDnsVPN/releases/latest` |
+| TrustTunnel endpoint | `vendor/TRUSTTUNNEL_VERSION` | `gh api repos/TrustTunnel/TrustTunnel/releases` (skip pre-releases; 1.3 betas emit deep-link v2) |
 | amneziawg-go, amneziawg-tools (image) | `Dockerfile` `AWG_GO_TAG/SHA`, `AWG_TOOLS_TAG/SHA` | `gh api repos/amnezia-vpn/<repo>/tags` |
 | amneziawg kernel module + tools (bare metal) | `scripts/install.sh` `AWG_KMOD_TAG/SHA`, `AWG_TOOLS_TAG/SHA` | same; tools pin must equal the Dockerfile's (`tests/install_pins.rs`) |
 | DPI proxy (amneziawg-proxy) | `src/proxy/VENDOR.lock` | `scripts/vendor-proxy.sh diff` |
@@ -81,7 +82,8 @@ checked.
 ### 4. Couplings to check every pass
 
 - **pmnezia-client** (`coffeegrind123/pmnezia-client`, local `~/amnezia-client`) must
-  parse every AmneziaWG key this server emits, and its amneziawg-go pin should not
+  parse every AmneziaWG key this server emits and every `tt://` field
+  `src/trusttunnel/deeplink.rs` writes, and its amneziawg-go pin should not
   lag the image's `AWG_GO_TAG`. When AWG changes here, run that repo's protocol too.
 - `README.md`, `vendor/README.md`, `docs/INSTALL.md` quote versions; bring them in
   line with the pins.

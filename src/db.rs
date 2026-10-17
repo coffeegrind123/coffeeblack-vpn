@@ -118,6 +118,11 @@ const ENCRYPTED_COLUMNS: &[(&str, &str)] = &[
     // (`auth::sha256`), which is cheap to crack offline from a stolen DB.
     // Encrypting it costs nothing on the request path and removes that.
     ("general_table", "metrics_password"),
+    // TrustTunnel: the private key behind the endpoint's TLS certificate
+    // (with it, an observer can impersonate the endpoint to every pinned
+    // client), and each user's tunnel password.
+    ("trusttunnel_inbound_table", "tls_key_pem"),
+    ("trusttunnel_users_table", "password"),
 ];
 
 fn is_encrypted_column(table: &str, column: &str) -> bool {
@@ -793,6 +798,92 @@ pub struct MdnsvpnClient {
     pub updated_at: String,
 }
 
+/// Singleton TrustTunnel endpoint (`id = 'trusttunnel0'`). TrustTunnel
+/// tunnels TCP/UDP/ICMP as HTTP/2 or HTTP/3 CONNECT streams over TLS, so on
+/// the wire it is HTTPS to `hostname`. Rendered into `vpn.toml` +
+/// `hosts.toml` by `trusttunnel::config`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustTunnelInbound {
+    pub id: String,
+    /// TCP (HTTP/1.1, HTTP/2) and UDP (QUIC) port — the endpoint binds both.
+    /// Default 8443: TCP 443 is the Xray Reality default.
+    pub port: i64,
+    pub listen_http1: bool,
+    pub listen_http2: bool,
+    pub listen_quic: bool,
+    /// TLS server name: the `main_hosts` hostname, the certificate's SAN and
+    /// the deep link's `hostname`. Empty means "the General tab host", which
+    /// only works when that host is a DNS name.
+    pub hostname: String,
+    /// JSON array of extra SNIs routed to the tunnel (`allowed_sni`).
+    pub allowed_sni: String,
+    /// SNI put into share links instead of `hostname`. Must be listed in
+    /// `allowed_sni`. Empty = clients send `hostname`.
+    pub custom_sni: String,
+    /// `http2` | `http3` — what share links tell clients to open.
+    pub upstream_protocol: String,
+    /// Client-side anti-DPI flag carried in links (TLS ClientHello split).
+    pub anti_dpi: bool,
+    /// Whether the endpoint forwards to IPv6 destinations; also carried in
+    /// links as `has_ipv6`.
+    pub ipv6_available: bool,
+    pub allow_private_network: bool,
+    /// Status code for failed proxy auth: 407 (upstream default), 405, 404
+    /// or 403. 404 makes an unauthenticated CONNECT look like a plain web
+    /// server miss.
+    pub auth_failure_status_code: i64,
+    /// Cover web server (`host:port`, plain HTTP/1.1) that requests under
+    /// `reverse_proxy_path_mask` are proxied to. Empty = off.
+    pub reverse_proxy_address: String,
+    pub reverse_proxy_path_mask: String,
+    /// Append a catch-all deny to `rules.toml`, so only TLS ClientHellos
+    /// carrying one of the users' client-random prefixes reach the HTTP
+    /// layer at all — active probers are dropped before authentication.
+    pub require_client_random_prefix: bool,
+    /// ICMP forwarding needs CAP_NET_RAW and an egress interface.
+    pub icmp_enabled: bool,
+    /// Egress interface for ICMP; empty = the default-route interface.
+    pub icmp_interface: String,
+    /// JSON array of DNS upstreams handed to clients in links.
+    pub dns_upstreams: String,
+    /// Per-user connection caps; 0 = unlimited.
+    pub max_http2_conns: i64,
+    pub max_http3_conns: i64,
+    /// Loopback port of the endpoint's Prometheus listener.
+    pub metrics_port: i64,
+    /// `self_signed` | `custom`.
+    pub tls_mode: String,
+    pub tls_chain_pem: String,
+    pub tls_key_pem: String,
+    /// Hostname the self-signed certificate was issued for; a hostname
+    /// change re-issues it.
+    pub tls_cert_hostname: String,
+    /// Free-form TOML spliced into `vpn.toml` after the top-level keys.
+    pub additional_config: String,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// One TrustTunnel user — one `[[client]]` in `credentials.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrustTunnelUser {
+    pub id: i64,
+    pub user_id: Option<i64>,
+    pub name: String,
+    /// `[[client]] username`. Restricted to `[A-Za-z0-9._-]` because the
+    /// endpoint's credentials parser does not decode TOML strings.
+    pub username: String,
+    pub password: String,
+    /// Optional `hex[/hexmask]` TLS client-random prefix: a `rules.toml`
+    /// allow rule matches it, and links carry it so the client sends it.
+    pub client_random_prefix: String,
+    pub expires_at: Option<String>,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// One Xray (VLESS) peer. The `inbound_id` FK supports multi-inbound
 /// later; v1 always points at `'xray0'`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1279,6 +1370,60 @@ impl XrayClient {
     }
 }
 
+impl TrustTunnelInbound {
+    fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(TrustTunnelInbound {
+            id: row.get("id")?,
+            port: row.get("port")?,
+            listen_http1: int_to_bool(row.get::<_, i64>("listen_http1")?),
+            listen_http2: int_to_bool(row.get::<_, i64>("listen_http2")?),
+            listen_quic: int_to_bool(row.get::<_, i64>("listen_quic")?),
+            hostname: row.get("hostname")?,
+            allowed_sni: row.get("allowed_sni")?,
+            custom_sni: row.get("custom_sni")?,
+            upstream_protocol: row.get("upstream_protocol")?,
+            anti_dpi: int_to_bool(row.get::<_, i64>("anti_dpi")?),
+            ipv6_available: int_to_bool(row.get::<_, i64>("ipv6_available")?),
+            allow_private_network: int_to_bool(row.get::<_, i64>("allow_private_network")?),
+            auth_failure_status_code: row.get("auth_failure_status_code")?,
+            reverse_proxy_address: row.get("reverse_proxy_address")?,
+            reverse_proxy_path_mask: row.get("reverse_proxy_path_mask")?,
+            require_client_random_prefix: int_to_bool(row.get::<_, i64>("require_client_random_prefix")?),
+            icmp_enabled: int_to_bool(row.get::<_, i64>("icmp_enabled")?),
+            icmp_interface: row.get("icmp_interface")?,
+            dns_upstreams: row.get("dns_upstreams")?,
+            max_http2_conns: row.get("max_http2_conns")?,
+            max_http3_conns: row.get("max_http3_conns")?,
+            metrics_port: row.get("metrics_port")?,
+            tls_mode: row.get("tls_mode")?,
+            tls_chain_pem: row.get("tls_chain_pem")?,
+            tls_key_pem: dec(&row.get::<_, String>("tls_key_pem")?)?,
+            tls_cert_hostname: row.get("tls_cert_hostname")?,
+            additional_config: row.get("additional_config")?,
+            enabled: int_to_bool(row.get::<_, i64>("enabled")?),
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+        })
+    }
+}
+
+impl TrustTunnelUser {
+    fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
+        Ok(TrustTunnelUser {
+            id: row.get("id")?,
+            user_id: row.get("user_id")?,
+            name: row.get("name")?,
+            username: row.get("username")?,
+            password: dec(&row.get::<_, String>("password")?)?,
+            client_random_prefix: row.get("client_random_prefix")?,
+            expires_at: row.get("expires_at")?,
+            enabled: int_to_bool(row.get::<_, i64>("enabled")?),
+            created_at: row.get("created_at")?,
+            updated_at: row.get("updated_at")?,
+        })
+    }
+}
+
 impl DnsBundle {
     fn from_row(row: &rusqlite::Row) -> rusqlite::Result<Self> {
         Ok(DnsBundle {
@@ -1626,6 +1771,61 @@ CREATE TABLE IF NOT EXISTS xray_clients_table (
     FOREIGN KEY (inbound_id) REFERENCES xray_inbound_table(id)
 )"#;
 
+// trusttunnel_inbound_table — singleton TrustTunnel endpoint. Disabled by
+// default; the supervisor also waits for a certificate and one enabled user,
+// because the endpoint refuses an empty credentials list on a public address.
+const CREATE_TRUSTTUNNEL_INBOUND: &str = r#"
+CREATE TABLE IF NOT EXISTS trusttunnel_inbound_table (
+    id                        TEXT PRIMARY KEY,
+    port                      INTEGER NOT NULL DEFAULT 8443,
+    listen_http1              INTEGER NOT NULL DEFAULT 0,
+    listen_http2              INTEGER NOT NULL DEFAULT 1,
+    listen_quic               INTEGER NOT NULL DEFAULT 1,
+    hostname                  TEXT NOT NULL DEFAULT '',
+    allowed_sni               TEXT NOT NULL DEFAULT '[]',
+    custom_sni                TEXT NOT NULL DEFAULT '',
+    upstream_protocol         TEXT NOT NULL DEFAULT 'http2',
+    anti_dpi                  INTEGER NOT NULL DEFAULT 0,
+    ipv6_available            INTEGER NOT NULL DEFAULT 1,
+    allow_private_network     INTEGER NOT NULL DEFAULT 0,
+    auth_failure_status_code  INTEGER NOT NULL DEFAULT 407,
+    reverse_proxy_address     TEXT NOT NULL DEFAULT '',
+    reverse_proxy_path_mask   TEXT NOT NULL DEFAULT '',
+    require_client_random_prefix INTEGER NOT NULL DEFAULT 0,
+    icmp_enabled              INTEGER NOT NULL DEFAULT 0,
+    icmp_interface            TEXT NOT NULL DEFAULT '',
+    dns_upstreams             TEXT NOT NULL DEFAULT '[]',
+    max_http2_conns           INTEGER NOT NULL DEFAULT 0,
+    max_http3_conns           INTEGER NOT NULL DEFAULT 0,
+    metrics_port              INTEGER NOT NULL DEFAULT 1987,
+    tls_mode                  TEXT NOT NULL DEFAULT 'self_signed',
+    tls_chain_pem             TEXT NOT NULL DEFAULT '',
+    tls_key_pem               TEXT NOT NULL DEFAULT '',
+    tls_cert_hostname         TEXT NOT NULL DEFAULT '',
+    additional_config         TEXT NOT NULL DEFAULT '',
+    enabled                   INTEGER NOT NULL DEFAULT 0,
+    created_at                TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at                TEXT NOT NULL DEFAULT (datetime('now'))
+)"#;
+
+// trusttunnel_users_table — one row per `[[client]]` in credentials.toml.
+// username is UNIQUE because it is the endpoint's identity for the user and
+// the key of its per-user metrics.
+const CREATE_TRUSTTUNNEL_USERS: &str = r#"
+CREATE TABLE IF NOT EXISTS trusttunnel_users_table (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id               INTEGER,
+    name                  TEXT NOT NULL,
+    username              TEXT NOT NULL UNIQUE,
+    password              TEXT NOT NULL,
+    client_random_prefix  TEXT NOT NULL DEFAULT '',
+    expires_at            TEXT,
+    enabled               INTEGER NOT NULL DEFAULT 1,
+    created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (user_id) REFERENCES users_table(id)
+)"#;
+
 // proxy_settings_table — singleton (id always 'proxy0'). Configuration
 // for the in-process DPI-imitation proxy that fronts the AmneziaWG UDP
 // port. Disabled by default (AmneziaWG keeps the public port directly).
@@ -1886,6 +2086,8 @@ fn create_tables(conn: &Connection) -> Result<()> {
     conn.execute_batch(CREATE_MTPROXY_USERS)?;
     conn.execute_batch(CREATE_MDNSVPN_INBOUND)?;
     conn.execute_batch(CREATE_MDNSVPN_CLIENTS)?;
+    conn.execute_batch(CREATE_TRUSTTUNNEL_INBOUND)?;
+    conn.execute_batch(CREATE_TRUSTTUNNEL_USERS)?;
     apply_migrations(conn)?;
     Ok(())
 }
@@ -2124,6 +2326,12 @@ fn ensure_singleton_rows(conn: &Connection) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO mtproxy_inbound_table (id) VALUES (?1)",
         params!["mtproxy0"],
+    )?;
+    // trusttunnel_inbound: column-level defaults (port 8443, HTTP/2 +
+    // QUIC, self-signed TLS, disabled).
+    conn.execute(
+        "INSERT OR IGNORE INTO trusttunnel_inbound_table (id) VALUES (?1)",
+        params!["trusttunnel0"],
     )?;
     // mdnsvpn_inbound: every field defaults to its column-level default
     // in CREATE_MDNSVPN_INBOUND — encryption method 1 (XOR), no key
@@ -2379,6 +2587,12 @@ fn seed_if_empty(conn: &Connection) -> Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO mdnsvpn_inbound_table (id) VALUES (?1)",
         params!["mdnsvpn0"],
+    )?;
+
+    // trusttunnel_inbound default — disabled; see ensure_singleton_rows.
+    conn.execute(
+        "INSERT OR IGNORE INTO trusttunnel_inbound_table (id) VALUES (?1)",
+        params!["trusttunnel0"],
     )?;
 
     crate::info!("Seeded default database rows");
@@ -3988,6 +4202,138 @@ pub fn toggle_mdnsvpn_client(id: i64, enabled: bool) -> Result<()> {
          SET enabled = ?1, updated_at = datetime('now') WHERE id = ?2",
         params![bool_to_int(enabled), id],
     )?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// TrustTunnel inbound + users helpers
+// ---------------------------------------------------------------------------
+
+pub fn get_trusttunnel_inbound() -> Result<TrustTunnelInbound> {
+    let c = conn();
+    c.query_row(
+        "SELECT * FROM trusttunnel_inbound_table WHERE id = 'trusttunnel0'",
+        [],
+        TrustTunnelInbound::from_row,
+    )
+    .context("No trusttunnel_inbound row found")
+}
+
+const VALID_TRUSTTUNNEL_INBOUND_COLUMNS: &[&str] = &[
+    "port", "listen_http1", "listen_http2", "listen_quic", "hostname",
+    "allowed_sni", "custom_sni", "upstream_protocol", "anti_dpi",
+    "ipv6_available", "allow_private_network", "auth_failure_status_code",
+    "reverse_proxy_address", "reverse_proxy_path_mask",
+    "require_client_random_prefix", "icmp_enabled",
+    "icmp_interface", "dns_upstreams", "max_http2_conns", "max_http3_conns",
+    "metrics_port", "tls_mode", "tls_chain_pem", "tls_key_pem",
+    "tls_cert_hostname", "additional_config", "enabled",
+];
+
+pub fn update_trusttunnel_inbound(fields: &UpdateMap) -> Result<()> {
+    exec_update(
+        "trusttunnel_inbound_table",
+        "id",
+        WhereVal::Str("trusttunnel0"),
+        fields,
+        VALID_TRUSTTUNNEL_INBOUND_COLUMNS,
+        &["id"],
+    )
+}
+
+pub fn list_trusttunnel_users() -> Result<Vec<TrustTunnelUser>> {
+    let c = conn();
+    let mut stmt = c.prepare(
+        "SELECT * FROM trusttunnel_users_table ORDER BY created_at ASC, id ASC",
+    )?;
+    let rows = stmt
+        .query_map([], TrustTunnelUser::from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+pub fn get_trusttunnel_user(id: i64) -> Result<TrustTunnelUser> {
+    let c = conn();
+    c.query_row(
+        "SELECT * FROM trusttunnel_users_table WHERE id = ?1",
+        params![id],
+        TrustTunnelUser::from_row,
+    )
+    .context(format!("TrustTunnel user {id} not found"))
+}
+
+/// Data required to insert a TrustTunnel user. The password is generated
+/// by the caller (`trusttunnel::keys`).
+#[derive(Debug, Clone)]
+pub struct CreateTrustTunnelUserParams {
+    pub user_id: Option<i64>,
+    pub name: String,
+    pub username: String,
+    pub password: String,
+    pub client_random_prefix: String,
+    pub expires_at: Option<String>,
+    pub enabled: bool,
+}
+
+pub fn create_trusttunnel_user(data: &CreateTrustTunnelUserParams) -> Result<i64> {
+    let c = conn();
+    c.execute(
+        "INSERT INTO trusttunnel_users_table \
+         (user_id, name, username, password, client_random_prefix, expires_at, enabled) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            data.user_id,
+            data.name,
+            data.username,
+            enc(&data.password)?,
+            data.client_random_prefix,
+            data.expires_at,
+            bool_to_int(data.enabled),
+        ],
+    )?;
+    Ok(c.last_insert_rowid())
+}
+
+const VALID_TRUSTTUNNEL_USER_COLUMNS: &[&str] = &[
+    "user_id", "name", "password", "client_random_prefix", "expires_at", "enabled",
+];
+
+/// Update by id. `username` is deliberately not updatable: it keys the
+/// endpoint's per-user metrics and the links already handed out.
+pub fn update_trusttunnel_user(id: i64, fields: &UpdateMap) -> Result<()> {
+    exec_update(
+        "trusttunnel_users_table",
+        "id",
+        WhereVal::I64(id),
+        fields,
+        VALID_TRUSTTUNNEL_USER_COLUMNS,
+        &["id"],
+    )
+}
+
+/// Link (or with `None`, unlink) a TrustTunnel user to a login user. Kept
+/// out of the string-typed `UpdateMap` path because that cannot write NULL.
+pub fn set_trusttunnel_user_owner(id: i64, user_id: Option<i64>) -> Result<()> {
+    let c = conn();
+    let n = c.execute(
+        "UPDATE trusttunnel_users_table SET user_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+        params![user_id, id],
+    )?;
+    if n == 0 {
+        return Err(anyhow!("TrustTunnel user {id} not found"));
+    }
+    Ok(())
+}
+
+pub fn delete_trusttunnel_user(id: i64) -> Result<()> {
+    let c = conn();
+    let n = c.execute(
+        "DELETE FROM trusttunnel_users_table WHERE id = ?1",
+        params![id],
+    )?;
+    if n == 0 {
+        return Err(anyhow!("TrustTunnel user {id} not found"));
+    }
     Ok(())
 }
 

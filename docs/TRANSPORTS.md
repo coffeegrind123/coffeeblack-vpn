@@ -1,11 +1,12 @@
 # Transports
 
-Five transports share one admin UI, user roster, auth layer and database. Only Gaming mode
+Six transports share one admin UI, user roster, auth layer and database. Only Gaming mode
 is on by default; each of the others is enabled independently and fails independently.
 
 - [Gaming — AmneziaWG](#gaming--amneziawg)
   - [AmneziaWG 3](#amneziawg-3)
 - [Browsing — Xray VLESS + Reality + Vision](#browsing--xray-vless--reality--vision)
+- [TrustTunnel — HTTP/2 + HTTP/3 tunnel](#trusttunnel--http2--http3-tunnel)
 - [Telegram — MTProxy via telemt](#telegram--mtproxy-via-telemt)
 - [DNS tunnel — MasterDnsVPN](#dns-tunnel--masterdnsvpn)
 - [UDP over DNS — QQ-DNS](#udp-over-dns--qq-dns)
@@ -158,6 +159,75 @@ from `/api/xray/clients/:id/json`.
 It cannot **provision** peers on CoffeeBlack; its self-hosting flow expects SSH access to
 a Docker host. That is by design. Peer management lives in the CoffeeBlack admin UI, and
 the Amnezia app is one of several supported clients.
+
+---
+
+## TrustTunnel — HTTP/2 + HTTP/3 tunnel
+
+[TrustTunnel](https://github.com/TrustTunnel/TrustTunnel) (AdGuard, Apache-2.0) carries a
+device's whole TCP, UDP and ICMP traffic inside HTTP/2 or HTTP/3 `CONNECT` streams over
+TLS to **your own hostname**. To a passive observer the session is HTTPS. To a prober
+without credentials the port answers like a web server: 407 by default, or 404/403 if you
+choose, optionally fronting a real cover site. It is an L4 proxy, not a TUN VPN: the
+endpoint opens ordinary outbound sockets, so there is no NAT and no firewall rule to
+manage.
+
+Reach for it when Reality's borrowed-SNI model is wrong for you — you own a domain, or
+you want HTTP/3 — or when Gaming's UDP is blocked but TCP 443-style HTTPS is not.
+
+Off by default. To enable:
+
+1. **Admin → TrustTunnel → Endpoint**. Set the **listen port**, default `8443`. Xray
+   Reality usually holds TCP 443; the API refuses a port another enabled transport uses.
+   **Open the port on both TCP and UDP**: HTTP/3 is QUIC over UDP.
+2. Set a **TLS hostname**, unless the General tab host is already a DNS name. With the
+   default self-signed certificate **any DNS name works**, even one you do not own. Clients
+   pin the certificate through the link, and the link carries the server's IPs separately.
+3. Choose what share links use: HTTP/2 (works through UDP-blocking networks) or HTTP/3
+   (faster on lossy links).
+4. Toggle **Enabled**, **Save**, then **TrustTunnel → New user**. The endpoint will not
+   start until one user is active, because upstream refuses an empty credentials list on a
+   public address.
+5. Hand over the user's `tt://` link or QR. A `.toml` is also available for the
+   TrustTunnel CLI's `setup_wizard --endpoint_config`.
+
+**Certificates.** The default is a self-signed P-256 certificate, valid for ten years and
+embedded in every link (deep-link tag `0x08`). Clients pin it, so **regenerating it, or
+changing the hostname (which re-issues it), invalidates every link handed out so far.** To
+keep links short, upload a CA-signed chain for the hostname, for example a Let's Encrypt
+certificate issued elsewhere. When the chain verifies against the public roots, links omit
+it and clients use their system store, which is the same rule `trusttunnel_endpoint -c`
+applies. The supervisor re-validates the certificate before every start: an expired or
+mismatched one stops the endpoint with a reason rather than crash-looping it.
+
+**Every roster change restarts the endpoint.** Upstream reads credentials once, at
+startup; `SIGHUP` reloads only the hosts file, and a hosts file that fails to parse there
+panics the process. The supervisor therefore restarts the endpoint, but only when the
+rendered files actually change, and it debounces bursts of user edits into one restart.
+Connected users reconnect once. Stopping sends `SIGINT`, the signal upstream drains on.
+
+**Anti-probing.** **Require client-random prefix** appends a match-everything `deny` to
+`rules.toml`, after one `allow` per user prefix. A TLS ClientHello whose random field does
+not carry a known prefix is then dropped before the HTTP layer, so an active prober never
+sees an auth challenge at all. Generated prefixes fix ~70 % of the bits of a 4-byte mask
+and leave the rest random, as upstream's own generator does. This needs a client that
+sends the prefix — the official apps and pmnezia-client do.
+
+**Traffic stats** are RAM only, like the Gaming activity history. The endpoint's per-user
+counters (`/clients` on the loopback metrics listener) reset with every restart; the panel
+folds them into totals that survive endpoint restarts but not a panel restart. The source
+IP the endpoint reports is never stored.
+
+**ICMP forwarding** is off by default. It needs `CAP_NET_RAW` (add `NET_RAW` to `cap_add`
+in Docker) and an egress interface; the default-route interface is used when none is set.
+
+### Why bundle TrustTunnel?
+
+The protocol is HTTP/2 and HTTP/3 multiplexing with framed UDP and ICMP over QUIC,
+BoringSSL-backed TLS, and a client-random rules engine; reimplementing it would be a large
+attack surface. Upstream's release CI already builds `x86_64-unknown-linux-musl`, so the
+pinned binary is shipped exactly as AdGuard signed it. `vendor/update.sh` checks the
+GitHub asset digest *and* the GPG signature against the committed release key.
 
 ---
 
@@ -329,5 +399,6 @@ See also: [not compatible with header protection or random trailers](#not-compat
 | Browsing (Xray) | `vless://` URL (emits both `spx` and `spiderX` for compatibility), QR, native Amnezia-format JSON | Amnezia VPN, v2rayN, v2rayNG, NekoBox, Hiddify, Streisand, Shadowrocket, FoXray |
 | Telegram | `tg://proxy?…&secret=ee<…>`, plus `dd`-prefix and classic variants of the same user, QR | Telegram desktop and mobile |
 | DNS tunnel | `client_config.toml` + `client_resolvers.txt`, JSON, `mdnsvpn://b64?<base64>`, QR | MasterDnsVPN client |
+| TrustTunnel | `tt://?<base64url>` deep link (version 1, certificate embedded when self-signed), QR, client `.toml` | TrustTunnel apps (iOS, Android), pmnezia-client, Shadowrocket, TrustTunnel CLI (`setup_wizard --deeplink` / `--endpoint_config`) |
 
 The web UI carries the same guidance inline, next to each share button.

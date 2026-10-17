@@ -31,6 +31,10 @@ services:
     ports:
       - "51820:51820/udp"
       - "51821:51821/tcp"
+      # Publish each optional transport you enable. TrustTunnel needs its
+      # port on TCP (HTTP/2) AND UDP (HTTP/3) — default 8443:
+      # - "8443:8443/tcp"
+      # - "8443:8443/udp"
     restart: unless-stopped
     devices:
       - /dev/net/tun:/dev/net/tun
@@ -43,6 +47,8 @@ services:
       - ALL
     cap_add:
       - NET_ADMIN
+      # Uncomment only for TrustTunnel's ICMP forwarding (raw ICMP sockets).
+      # - NET_RAW
     # Belt-and-braces: a compromised process can never regain privileges via
     # setuid binaries even if one is ever added to the image.
     security_opt:

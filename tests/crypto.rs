@@ -314,6 +314,45 @@ fn xray_and_mtproxy_credentials_are_encrypted_at_rest() {
 
 #[test]
 #[serial(db)]
+fn trusttunnel_password_and_tls_key_are_encrypted_at_rest() {
+    seed();
+    let pw = "TrustTunnelPassword0123456789abc";
+    let id = db::create_trusttunnel_user(&db::CreateTrustTunnelUserParams {
+        user_id: None,
+        name: "tt".into(),
+        username: "tt".into(),
+        password: pw.into(),
+        client_random_prefix: String::new(),
+        expires_at: None,
+        enabled: true,
+    })
+    .unwrap();
+    for stored in raw("trusttunnel_users_table", "password") {
+        assert!(crypto::is_encrypted(&stored), "TrustTunnel password stored as {stored}");
+        assert!(!stored.contains(pw));
+    }
+    assert_eq!(db::get_trusttunnel_user(id).unwrap().password, pw);
+
+    // Rotation goes through the generic update path, which must encrypt too.
+    let mut f = db::UpdateMap::new();
+    f.insert("password".into(), "RotatedPassword0123456789abcdefg".into());
+    db::update_trusttunnel_user(id, &f).unwrap();
+    for stored in raw("trusttunnel_users_table", "password") {
+        assert!(crypto::is_encrypted(&stored));
+    }
+
+    let key = "-----BEGIN PRIVATE KEY-----\nsecret-key-material\n-----END PRIVATE KEY-----\n";
+    let mut f = db::UpdateMap::new();
+    f.insert("tls_key_pem".into(), key.into());
+    db::update_trusttunnel_inbound(&f).unwrap();
+    for stored in raw("trusttunnel_inbound_table", "tls_key_pem") {
+        assert!(crypto::is_encrypted(&stored), "TLS key stored as {stored}");
+    }
+    assert_eq!(db::get_trusttunnel_inbound().unwrap().tls_key_pem, key);
+}
+
+#[test]
+#[serial(db)]
 fn dns_tunnel_key_and_session_secret_are_encrypted_at_rest() {
     seed();
     db::update_mdnsvpn_encryption_key("tunnel-key-material").unwrap();

@@ -187,6 +187,10 @@ function routeInternal(path) {
     $('page-xray').classList.add('active');
     renderNav();
     refreshXrayClients();
+  } else if (path === '/trusttunnel') {
+    $('page-trusttunnel').classList.add('active');
+    renderNav();
+    refreshTrustTunnelUsers();
   } else if (path.startsWith('/xray/clients/')) {
     $('page-xray-edit').classList.add('active');
     renderNav();
@@ -284,6 +288,7 @@ function renderNav() {
   if (path === '/me') activeRoute = '/me';
   else if (path === '/admin') activeRoute = '/admin';
   else if (path === '/xray' || path.startsWith('/xray/')) activeRoute = '/xray';
+  else if (path === '/trusttunnel') activeRoute = '/trusttunnel';
   else if (path === '/' || path.startsWith('/clients/')) activeRoute = '/';
 
   document.querySelectorAll('[data-route]').forEach(el => {
@@ -1810,6 +1815,194 @@ async function showAdminTab(tab, e) {
             <button type="submit" class="btn btn--primary">Save changes</button>
           </div>
         </form>`;
+    } else if (tab === 'trusttunnel') {
+      const ib = await GET('/api/admin/trusttunnel/inbound');
+      const status = await GET('/api/admin/trusttunnel/status').catch(() => null);
+      const stateLabel = ttStatusPill(status, true);
+      const bundleNote = ib.isBundled
+        ? `Bundled TrustTunnel ${esc(ib.trusttunnelVersion || '?')} · supervisor: ${stateLabel}`
+        : `<span class="pill pill--err">TrustTunnel not bundled in this build</span>`;
+      const certState = !ib.tlsChainPem
+        ? '<span class="pill">no certificate yet — issued when the endpoint first starts</span>'
+        : ib.tlsCaTrusted
+          ? '<span class="pill pill--ok">publicly trusted · links use the system store</span>'
+          : '<span class="pill">not publicly trusted · chain is embedded in every link</span>';
+      const opt = (v, cur, label) => `<option value="${esc(String(v))}" ${String(cur) === String(v) ? 'selected' : ''}>${esc(label)}</option>`;
+      el.innerHTML = `
+        <div class="notice notice--info" style="margin-bottom:14px">
+          <svg><use href="#i-shield"/></svg>
+          <div><a href="https://github.com/TrustTunnel/TrustTunnel" target="_blank" rel="noopener">TrustTunnel</a> carries the whole device's TCP, UDP and ICMP inside HTTP/2 or HTTP/3 <span class="mono">CONNECT</span> streams over TLS to <b>your</b> hostname — on the wire it is HTTPS. Clients: the official TrustTunnel apps, pmnezia-client, Shadowrocket, or the TrustTunnel CLI. It needs its port open on <b>both TCP and UDP</b> (UDP carries HTTP/3).</div>
+        </div>
+        <div style="margin-bottom:14px">${bundleNote}</div>
+        ${ib.hostnameError ? `<div class="notice notice--warn" style="margin-bottom:14px"><svg><use href="#i-alert"/></svg><div>${esc(ib.hostnameError)}</div></div>` : ''}
+        <form onsubmit="saveTrustTunnelInbound(event)">
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <div class="card-title">TrustTunnel endpoint</div>
+                <div class="card-sub">Every save that changes the rendered config restarts the endpoint — connected users reconnect once. Users are managed on the <a onclick="navigate('/trusttunnel')">TrustTunnel</a> page.</div>
+              </div>
+              <label class="toggle ${ib.enabled ? 'is-on' : ''}" title="Master switch. The endpoint also waits for a TLS hostname and at least one active user.">
+                <input type="checkbox" id="adm-tt-enabled" ${ib.enabled ? 'checked' : ''}>
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                <span class="toggle-label">Enabled</span>
+              </label>
+            </div>
+            <div class="card-body">
+              <div class="stack">
+                <div class="split">
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-port" title="Bound on TCP (HTTP/1.1, HTTP/2) and UDP (HTTP/3). Default 8443 because Xray Reality usually holds TCP 443.">Listen port (TCP + UDP)</label>
+                    <input type="number" id="adm-tt-port" class="mono-input" value="${ib.port}" min="1" max="65535">
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-hostname" title="TLS server name, certificate name and link hostname. Empty = the General tab host, when that is a DNS name. With the self-signed certificate any DNS name works.">TLS hostname</label>
+                    <input type="text" id="adm-tt-hostname" class="mono-input" value="${esc(ib.hostname || '')}" placeholder="${esc(ib.effectiveHostname || 'vpn.example.com')}">
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field-label" title="Which listeners to open. Clients use HTTP/2 or HTTP/3; HTTP/1.1 is only for browser-style CONNECT clients.">Protocols</label>
+                  <div style="display:flex;gap:18px;flex-wrap:wrap">
+                    <label class="checkbox"><input type="checkbox" id="adm-tt-h2" ${ib.listenHttp2 ? 'checked' : ''}><span class="checkbox-box"><svg><use href="#i-check"/></svg></span> HTTP/2 (TCP)</label>
+                    <label class="checkbox"><input type="checkbox" id="adm-tt-h3" ${ib.listenQuic ? 'checked' : ''}><span class="checkbox-box"><svg><use href="#i-check"/></svg></span> HTTP/3 (QUIC, UDP)</label>
+                    <label class="checkbox"><input type="checkbox" id="adm-tt-h1" ${ib.listenHttp1 ? 'checked' : ''}><span class="checkbox-box"><svg><use href="#i-check"/></svg></span> HTTP/1.1 (TCP)</label>
+                  </div>
+                </div>
+                <div class="split">
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-upstream" title="What share links tell clients to open. HTTP/3 is faster on lossy links; HTTP/2 survives networks that block UDP.">Share links use</label>
+                    <select id="adm-tt-upstream" class="mono-input">
+                      ${opt('http2', ib.upstreamProtocol, 'HTTP/2')}
+                      ${opt('http3', ib.upstreamProtocol, 'HTTP/3 (QUIC)')}
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-authcode" title="Answer to a CONNECT that fails authentication. 407 is the proxy-standard answer; 404 or 403 make the port look like a plain web server to a prober (and break proxy auth prompts in Chrome's HTTP/1.1 path).">Auth-failure status</label>
+                    <select id="adm-tt-authcode" class="mono-input">
+                      ${[407, 405, 404, 403].map(c => opt(c, ib.authFailureStatusCode, String(c))).join('')}
+                    </select>
+                  </div>
+                </div>
+                <div class="split">
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-allowed-sni" title="Extra SNIs routed to the tunnel, comma-separated. Use with a custom SNI to make clients send a different server name than the hostname.">Allowed SNIs</label>
+                    <input type="text" id="adm-tt-allowed-sni" class="mono-input" value="${esc((ib.allowedSni || []).join(', '))}" placeholder="(none)">
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-custom-sni" title="SNI put into share links instead of the hostname. Must be one of the allowed SNIs.">Custom SNI in links</label>
+                    <input type="text" id="adm-tt-custom-sni" class="mono-input" value="${esc(ib.customSni || '')}" placeholder="(send the hostname)">
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="adm-tt-dns" title="DNS upstreams handed to clients in share links, comma-separated (e.g. 1.1.1.1, tls://dns.example.com). Empty = client default.">Client DNS upstreams</label>
+                  <input type="text" id="adm-tt-dns" class="mono-input" value="${esc((ib.dnsUpstreams || []).join(', '))}" placeholder="(client default)">
+                </div>
+                <div class="split">
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-rp-addr" title="Cover web server (ip:port, plain HTTP/1.1). Requests under the path prefix are proxied there, so a browser visiting the hostname sees a real site.">Cover site address</label>
+                    <input type="text" id="adm-tt-rp-addr" class="mono-input" value="${esc(ib.reverseProxyAddress || '')}" placeholder="(off) e.g. 127.0.0.1:8080">
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-rp-mask" title="Path prefix proxied to the cover site, e.g. / for everything that is not a tunnel request.">Cover site path prefix</label>
+                    <input type="text" id="adm-tt-rp-mask" class="mono-input" value="${esc(ib.reverseProxyPathMask || '')}" placeholder="/">
+                  </div>
+                </div>
+                <div class="field field--inline">
+                  <label class="toggle ${ib.requireClientRandomPrefix ? 'is-on' : ''}">
+                    <input type="checkbox" id="adm-tt-require-prefix" ${ib.requireClientRandomPrefix ? 'checked' : ''}>
+                    <span class="toggle-track"></span>
+                  </label>
+                  <div>
+                    <label class="field-label" title="Drop every TLS ClientHello whose random does not carry one of the users' client-random prefixes — active probers never reach the HTTP layer. Every active user needs a prefix (and a client that supports it).">Require client-random prefix (anti-probing)</label>
+                  </div>
+                </div>
+                <div class="field field--inline">
+                  <label class="toggle ${ib.antiDpi ? 'is-on' : ''}">
+                    <input type="checkbox" id="adm-tt-antidpi" ${ib.antiDpi ? 'checked' : ''}>
+                    <span class="toggle-track"></span>
+                  </label>
+                  <div><label class="field-label" title="Tells clients (via the link) to split the TLS ClientHello so SNI-matching DPI misses it.">Client anti-DPI</label></div>
+                </div>
+                <div class="field field--inline">
+                  <label class="toggle ${ib.ipv6Available ? 'is-on' : ''}">
+                    <input type="checkbox" id="adm-tt-ipv6" ${ib.ipv6Available ? 'checked' : ''}>
+                    <span class="toggle-track"></span>
+                  </label>
+                  <div><label class="field-label" title="Forward to IPv6 destinations. Turn off on hosts without IPv6 egress so clients do not route IPv6 into a dead end.">IPv6 egress</label></div>
+                </div>
+                <div class="field field--inline">
+                  <label class="toggle ${ib.allowPrivateNetwork ? 'is-on' : ''}">
+                    <input type="checkbox" id="adm-tt-private" ${ib.allowPrivateNetwork ? 'checked' : ''}>
+                    <span class="toggle-track"></span>
+                  </label>
+                  <div><label class="field-label" title="Let users reach private and loopback addresses on the server's side (the server's LAN, its own services). Off by default.">Allow private-network destinations</label></div>
+                </div>
+                <div class="split">
+                  <div class="field field--inline">
+                    <label class="toggle ${ib.icmpEnabled ? 'is-on' : ''}">
+                      <input type="checkbox" id="adm-tt-icmp" ${ib.icmpEnabled ? 'checked' : ''}>
+                      <span class="toggle-track"></span>
+                    </label>
+                    <div><label class="field-label" title="Forward ping/traceroute. Needs CAP_NET_RAW (add NET_RAW to cap_add in Docker).">ICMP forwarding</label></div>
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-icmp-if" title="Egress interface for ICMP. Empty = the default-route interface.">ICMP interface</label>
+                    <input type="text" id="adm-tt-icmp-if" class="mono-input" value="${esc(ib.icmpInterface || '')}" placeholder="(default route)">
+                  </div>
+                </div>
+                <div class="split">
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-h2max" title="Max HTTP/2 connections per user. The official client opens 8 per device. 0 = unlimited.">Max HTTP/2 conns / user</label>
+                    <input type="number" id="adm-tt-h2max" class="mono-input" value="${ib.maxHttp2Conns || 0}" min="0">
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-h3max" title="Max HTTP/3 connections per user. 0 = unlimited.">Max HTTP/3 conns / user</label>
+                    <input type="number" id="adm-tt-h3max" class="mono-input" value="${ib.maxHttp3Conns || 0}" min="0">
+                  </div>
+                  <div class="field">
+                    <label class="field-label" for="adm-tt-metrics" title="Loopback port of the endpoint's metrics listener, polled for per-user traffic. Never exposed.">Metrics port (127.0.0.1)</label>
+                    <input type="number" id="adm-tt-metrics" class="mono-input" value="${ib.metricsPort}" min="1" max="65535">
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field-label" for="adm-tt-extra" title="Free-form TOML spliced into vpn.toml after the top-level keys. Escape hatch for keys the UI doesn't model.">Additional config (TOML)</label>
+                  <textarea id="adm-tt-extra" class="mono-input" rows="3" placeholder="(empty — e.g. speedtest_enable = true)">${esc(ib.additionalConfig || '')}</textarea>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="save-bar">
+            <span class="changed">Saving restarts the endpoint only when the rendered config changes</span>
+            <div class="save-bar-spacer"></div>
+            <button type="button" class="btn btn--ghost" onclick="restartTrustTunnel()"><svg><use href="#i-refresh"/></svg> Restart endpoint</button>
+            <button type="submit" class="btn btn--primary">Save changes</button>
+          </div>
+        </form>
+        <div class="card" style="margin-top:14px">
+          <div class="card-head">
+            <div>
+              <div class="card-title">TLS certificate</div>
+              <div class="card-sub">Mode <span class="mono">${esc(ib.tlsMode)}</span>${ib.tlsCertHostname ? ` · issued for <span class="mono">${esc(ib.tlsCertHostname)}</span>` : ''} · ${certState}</div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div class="stack">
+              <div class="field-hint">A self-signed certificate is pinned by clients through the link — replacing it means re-sharing every user's link. Upload a CA-signed chain (e.g. Let's Encrypt, issued elsewhere) for <span class="mono">${esc(ib.effectiveHostname || 'the hostname')}</span> to keep links short.</div>
+              <div class="field">
+                <label class="field-label" for="adm-tt-chain">Certificate chain (PEM)</label>
+                <textarea id="adm-tt-chain" class="mono-input" rows="4" placeholder="-----BEGIN CERTIFICATE-----">${esc(ib.tlsMode === 'custom' ? (ib.tlsChainPem || '') : '')}</textarea>
+              </div>
+              <div class="field">
+                <label class="field-label" for="adm-tt-key">Private key (PEM — never shown again)</label>
+                <textarea id="adm-tt-key" class="mono-input" rows="3" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button type="button" class="btn btn--primary btn--sm" onclick="uploadTrustTunnelCert()">Use this certificate</button>
+                <button type="button" class="btn btn--ghost btn--sm" onclick="regenerateTrustTunnelCert()"><svg><use href="#i-refresh"/></svg> New self-signed certificate</button>
+              </div>
+            </div>
+          </div>
+        </div>`;
     } else if (tab === 'proxy') {
       const s = await GET('/api/admin/proxy/settings');
       const status = await GET('/api/admin/proxy/status').catch(() => null);
@@ -3132,4 +3325,260 @@ async function showMdnsvpnQr(id, name) {
       }
     }
   } catch(e) { showToast('QR fetch failed: ' + e.message, 'error'); }
+}
+
+
+// ===================== TRUSTTUNNEL =====================
+
+let TT_REFRESH_TIMER = null;
+
+function ttStatusPill(status, verbose) {
+  if (!status) return '<span class="pill">unknown</span>';
+  if (status.state === 'running') {
+    const health = status.healthy ? '' : ' · starting';
+    return verbose
+      ? `<span class="pill pill--ok">Running · pid ${status.pid} · ${status.users} user${status.users === 1 ? '' : 's'} · ${Math.round(status.uptime_seconds || 0)}s${health}</span>`
+      : `<span class="pill pill--ok">Running${health}</span>`;
+  }
+  if (status.state === 'crashed') {
+    return `<span class="pill pill--err" title="${esc(status.last_error || '')}">Crashed × ${status.restart_attempts}</span>`;
+  }
+  return `<span class="pill" title="${esc(status.reason || '')}">${esc(status.reason || 'Disabled')}</span>`;
+}
+
+function ttList(id) {
+  return $(id).value.split(',').map(s => s.trim()).filter(Boolean);
+}
+
+async function saveTrustTunnelInbound(e) {
+  e.preventDefault();
+  const body = {
+    enabled: $('adm-tt-enabled').checked,
+    port: parseInt($('adm-tt-port').value, 10) || 8443,
+    hostname: $('adm-tt-hostname').value.trim(),
+    listenHttp1: $('adm-tt-h1').checked,
+    listenHttp2: $('adm-tt-h2').checked,
+    listenQuic: $('adm-tt-h3').checked,
+    upstreamProtocol: $('adm-tt-upstream').value,
+    authFailureStatusCode: parseInt($('adm-tt-authcode').value, 10),
+    allowedSni: ttList('adm-tt-allowed-sni'),
+    customSni: $('adm-tt-custom-sni').value.trim(),
+    dnsUpstreams: ttList('adm-tt-dns'),
+    reverseProxyAddress: $('adm-tt-rp-addr').value.trim(),
+    reverseProxyPathMask: $('adm-tt-rp-mask').value.trim(),
+    requireClientRandomPrefix: $('adm-tt-require-prefix').checked,
+    antiDpi: $('adm-tt-antidpi').checked,
+    ipv6Available: $('adm-tt-ipv6').checked,
+    allowPrivateNetwork: $('adm-tt-private').checked,
+    icmpEnabled: $('adm-tt-icmp').checked,
+    icmpInterface: $('adm-tt-icmp-if').value.trim(),
+    maxHttp2Conns: parseInt($('adm-tt-h2max').value, 10) || 0,
+    maxHttp3Conns: parseInt($('adm-tt-h3max').value, 10) || 0,
+    metricsPort: parseInt($('adm-tt-metrics').value, 10) || 1987,
+    additionalConfig: $('adm-tt-extra').value,
+  };
+  if (!body.listenHttp1 && !body.listenHttp2 && !body.listenQuic) {
+    showToast('Enable at least one protocol', 'error');
+    return;
+  }
+  if (!!body.reverseProxyAddress !== !!body.reverseProxyPathMask) {
+    showToast('The cover site needs both an address and a path prefix', 'error');
+    return;
+  }
+  try {
+    const out = await POST('/api/admin/trusttunnel/inbound', body);
+    showToast(out && out.warning ? 'Saved · ' + out.warning : 'Saved', out && out.warning ? 'error' : 'success');
+    showAdminTab('trusttunnel');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function restartTrustTunnel() {
+  try {
+    await POST('/api/admin/trusttunnel/restart', {});
+    showToast('TrustTunnel endpoint restarted', 'success');
+    showAdminTab('trusttunnel');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function uploadTrustTunnelCert() {
+  const chainPem = $('adm-tt-chain').value.trim();
+  const keyPem = $('adm-tt-key').value.trim();
+  if (!chainPem || !keyPem) {
+    showToast('Paste both the certificate chain and the private key', 'error');
+    return;
+  }
+  try {
+    const out = await POST('/api/admin/trusttunnel/inbound/certificate', { chainPem, keyPem });
+    showToast(out && out.warning ? 'Certificate saved · ' + out.warning : 'Certificate saved', out && out.warning ? 'error' : 'success');
+    showAdminTab('trusttunnel');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function regenerateTrustTunnelCert() {
+  if (!confirm('Issue a new self-signed certificate? Every existing TrustTunnel link pins the old one and must be re-shared.')) return;
+  try {
+    await POST('/api/admin/trusttunnel/inbound/regenerate-certificate', {});
+    showToast('New certificate issued — re-share user links', 'success');
+    showAdminTab('trusttunnel');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function refreshTrustTunnelUsers() {
+  if (TT_REFRESH_TIMER) { clearTimeout(TT_REFRESH_TIMER); TT_REFRESH_TIMER = null; }
+  try {
+    const list = await GET('/api/trusttunnel/users');
+    const isAdmin = USER && USER.role === 1;
+    const status = isAdmin ? await GET('/api/admin/trusttunnel/status').catch(() => null) : null;
+    renderTrustTunnelUsers(list || [], status);
+    $('tt-count').textContent = (list || []).length || '';
+    $('side-tt-count').textContent = (list || []).length || '—';
+  } catch(e) {
+    if (USER) showToast(e.message, 'error');
+  }
+  // Traffic is polled server-side every 30 s.
+  if (window.location.hash === '#/trusttunnel') {
+    TT_REFRESH_TIMER = setTimeout(refreshTrustTunnelUsers, 30000);
+  }
+}
+
+function renderTrustTunnelUsers(users, status) {
+  const list = $('tt-list');
+  const empty = $('tt-empty');
+  const isAdmin = USER && USER.role === 1;
+  const createBtn = $('tt-create-btn');
+  if (createBtn) createBtn.style.display = isAdmin ? '' : 'none';
+  $('tt-status-pill').innerHTML = isAdmin ? ttStatusPill(status, false) : '';
+
+  if (!users.length) {
+    list.innerHTML = '';
+    empty.style.display = '';
+    empty.innerHTML = isAdmin
+      ? `<h3>No TrustTunnel users yet</h3>
+         <p>Click <b>New user</b>, then enable the endpoint on <a onclick="navigate('/admin');setTimeout(()=>showAdminTab('trusttunnel'),0)">Admin → TrustTunnel</a>.</p>
+         <div class="empty-help">
+           <div class="empty-help-title">How users connect</div>
+           <ol class="empty-help-list">
+             <li>Copy the user's <span class="mono">tt://</span> link, or show its QR.</li>
+             <li>Open it in the <b>TrustTunnel</b> app (iOS / Android), <b>pmnezia-client</b>, or <b>Shadowrocket</b> — or import the <span class="mono">.toml</span> with the TrustTunnel CLI's <span class="mono">setup_wizard --endpoint_config</span>.</li>
+             <li>The link pins this server's certificate, so a self-signed one is fine.</li>
+           </ol>
+         </div>`
+      : `<h3>No TrustTunnel users issued for your account</h3><p>Ask an admin to create one.</p>`;
+    return;
+  }
+  empty.style.display = 'none';
+  list.innerHTML = users.map(u => {
+    const t = u.traffic || {};
+    const badge = !u.enabled ? '<span class="pill">disabled</span>' : (!u.active ? '<span class="pill pill--err">expired</span>' : '');
+    const live = t.sessions ? `<span class="pill pill--ok">${t.sessions} session${t.sessions === 1 ? '' : 's'}</span>` : '';
+    return `
+    <div class="peer-card ${u.active ? '' : 'is-disabled'}">
+      <div class="peer-main">
+        <div class="peer-name"><b>${esc(u.name)}</b> ${badge} ${live}</div>
+        <div class="peer-meta">
+          <span class="mono">${esc(u.username)}</span>
+          <span style="color:var(--fg-faint)">·</span>
+          <span title="Sent / received since this server process started (RAM only)">↑ ${formatBytes(t.rxBytes || 0)} · ↓ ${formatBytes(t.txBytes || 0)}</span>
+          ${t.lastActive ? `<span style="color:var(--fg-faint)">·</span><span>active ${esc(timeAgo(new Date(t.lastActive)))}</span>` : ''}
+          ${u.expiresAt ? `<span style="color:var(--fg-faint)">·</span><span>expires ${esc(u.expiresAt)}</span>` : ''}
+          ${u.clientRandomPrefix ? `<span style="color:var(--fg-faint)">·</span><span class="mono" title="TLS client-random prefix">${esc(u.clientRandomPrefix)}</span>` : ''}
+        </div>
+      </div>
+      <div class="peer-actions">
+        <button class="btn btn--quiet btn--icon" title="Copy tt:// link — open it in the TrustTunnel app, pmnezia-client or Shadowrocket" onclick="copyTrustTunnelLink(${u.id})">tt://</button>
+        <button class="btn btn--quiet btn--icon" title="QR code of the tt:// link" onclick="showTrustTunnelQr(${u.id}, '${escAttrJs(u.name)}')">QR</button>
+        <a class="btn btn--quiet btn--icon" title="Client config (.toml) for the TrustTunnel CLI setup_wizard --endpoint_config" href="/api/trusttunnel/users/${u.id}/client.toml"><svg><use href="#i-download"/></svg></a>
+        ${isAdmin ? `
+        <button class="btn btn--quiet btn--icon" title="Edit expiry / client-random prefix" onclick="editTrustTunnelUser(${u.id})"><svg><use href="#i-edit"/></svg></button>
+        <button class="btn btn--quiet btn--icon" title="Rotate password — existing links stop working" onclick="rotateTrustTunnelUser(${u.id}, '${escAttrJs(u.name)}')"><svg><use href="#i-refresh"/></svg></button>
+        <button class="btn btn--quiet btn--icon" title="${u.enabled ? 'Disable' : 'Enable'}" onclick="toggleTrustTunnelUser(${u.id}, ${!u.enabled})"><svg><use href="#i-${u.enabled ? 'eye' : 'check'}"/></svg></button>
+        <button class="btn btn--quiet btn--icon" title="Delete user" onclick="deleteTrustTunnelUser(${u.id}, '${escAttrJs(u.name)}')"><svg><use href="#i-trash"/></svg></button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function createTrustTunnelUser() {
+  const name = prompt('Name for the new TrustTunnel user:');
+  if (!name || !name.trim()) return;
+  const generatePrefix = confirm('Give this user a TLS client-random prefix?\n\nNeeded when the endpoint requires one (anti-probing). Clients that do not support prefixes cannot use it.');
+  try {
+    await POST('/api/trusttunnel/users', { name: name.trim(), generatePrefix });
+    showToast('User created — endpoint reloads in a moment', 'success');
+    refreshTrustTunnelUsers();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function editTrustTunnelUser(id) {
+  try {
+    const u = await GET('/api/trusttunnel/users/' + id);
+    const expires = prompt('Expiry (YYYY-MM-DDTHH:MM, UTC). Empty = never:', u.expiresAt || '');
+    if (expires === null) return;
+    const prefix = prompt('Client-random prefix (hex or hex/mask). Empty = none:', u.clientRandomPrefix || '');
+    if (prefix === null) return;
+    await POST('/api/trusttunnel/users/' + id, {
+      expiresAt: expires.trim() ? expires.trim() : null,
+      clientRandomPrefix: prefix.trim(),
+    });
+    showToast('Saved', 'success');
+    refreshTrustTunnelUsers();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function rotateTrustTunnelUser(id, name) {
+  if (!confirm(`Rotate the password for ${name}? Their current link stops working.`)) return;
+  try {
+    await POST('/api/trusttunnel/users/' + id + '/rotate-password', {});
+    showToast('Password rotated — share the new link', 'success');
+    refreshTrustTunnelUsers();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function toggleTrustTunnelUser(id, enabled) {
+  try {
+    await POST('/api/trusttunnel/users/' + id, { enabled });
+    showToast(enabled ? 'User enabled' : 'User disabled', 'success');
+    refreshTrustTunnelUsers();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function deleteTrustTunnelUser(id, name) {
+  if (!confirm(`Delete TrustTunnel user ${name}? This is permanent.`)) return;
+  try {
+    await DEL('/api/trusttunnel/users/' + id);
+    showToast('User deleted', 'success');
+    refreshTrustTunnelUsers();
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function ttFetchText(path) {
+  const resp = await fetch(path, { credentials: 'same-origin' });
+  const text = await resp.text();
+  if (!resp.ok) {
+    let msg = text;
+    try { msg = JSON.parse(text).error || text; } catch (_) { /* plain text */ }
+    throw new Error(msg || resp.statusText);
+  }
+  return text;
+}
+
+async function copyTrustTunnelLink(id) {
+  try {
+    const link = await ttFetchText('/api/trusttunnel/users/' + id + '/share');
+    await navigator.clipboard.writeText(link);
+    showToast('tt:// link copied', 'success');
+  } catch(e) { showToast(e.message, 'error'); }
+}
+
+async function showTrustTunnelQr(id, name) {
+  try {
+    const svg = await ttFetchText('/api/trusttunnel/users/' + id + '/qrcode.svg');
+    const modal = $('modal-qr');
+    if (modal) {
+      $('modal-qr-title').textContent = 'TrustTunnel QR — ' + name;
+      $('modal-qr-body').innerHTML = svg
+        + '<p style="font-size:12px;opacity:.7;margin-top:10px">Scan with the phone camera to open the <span class="mono">tt://</span> link in the TrustTunnel app, or scan from inside pmnezia-client.</p>';
+      modal.classList.add('active');
+    }
+  } catch(e) { showToast(e.message, 'error'); }
 }

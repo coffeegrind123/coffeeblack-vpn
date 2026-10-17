@@ -53,6 +53,13 @@ pub struct Config {
     /// `<wg_conf_dir>/mdnsvpn`. Persisting this on a docker volume
     /// avoids re-extracting the binary on every restart.
     pub mdnsvpn_dir: String,
+    /// Directory for the TrustTunnel endpoint: the extracted ELF, the
+    /// generated `vpn.toml` / `hosts.toml` / `credentials.toml` /
+    /// `rules.toml`, and the TLS chain + key the endpoint serves.
+    /// Defaults to `<wg_conf_dir>/trusttunnel`. Holds every TrustTunnel
+    /// user password in plaintext (the endpoint has no hashed form), so
+    /// it is forced to 0700 like the other transport dirs.
+    pub trusttunnel_dir: String,
     /// Run entirely in RAM. When `true`:
     ///
     /// - the SQLite database is opened with `:memory:` (no DB file is
@@ -147,6 +154,8 @@ impl Config {
             .unwrap_or_else(|_| format!("{}/mtproxy", wg_conf_dir));
         let mdnsvpn_dir = env::var("COFFEEBLACK_MDNSVPN_DIR")
             .unwrap_or_else(|_| format!("{}/mdnsvpn", wg_conf_dir));
+        let trusttunnel_dir = env::var("COFFEEBLACK_TRUSTTUNNEL_DIR")
+            .unwrap_or_else(|_| format!("{}/trusttunnel", wg_conf_dir));
 
         // Default ON: the data plane is RAM-resident unless the operator
         // explicitly opts back into a durable on-disk database with
@@ -181,6 +190,7 @@ impl Config {
             dns_dir,
             mtproxy_dir,
             mdnsvpn_dir,
+            trusttunnel_dir,
             in_memory,
             persist_db_path,
             persist_interval_secs,

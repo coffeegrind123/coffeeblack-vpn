@@ -35,5 +35,6 @@ pub mod qqdns;
 pub mod qr;
 pub mod rng;
 pub mod secretfile;
+pub mod trusttunnel;
 pub mod wg;
 pub mod xray;

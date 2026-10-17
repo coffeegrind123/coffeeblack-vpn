@@ -19,6 +19,7 @@ pub mod mdnsvpn;
 pub mod mtproxy;
 pub mod proxy;
 pub mod qqdns;
+pub mod trusttunnel;
 pub mod xray;
 
 use crate::http::Router;
@@ -247,6 +248,26 @@ pub fn build_router(state: AppState) -> Router {
             crate::http::routing::get(xray::dest_candidates),
         )
         .route(
+            "/admin/trusttunnel/inbound",
+            crate::http::routing::get(trusttunnel::get_inbound).post(trusttunnel::update_inbound),
+        )
+        .route(
+            "/admin/trusttunnel/inbound/certificate",
+            crate::http::routing::post(trusttunnel::upload_certificate),
+        )
+        .route(
+            "/admin/trusttunnel/inbound/regenerate-certificate",
+            crate::http::routing::post(trusttunnel::regenerate_certificate),
+        )
+        .route(
+            "/admin/trusttunnel/status",
+            crate::http::routing::get(trusttunnel::supervisor_status),
+        )
+        .route(
+            "/admin/trusttunnel/restart",
+            crate::http::routing::post(trusttunnel::restart),
+        )
+        .route(
             "/admin/xray/status",
             crate::http::routing::get(xray::supervisor_status),
         )
@@ -408,6 +429,32 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/xray/clients/:id/variants",
             crate::http::routing::get(xray::client_variants),
+        )
+        .route(
+            "/trusttunnel/users",
+            crate::http::routing::get(trusttunnel::list_users).post(trusttunnel::create_user),
+        )
+        .route(
+            "/trusttunnel/users/:id",
+            crate::http::routing::get(trusttunnel::get_user)
+                .post(trusttunnel::update_user)
+                .delete(trusttunnel::delete_user),
+        )
+        .route(
+            "/trusttunnel/users/:id/rotate-password",
+            crate::http::routing::post(trusttunnel::rotate_password),
+        )
+        .route(
+            "/trusttunnel/users/:id/share",
+            crate::http::routing::get(trusttunnel::user_share),
+        )
+        .route(
+            "/trusttunnel/users/:id/qrcode.svg",
+            crate::http::routing::get(trusttunnel::user_qrcode),
+        )
+        .route(
+            "/trusttunnel/users/:id/client.toml",
+            crate::http::routing::get(trusttunnel::user_client_toml),
         )
         // Me (current user)
         .route("/me", crate::http::routing::post(session::update_me))
