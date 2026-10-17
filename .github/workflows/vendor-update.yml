@@ -54,11 +54,14 @@ jobs:
           key: vendor-${{ runner.os }}-${{ steps.before.outputs.digest }}
 
       - name: Materialise unchanged blobs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/build.sh --vendor-only
 
       - name: Bump requested binaries
         env:
           BINARIES: ${{ inputs.binaries }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           for pair in $BINARIES; do

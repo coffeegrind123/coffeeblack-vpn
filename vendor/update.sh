@@ -833,10 +833,15 @@ update_trusttunnel() {
     curl -sSL --fail-with-body -o "$tgz" \
         "https://github.com/TrustTunnel/TrustTunnel/releases/download/${tag}/${asset}"
 
-    # GitHub publishes a per-asset digest in the release API. The asset
-    # list is fetched unauthenticated (60 req/h), which one bump never hits.
+    # GitHub publishes a per-asset digest in the release API. Unauthenticated
+    # calls share a 60 req/h budget per source IP, which CI runners exhaust
+    # (observed: HTTP 403), so send the workflow token when one is set.
     local expected actual
-    expected="$(curl -sSL --fail-with-body \
+    local auth=()
+    local token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    [ -n "$token" ] && auth=(-H "Authorization: Bearer $token")
+    expected="$(curl -sSL --fail-with-body "${auth[@]+"${auth[@]}"}" \
+            -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/TrustTunnel/TrustTunnel/releases/tags/${tag}" \
         | python3 -c 'import json,sys
 want=sys.argv[1]

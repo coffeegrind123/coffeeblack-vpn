@@ -125,6 +125,10 @@ jobs:
       # compile out and the consistency tests fail — so this is not a
       # blob-free job.
       - name: Materialise vendor/*.gz
+        env:
+          # update.sh reads release-asset digests from the GitHub API, whose
+          # unauthenticated per-IP budget shared runners exhaust.
+          GITHUB_TOKEN: ${{ github.token }}
         run: bash scripts/build.sh --vendor-only
 
       # Quality gate. A clippy warning or a failing test aborts the job here,
