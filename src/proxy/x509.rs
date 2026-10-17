@@ -163,8 +163,20 @@ pub struct SelfSigned {
     pub key_pkcs8: Vec<u8>,
 }
 
-/// Generate a self-signed ECDSA P-256 certificate for `dns_name`.
+/// Generate a self-signed ECDSA P-256 certificate for `dns_name`, valid for
+/// a year.
 pub fn generate(dns_name: &str) -> Result<SelfSigned> {
+    generate_with_validity(dns_name, 365)
+}
+
+/// [`generate`] with a caller-chosen validity in days.
+///
+/// The TrustTunnel endpoint uses this for a certificate clients *pin* (the
+/// chain travels inside every share link), where expiry breaks every link at
+/// once and a renewal means re-sharing all of them — so it wants years, not
+/// the probe responder's one. `UTCTime` caps `notAfter` at 2049.
+pub fn generate_with_validity(dns_name: &str, validity_days: i64) -> Result<SelfSigned> {
+    anyhow::ensure!(validity_days > 0, "validity must be at least one day");
     let rng = SystemRandom::new();
     let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng)
         .map_err(|_| anyhow::anyhow!("failed to generate a P-256 key pair"))?;
@@ -180,7 +192,7 @@ pub fn generate(dns_name: &str) -> Result<SelfSigned> {
 
     let now = crate::datetime::now_utc();
     let not_before = now - time::Duration::days(1);
-    let not_after = now + time::Duration::days(365);
+    let not_after = now + time::Duration::days(validity_days);
 
     let name = common_name(dns_name);
     let validity = sequence(&[&utc_time(not_before)?, &utc_time(not_after)?]);
@@ -396,6 +408,27 @@ mod tests {
         let b = generate("dup.example").unwrap();
         assert_ne!(a.cert_der, b.cert_der, "serial and key must be fresh");
         assert_ne!(a.key_pkcs8, b.key_pkcs8);
+    }
+
+    #[test]
+    fn validity_window_follows_the_requested_days() {
+        // notAfter is the second UTCTime in the TBS: YYMMDDhhmmssZ.
+        let year_of_not_after = |days: i64| {
+            let der = generate_with_validity("days.example", days).unwrap().cert_der;
+            let times: Vec<&[u8]> = der
+                .windows(15)
+                .filter(|w| w[0] == 0x17 && w[1] == 13 && w[14] == b'Z' && w[2..14].iter().all(u8::is_ascii_digit))
+                .map(|w| &w[2..4])
+                .collect();
+            assert_eq!(times.len(), 2, "notBefore + notAfter");
+            std::str::from_utf8(times[1]).unwrap().parse::<i32>().unwrap()
+        };
+        let this_year = crate::datetime::now_utc().year() % 100;
+        assert!(year_of_not_after(3650) >= this_year + 9);
+        assert!(year_of_not_after(30) <= this_year + 1);
+        assert!(generate_with_validity("days.example", 0).is_err());
+        // 2049 is UTCTime's last year; 40 years out is past it.
+        assert!(generate_with_validity("days.example", 365 * 40).is_err());
     }
 
     #[test]
