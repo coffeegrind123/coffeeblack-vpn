@@ -35,7 +35,8 @@
 #     PT binaries (consistent toolchain via golang:<ver>-alpine images).
 #     Falls back gracefully with a clear error if docker is missing.
 #   - gpg (optional) — used for the Tor Project's .sha256sum.asc and
-#     similar where signatures are available.
+#     similar where signatures are available. Required for trusttunnel,
+#     whose only end-to-end authenticity check is AdGuard's signature.
 
 set -euo pipefail
 
@@ -49,6 +50,7 @@ XRAY_PIN="$VENDOR_DIR/XRAY_VERSION"
 DNS_PIN="$VENDOR_DIR/DNS_BUNDLE_VERSION"
 TELEMT_PIN="$VENDOR_DIR/TELEMT_VERSION"
 MDNSVPN_PIN="$VENDOR_DIR/MDNSVPN_VERSION"
+TRUSTTUNNEL_PIN="$VENDOR_DIR/TRUSTTUNNEL_VERSION"
 
 # Working directory for downloads + builds. Cleared on exit.
 WORK_DIR=""
@@ -99,6 +101,8 @@ Binaries:
                   .sha256 companion verified)
   mdnsvpn         Pre-built upstream release (GitHub, Linux_AMD64.tar.gz,
                   SHA256SUMS.txt verified; stripped before gzip)
+  trusttunnel     Pre-built upstream release (GitHub, linux-x86_64 static
+                  musl; GitHub asset digest + AdGuard GPG signature verified)
 
 Examples:
   vendor/update.sh xray            v26.3.28
@@ -109,6 +113,7 @@ Examples:
   vendor/update.sh webtunnel       v0.0.5
   vendor/update.sh telemt          3.4.12
   vendor/update.sh mdnsvpn         v2026.05.10.180256-27c7e11
+  vendor/update.sh trusttunnel     v1.1.0
 
 Environment:
   NO_COLOR=1   Disable ANSI colour output (auto-disabled when stdout is
@@ -142,6 +147,7 @@ main() {
         webtunnel)       update_webtunnel "$version" ;;
         telemt)          update_telemt "$version" ;;
         mdnsvpn)         update_mdnsvpn "$version" ;;
+        trusttunnel)     update_trusttunnel "$version" ;;
         *)               die "unknown binary $binary — see --help" ;;
     esac
 
@@ -798,6 +804,111 @@ update_mdnsvpn() {
     else
         warn "could not fetch upstream LICENSE — the existing \
 vendor/LICENSES/MDNSVPN-LICENSE.md was left in place; verify it still matches the new release"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# TrustTunnel (HTTP/2 + HTTP/3 VPN endpoint)
+# ---------------------------------------------------------------------------
+#
+# Upstream CI already builds `--target x86_64-unknown-linux-musl`, so the
+# release tarball carries a static-pie `trusttunnel_endpoint` we ship as-is
+# (it is stripped upstream; debug symbols live in a separate -dbgsym asset).
+#
+# Two independent checks:
+#   1. the tarball against the sha256 digest GitHub records for the asset;
+#   2. the ELF against its detached `.sig`, made by AdGuard's release key.
+#      The key is committed at vendor/keys/trusttunnel-release.asc and pinned
+#      by fingerprint here, so a keyserver is never consulted at build time.
+TRUSTTUNNEL_KEY_FPR="28645AC9776EC4C00BCE2AFC0FE641E7235E2EC6"
+
+update_trusttunnel() {
+    local version="$1"
+    local tag="$version"
+    [[ "$tag" == v* ]] || tag="v$tag"
+    local asset="trusttunnel-${tag}-linux-x86_64.tar.gz"
+    require_cmd python3
+    log "fetching TrustTunnel endpoint $tag ($asset)"
+    local tgz="$WORK_DIR/$asset"
+    curl -sSL --fail-with-body -o "$tgz" \
+        "https://github.com/TrustTunnel/TrustTunnel/releases/download/${tag}/${asset}"
+
+    # GitHub publishes a per-asset digest in the release API. The asset
+    # list is fetched unauthenticated (60 req/h), which one bump never hits.
+    local expected actual
+    expected="$(curl -sSL --fail-with-body \
+            "https://api.github.com/repos/TrustTunnel/TrustTunnel/releases/tags/${tag}" \
+        | python3 -c 'import json,sys
+want=sys.argv[1]
+for a in json.load(sys.stdin).get("assets",[]):
+    if a.get("name")==want:
+        print((a.get("digest") or "").removeprefix("sha256:")); break' "$asset")"
+    [ -n "$expected" ] || die "trusttunnel: no sha256 digest for $asset in the $tag release"
+    actual="$(sha256sum "$tgz" | awk '{print $1}')"
+    if [ "$expected" != "$actual" ]; then
+        die "trusttunnel tarball SHA-256 mismatch:
+            expected $expected (GitHub asset digest)
+            got      $actual"
+    fi
+    ok "tarball SHA-256 verified against the GitHub asset digest"
+
+    log "extracting trusttunnel_endpoint"
+    (cd "$WORK_DIR" && tar xzf "$tgz")
+    local dir="$WORK_DIR/trusttunnel-${tag}-linux-x86_64"
+    local elf="$dir/trusttunnel_endpoint"
+    [ -f "$elf" ] || die "trusttunnel_endpoint not present at expected path in tarball"
+    [ -f "$elf.sig" ] || die "trusttunnel_endpoint.sig missing from the tarball"
+
+    if command -v gpg >/dev/null 2>&1; then
+        local gnupg="$WORK_DIR/gnupg"
+        mkdir -m 700 "$gnupg"
+        gpg --homedir "$gnupg" --batch --quiet --import \
+            "$VENDOR_DIR/keys/trusttunnel-release.asc" 2>/dev/null \
+            || die "could not import vendor/keys/trusttunnel-release.asc"
+        local status
+        status="$(gpg --homedir "$gnupg" --batch --status-fd 1 \
+            --verify "$elf.sig" "$elf" 2>/dev/null || true)"
+        # VALIDSIG's first field is the signing (sub)key fingerprint and its
+        # last is the primary key fingerprint; either matching the pin is
+        # fine, anything else (or no VALIDSIG at all) is not.
+        if ! echo "$status" | awk -v fpr="$TRUSTTUNNEL_KEY_FPR" '
+                $2 == "VALIDSIG" && ($3 == fpr || $NF == fpr) { found = 1 }
+                END { exit !found }'; then
+            die "trusttunnel_endpoint signature did not verify against $TRUSTTUNNEL_KEY_FPR:
+$status"
+        fi
+        ok "GPG signature verified (AdGuard release key $TRUSTTUNNEL_KEY_FPR)"
+    elif [ "${ALLOW_UNVERIFIED_VENDOR:-0}" = "1" ]; then
+        warn "gpg not installed; ALLOW_UNVERIFIED_VENDOR=1 — skipping signature check"
+    else
+        die "gpg is required to verify trusttunnel_endpoint.sig \
+(set ALLOW_UNVERIFIED_VENDOR=1 to skip, not recommended)"
+    fi
+
+    chmod +x "$elf"
+    verify_static "$elf" "trusttunnel"
+
+    log "smoke-test"
+    local reported
+    reported="$("$elf" --version 2>/dev/null || true)"
+    log "  --version: ${reported:-<none>}"
+    [ "${reported#v}" = "${tag#v}" ] \
+        || warn "trusttunnel_endpoint --version reported '$reported', expected $tag"
+
+    local sha
+    sha="$(package_blob "$elf" "trusttunnel")"
+    pin_update "$TRUSTTUNNEL_PIN" "TRUSTTUNNEL_VERSION" "$tag"
+    pin_update "$TRUSTTUNNEL_PIN" "TRUSTTUNNEL_AMD64_SHA256" "$sha"
+    verify_pin_matches_blob "trusttunnel" "$sha"
+
+    log "refreshing vendor/LICENSES/TRUSTTUNNEL-LICENSE.md"
+    mkdir -p "$VENDOR_DIR/LICENSES"
+    if [ -f "$dir/LICENSE" ]; then
+        cp "$dir/LICENSE" "$VENDOR_DIR/LICENSES/TRUSTTUNNEL-LICENSE.md"
+        ok "license file refreshed from the release tarball"
+    else
+        warn "release tarball carries no LICENSE — the existing \
+vendor/LICENSES/TRUSTTUNNEL-LICENSE.md was left in place; verify it still matches"
     fi
 }
 

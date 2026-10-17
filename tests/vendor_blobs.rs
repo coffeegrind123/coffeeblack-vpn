@@ -28,6 +28,7 @@ fn pinned_shas() -> HashMap<String, String> {
         "XRAY_VERSION",
         "TELEMT_VERSION",
         "MDNSVPN_VERSION",
+        "TRUSTTUNNEL_VERSION",
         "DNS_BUNDLE_VERSION",
     ] {
         let path = vendor_dir().join(pin);

@@ -117,8 +117,8 @@ jobs:
           path: vendor/*.gz
           key: vendor-${{ runner.os }}-${{ steps.pins.outputs.digest }}
 
-      # Materialise the vendored binary blobs first (xray/telemt/mdnsvpn/
-      # dnscrypt/tor/PTs). The quality gate and tests below must run with the
+      # Materialise the vendored binary blobs first (xray/trusttunnel/telemt/
+      # mdnsvpn/dnscrypt/tor/PTs). The quality gate and tests below must run with the
       # blobs present: build.rs flips the `*_bundled` cfgs and bakes the
       # per-binary version/SHA constants from them, and several unit tests
       # assert that pin/blob coherence. Without the blobs those subsystems
@@ -211,6 +211,7 @@ jobs:
             echo "xray=$(read_pin vendor/XRAY_VERSION XRAY_VERSION)"
             echo "telemt=$(read_pin vendor/TELEMT_VERSION TELEMT_VERSION)"
             echo "mdnsvpn=$(read_pin vendor/MDNSVPN_VERSION MDNSVPN_VERSION)"
+            echo "trusttunnel=$(read_pin vendor/TRUSTTUNNEL_VERSION TRUSTTUNNEL_VERSION)"
             echo "dnscrypt_proxy=$(read_pin vendor/DNS_BUNDLE_VERSION DNSCRYPT_PROXY_VERSION)"
             echo "tor=$(read_pin vendor/DNS_BUNDLE_VERSION TOR_VERSION)"
             echo "lyrebird=$(read_pin vendor/DNS_BUNDLE_VERSION LYREBIRD_VERSION)"
@@ -250,6 +251,7 @@ jobs:
             | Component | Version | Purpose |
             |-----------|---------|---------|
             | Xray-core | `${{ steps.components.outputs.xray }}` | Browsing-mode VLESS+Reality+Vision |
+            | TrustTunnel | `${{ steps.components.outputs.trusttunnel }}` | HTTP/2 + HTTP/3 VPN endpoint |
             | telemt | `${{ steps.components.outputs.telemt }}` | Telegram MTProxy (Fake-TLS) |
             | MasterDnsVPN | `${{ steps.components.outputs.mdnsvpn }}` | DNS-tunnel server |
             | dnscrypt-proxy | `${{ steps.components.outputs.dnscrypt_proxy }}` | DoH/DNSCrypt egress |

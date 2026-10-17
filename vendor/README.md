@@ -7,6 +7,8 @@ The pinned **versions + SHA-256 hashes** are committed:
 - `XRAY_VERSION`        — Xray-core
 - `TELEMT_VERSION`      — telemt (Telegram MTProxy)
 - `MDNSVPN_VERSION`     — MasterDnsVPN (DNS-tunnel VPN server)
+- `TRUSTTUNNEL_VERSION` — TrustTunnel endpoint (HTTP/2 + HTTP/3 VPN)
+- `keys/`               — upstream release-signing public keys, pinned by fingerprint in `update.sh`
 - `DNS_BUNDLE_VERSION`  — dnscrypt-proxy + tor + lyrebird + snowflake + webtunnel
 - `LICENSES/`           — preserved upstream LICENSE files (legal attribution)
 - `update.sh`           — curation tool: download/build, SHA-verify, gzip into place
@@ -30,8 +32,8 @@ sub-modes for partial work).
 **x86_64-linux only.** arm64 / aarch64 was dropped intentionally — the
 DNS bundle's pluggable transports have no upstream pre-built static
 arm64 ELFs and no viable cross-build path that's worth maintaining.
-`build.rs` only emits the `xray_bundled`, `dns_bundled`, `telemt_bundled`
-and `mdnsvpn_bundled` cfgs for `("linux", "x86_64")`; other targets compile cleanly but
+`build.rs` only emits the `xray_bundled`, `dns_bundled`, `telemt_bundled`,
+`mdnsvpn_bundled` and `trusttunnel_bundled` cfgs for `("linux", "x86_64")`; other targets compile cleanly but
 without the bundled binaries.
 
 ## `xray-linux-amd64.gz`
@@ -357,3 +359,71 @@ preserved — `vendor/LICENSES/MDNSVPN-LICENSE.md` is exactly that preservation.
 
 The build will refuse to start if `MDNSVPN_VERSION` and the vendored blob
 disagree.
+
+---
+
+## `trusttunnel-linux-amd64.gz` (`trusttunnel_bundled` cfg)
+
+Pinned [TrustTunnel/TrustTunnel](https://github.com/TrustTunnel/TrustTunnel)
+**v1.1.0** `trusttunnel_endpoint`, gzip-compressed (level 9). TrustTunnel
+(AdGuard) tunnels TCP, UDP and ICMP through HTTP/2 or HTTP/3 `CONNECT`
+streams over TLS. Embedded like the others — `include_bytes!` at build time,
+memfd (or SHA-checked on-disk) extraction at runtime.
+
+Stable releases only: the v1.3.0-beta line emits deep-link version 2, which
+v1.1.x-era clients reject, and changes `rules.toml` semantics.
+
+### Provenance
+
+Downloaded from the [v1.1.0 release](https://github.com/TrustTunnel/TrustTunnel/releases/tag/v1.1.0)
+on 2026-10-18:
+
+- `trusttunnel-v1.1.0-linux-x86_64.tar.gz` — SHA256 `91c2ea3db7416a01b5258a4c047ec22890490bc55e1b194206031aa75144f0e7` (verified against the GitHub release-asset digest)
+- `trusttunnel_endpoint` inside it — GPG signature `trusttunnel_endpoint.sig` verified against
+  AdGuard's release key `28645AC9776EC4C00BCE2AFC0FE641E7235E2EC6` (`devteam@adguard.com`),
+  committed at [`keys/trusttunnel-release.asc`](keys/trusttunnel-release.asc) and pinned by
+  fingerprint in `update.sh`, as described in upstream's `VERIFY_RELEASES.md`.
+
+Upstream's release CI builds `--target x86_64-unknown-linux-musl`, so the ELF
+is already `static-pie linked` and stripped (debug symbols ship separately in
+the `-dbgsym` asset); it is used byte-for-byte. Decompressed-ELF SHA-256:
+`9bb15f4e30e2ff196cf0aa387462c42387d9405ddfeb5caad133838560fa33cd` — recorded in
+`TRUSTTUNNEL_VERSION`.
+
+Behaviour this repo depends on was checked against upstream source at the tag
+(`endpoint/src/main.rs`, `lib/src/settings.rs`, `lib/src/rules.rs`,
+`lib/src/metrics.rs`, `deeplink/src/`), and is exercised against the real
+binary by `tests/trusttunnel_e2e.rs`:
+
+- positional `vpn.toml hosts.toml`, `--loglvl`; drains on `SIGINT` only (no
+  `SIGTERM` handler); `SIGHUP` reloads `hosts.toml` only and panics on a bad one;
+- credentials read once at startup, values not TOML-decoded (quotes stripped);
+- paths resolved against the CWD and required to exist;
+- `/clients` + `/health-check` on the metrics listener with `per_client_metrics`;
+- the `tt://` deep-link byte format (version 1).
+
+### Default posture
+
+Off by default. Even when enabled, the supervisor waits for a TLS hostname and
+at least one active user — upstream refuses an empty credentials list on a
+public address.
+
+### Licensing
+
+TrustTunnel is distributed under the **Apache License 2.0**. The full text is
+mirrored at [`vendor/LICENSES/TRUSTTUNNEL-LICENSE.md`](LICENSES/TRUSTTUNNEL-LICENSE.md),
+copied from the release tarball. The binary is redistributed unmodified.
+
+### Updating
+
+`vendor/update.sh trusttunnel <tag>`:
+
+1. Downloads `trusttunnel-<tag>-linux-x86_64.tar.gz` and checks it against the
+   asset digest in the GitHub release API.
+2. Verifies `trusttunnel_endpoint.sig` with gpg against the committed key; a
+   signature from any other key fails the bump. Needs `gpg` installed.
+3. Checks the ELF is static, smoke-tests `--version`, gzips it, and updates
+   `TRUSTTUNNEL_VERSION` plus the license copy.
+
+When AdGuard rotates the release key, verify the new key out of band before
+replacing `keys/trusttunnel-release.asc` and the fingerprint in `update.sh`.

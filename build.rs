@@ -63,6 +63,7 @@ fn main() {
     process_dns_bundle(&target_os, &target_arch, &out_dir, &manifest_dir);
     process_telemt_bundle(&target_os, &target_arch, &out_dir, &manifest_dir);
     process_mdnsvpn_bundle(&target_os, &target_arch, &out_dir, &manifest_dir);
+    process_trusttunnel_bundle(&target_os, &target_arch, &out_dir, &manifest_dir);
 }
 
 // ---------------------------------------------------------------------------
@@ -402,6 +403,68 @@ fn process_mdnsvpn_bundle(
     println!("cargo:rustc-env=COFFEEBLACK_MDNSVPN_VERSION={mdnsvpn_version}");
     println!("cargo:rustc-env=COFFEEBLACK_MDNSVPN_SHA256={expected_sha}");
     println!("cargo:rustc-cfg=mdnsvpn_bundled");
+}
+
+// ---------------------------------------------------------------------------
+// TrustTunnel bundle (HTTP/2 + HTTP/3 VPN endpoint)
+// ---------------------------------------------------------------------------
+
+fn process_trusttunnel_bundle(
+    target_os: &str,
+    target_arch: &str,
+    out_dir: &Path,
+    manifest_dir: &Path,
+) {
+    println!("cargo:rerun-if-changed=vendor/TRUSTTUNNEL_VERSION");
+    println!("cargo:rerun-if-changed=vendor/trusttunnel-linux-amd64.gz");
+    println!("cargo:rustc-check-cfg=cfg(trusttunnel_bundled)");
+
+    let version_path = manifest_dir.join("vendor/TRUSTTUNNEL_VERSION");
+    let version_text = fs::read_to_string(&version_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", version_path.display()));
+    let kv = parse_kv(&version_text);
+    let tt_version = kv
+        .get("TRUSTTUNNEL_VERSION")
+        .expect("TRUSTTUNNEL_VERSION not set in vendor/TRUSTTUNNEL_VERSION");
+
+    // Same arch story as the rest of the vendor tree: x86_64-linux only.
+    let bundle = match (target_os, target_arch) {
+        ("linux", "x86_64") => Some(("trusttunnel-linux-amd64.gz", "TRUSTTUNNEL_AMD64_SHA256")),
+        _ => None,
+    };
+
+    let Some((blob_name, sha_key)) = bundle else {
+        println!("cargo:rustc-env=COFFEEBLACK_TRUSTTUNNEL_VERSION={tt_version}");
+        println!("cargo:rustc-env=COFFEEBLACK_TRUSTTUNNEL_SHA256=");
+        println!(
+            "cargo:warning=TrustTunnel bundled mode is not available for target {target_os}-{target_arch}; \
+             coffeeblack-vpn will build without TrustTunnel support."
+        );
+        return;
+    };
+
+    let blob_src = manifest_dir.join("vendor").join(blob_name);
+    let expected_sha = kv.get(sha_key).map(String::as_str).unwrap_or("");
+
+    if !blob_src.is_file() || expected_sha.is_empty() {
+        println!("cargo:rustc-env=COFFEEBLACK_TRUSTTUNNEL_VERSION={tt_version}");
+        println!("cargo:rustc-env=COFFEEBLACK_TRUSTTUNNEL_SHA256=");
+        println!(
+            "cargo:warning=TrustTunnel blob missing ({}) — building without trusttunnel_bundled. \
+             Run scripts/build.sh to materialise it from the pinned version.",
+            blob_src.display()
+        );
+        return;
+    }
+
+    let blob_dst = out_dir.join("trusttunnel.gz");
+    fs::copy(&blob_src, &blob_dst).unwrap_or_else(|e| {
+        panic!("copy {} → {}: {e}", blob_src.display(), blob_dst.display())
+    });
+
+    println!("cargo:rustc-env=COFFEEBLACK_TRUSTTUNNEL_VERSION={tt_version}");
+    println!("cargo:rustc-env=COFFEEBLACK_TRUSTTUNNEL_SHA256={expected_sha}");
+    println!("cargo:rustc-cfg=trusttunnel_bundled");
 }
 
 // ---------------------------------------------------------------------------

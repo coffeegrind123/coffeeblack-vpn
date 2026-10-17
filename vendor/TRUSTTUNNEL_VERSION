@@ -1,0 +1,18 @@
+# Pinned TrustTunnel endpoint version embedded in the coffeeblack-vpn binary.
+# build.rs reads this file to validate that the vendored blob matches the
+# expected version, and prints the version into the binary at compile time.
+#
+# x86_64 only — same target story as the rest of the vendor tree
+# (see vendor/README.md for the rationale).
+#
+# Upstream: https://github.com/TrustTunnel/TrustTunnel (stable releases only;
+# the v1.3.0-beta line emits deep-link v2, which v1.1.x clients reject)
+# Release asset: trusttunnel-<tag>-linux-x86_64.tar.gz
+
+TRUSTTUNNEL_VERSION = v1.1.0
+
+# SHA-256 of the *uncompressed* trusttunnel_endpoint ELF, exactly as shipped
+# upstream (already stripped, static-pie musl). Distinct from the tarball
+# SHA `91c2ea3d…` recorded in vendor/README.md under TrustTunnel provenance.
+
+TRUSTTUNNEL_AMD64_SHA256 = 9bb15f4e30e2ff196cf0aa387462c42387d9405ddfeb5caad133838560fa33cd

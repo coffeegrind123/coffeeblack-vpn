@@ -93,6 +93,7 @@ BINARIES=(
     "webtunnel       vendor/DNS_BUNDLE_VERSION   WEBTUNNEL_VERSION         webtunnel       WEBTUNNEL_AMD64_SHA256"
     "telemt          vendor/TELEMT_VERSION       TELEMT_VERSION            telemt          TELEMT_AMD64_SHA256"
     "mdnsvpn         vendor/MDNSVPN_VERSION      MDNSVPN_VERSION           mdnsvpn         MDNSVPN_AMD64_SHA256"
+    "trusttunnel     vendor/TRUSTTUNNEL_VERSION  TRUSTTUNNEL_VERSION       trusttunnel     TRUSTTUNNEL_AMD64_SHA256"
 )
 
 # ---------------------------------------------------------------------------
