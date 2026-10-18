@@ -164,9 +164,9 @@ obtained and what the trust model is**. `vendor/update.sh <binary>
 <version>` is the executable form of every recipe below — prefer it over
 doing any of this by hand.
 
-Versions below were current as of the 2026-09-03 curation pass
-(dnscrypt-proxy and webtunnel bumped then; tor, lyrebird and snowflake
-re-checked and already at their newest upstream release).
+Versions below were current as of the 2026-10-18 curation pass (tor,
+lyrebird and snowflake bumped, webtunnel re-pinned for the Go 1.27
+builder, dnscrypt-proxy re-checked and already newest).
 
 - **`dnscrypt-proxy` 2.1.18** — `dnscrypt-proxy-linux_x86_64-2.1.18.tar.gz`
   downloaded over HTTPS from
@@ -180,7 +180,7 @@ re-checked and already at their newest upstream release).
   minisign public key from the dnscrypt-proxy maintainers and verify
   before vendoring.**
 
-- **`tor` 0.4.9.11** — built from source inside an `alpine:3.20` Docker
+- **`tor` 0.4.9.14** — built from source inside an `alpine:3.20` Docker
   container (`apk add openssl-libs-static libevent-static zlib-static`),
   from `https://dist.torproject.org/tor-<ver>.tar.gz` with its published
   `.sha256sum` verified in-container, then
@@ -192,9 +192,10 @@ re-checked and already at their newest upstream release).
   interpreter) and smoke-tested with `--version` before it is packaged —
   a partial static link that still exits 0 has shipped garbage before.
 
-- **`lyrebird` 0.8.1**, **`snowflake` v2.14.1**, **`webtunnel` v0.0.6** —
-  built from source in a `golang:1.24-alpine` container at the upstream
-  git tag (`lyrebird-0.8.1`, `v2.14.1`, `v0.0.6`) from
+- **`lyrebird` 0.9.0**, **`snowflake` v2.15.1**, **`webtunnel` v0.0.7** —
+  built from source in a `golang:1.27-alpine` container (`GO_PT_IMAGE` in
+  `update.sh`) at the upstream git tag (`0.9.0`, `v2.15.1`, `v0.0.7`;
+  lyrebird tags before 0.9.0 were `lyrebird-X.Y.Z`) from
   `gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/<name>`,
   via `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -extldflags=-static'`
   against `./cmd/lyrebird`, `./client` and `./main/client` respectively.
@@ -210,6 +211,8 @@ re-checked and already at their newest upstream release).
   > `update.sh` now uses — the 2026-09-03 rebuild produced
   > `468ea0c7…` where the file recorded `0776d105…`, at the same upstream
   > tag. The pin now holds the value this repo's own pipeline reproduces.
+  > The 2026-10-18 move to Go 1.27 (lyrebird 0.9.0 needs go 1.26) moved
+  > webtunnel's SHA at an unchanged tag for exactly this reason.
   > When bumping the container's Go version, expect all three PT SHAs to
   > move even if no PT was upgraded, and re-materialise them in one pass
   > (`scripts/build.sh --vendor-only`) so the pin file stays truthful.
@@ -242,7 +245,7 @@ unmodified binary as part of coffeeblack-vpn.
 
 ## `telemt-linux-amd64.gz` (`telemt_bundled` cfg)
 
-Pinned [telemt/telemt](https://github.com/telemt/telemt) **v3.5.13** ELF,
+Pinned [telemt/telemt](https://github.com/telemt/telemt) **v3.5.14** ELF,
 gzip-compressed (level 9). telemt is a Rust + Tokio implementation of
 Telegram's MTProto proxy with full Fake-TLS / SNI fronting (the
 `ee`-prefix link variant), per-user secrets, replay protection, and
@@ -251,16 +254,16 @@ build time, runtime extraction with SHA verification.
 
 ### Provenance
 
-Downloaded from the [3.5.13 release](https://github.com/telemt/telemt/releases/tag/3.5.13)
-on 2026-10-04:
+Downloaded from the [3.5.14 release](https://github.com/telemt/telemt/releases/tag/3.5.14)
+on 2026-10-18:
 
-- `telemt-x86_64-linux-musl.tar.gz` — SHA256 `7124a854310d4c91a502aeebfd29f7fc6ddef1dcd44eb0cb72e9f9c176582b43` (verified against the upstream `telemt-x86_64-linux-musl.tar.gz.sha256`)
+- `telemt-x86_64-linux-musl.tar.gz` — SHA256 `71c1454f79cf755edea0985500629daba553002f9863be754e8e38a418822773` (verified against the upstream `telemt-x86_64-linux-musl.tar.gz.sha256`)
 
 The single `telemt` ELF inside is `static-pie linked` (per `file(1)`), so
 it runs unchanged on glibc, musl, or any other libc x86_64 host. It was
 extracted from the tarball and re-compressed with `gzip -9`.
 Decompressed-ELF SHA-256 (used by the runtime extractor to detect
-cache-staleness): `46db12dcfb649b5209cc7dbd0fee89eb92bf10e8f8e22450c4d5debf87cdf916` — recorded in `TELEMT_VERSION`.
+cache-staleness): `80cacc87365bf8db738582c67596b34709d2ced07bb6f0e00e5f80105653da94` — recorded in `TELEMT_VERSION`.
 
 The 3.4 → 3.5 bump was checked against the control plane coffeeblack-vpn
 actually drives, not just the changelog: the generated `config.toml` was
