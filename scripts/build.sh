@@ -218,6 +218,16 @@ fetch_vendor_blobs() {
                 (blob=$actual_sha pin=$post_pin_sha) — \
                 update.sh failed to atomically write both"
         fi
+        # Accepting the rebuilt SHA keeps a cold-cache release possible, but
+        # it means the shipped blob is not the one the committed pin names.
+        # Say so where a CI log reader will see it, with both values.
+        if [ "$post_pin_sha" != "$expected_sha" ]; then
+            warn "$action $version: rebuilt SHA $post_pin_sha differs from the committed pin \
+$expected_sha — the build is not reproducible here; re-pin via vendor-update.yml"
+            if [ -n "${GITHUB_ACTIONS:-}" ]; then
+                echo "::warning title=$action not reproducible::rebuilt $post_pin_sha, committed pin $expected_sha"
+            fi
+        fi
         ok "$action $version: built and verified ($post_pin_sha)"
     done
 }
