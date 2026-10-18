@@ -53,8 +53,8 @@ LYREBIRD_AMD64_SHA256 = 9b2adb4a29fdd2d3261f788abc88026731808bc274ca5b7cd443d715
 # its own WebRTC stack so the binary is larger than the others.
 # Upstream: https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/-/releases
 # ---------------------------------------------------------------------------
-SNOWFLAKE_VERSION = v2.14.1
-SNOWFLAKE_AMD64_SHA256 = 401969220fb15616106df72d1e3f0d41ea2440c917fa70aceaddcae71e0bde5f
+SNOWFLAKE_VERSION = v2.15.1
+SNOWFLAKE_AMD64_SHA256 = 050346b280ac98095850ce141cc872d1c47bf36f00b29c3ed57f9bea04d889ca
 
 # ---------------------------------------------------------------------------
 # webtunnel — HTTPS-tunneling pluggable transport (Go, static). Useful
