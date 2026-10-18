@@ -45,8 +45,8 @@ TOR_AMD64_SHA256 = 356d678ed3c083cddb662241a8212b4971e0ff4dbc590ac649aa9d8ffeb90
 # torrc.
 # Upstream: https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/-/releases
 # ---------------------------------------------------------------------------
-LYREBIRD_VERSION = 0.8.1
-LYREBIRD_AMD64_SHA256 = 468ea0c74385320769440e9788766437cc0b99bf15a7b009db58e0fc1f9170db
+LYREBIRD_VERSION = 0.9.0
+LYREBIRD_AMD64_SHA256 = 9b2adb4a29fdd2d3261f788abc88026731808bc274ca5b7cd443d715b50cf6a5
 
 # ---------------------------------------------------------------------------
 # snowflake — WebRTC-based pluggable transport (Go, static). Bundles
