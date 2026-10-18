@@ -62,4 +62,4 @@ SNOWFLAKE_AMD64_SHA256 = 050346b280ac98095850ce141cc872d1c47bf36f00b29c3ed57f9be
 # Upstream: https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel/-/releases
 # ---------------------------------------------------------------------------
 WEBTUNNEL_VERSION = v0.0.7
-WEBTUNNEL_AMD64_SHA256 = 9e509dff6c743b5a4ac48f8a6588489bffed9e72542ea840b1c98c9916b8ceeb
+WEBTUNNEL_AMD64_SHA256 = f86b4b682be28501ecd71d4a381de71a478921a53458b0501e45e3fcbe53931f
