@@ -106,7 +106,8 @@ async fn raw_get(app: &coffeeblack_vpn::http::Router, path: &str, cookie: &str) 
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
-    let body = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 64).unwrap();
+    // A QR of a link with an embedded certificate is ~90 KB of SVG.
+    let body = coffeeblack_vpn::http::to_bytes(resp.into_body(), 1024 * 1024).unwrap();
     let s = String::from_utf8(body.to_vec()).unwrap_or_default();
     (status, s)
 }
